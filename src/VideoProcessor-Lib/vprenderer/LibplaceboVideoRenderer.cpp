@@ -3171,9 +3171,12 @@ namespace
 			targetRefreshRate.Denominator = state.displayMode->FrameDuration();
 
 			const double contentRate = state.displayMode->RefreshRateHz();
+			// BENCH EXPERIMENT, not for upstream: ask for the source rate itself on
+			// progressive content instead of doubling it. RefreshRateHz() is the FRAME
+			// rate, so every real interlaced mode (25, 29.97, 30 fps) still doubles to
+			// its field rate through IsInterlaced() alone.
 			const bool useDoubleRate =
-				state.displayMode->IsInterlaced() ||
-				(contentRate > 24.1 && contentRate < 31.0);
+				state.displayMode->IsInterlaced();
 			if (useDoubleRate)
 				targetRefreshRate.Numerator *= 2;
 			if (RefreshRatesEqual(m_originalRefreshRate, targetRefreshRate))
