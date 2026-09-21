@@ -1,6 +1,6 @@
-# 18. VP Renderer — Zoom
+# VP Renderer — Zoom
 
-![Zoom configuration screen](images/18-zoom.png)
+![Zoom configuration screen](images/8e-zoom.png)
 
 Zoom profiles are independent from Screen profiles. A Zoom shortcut changes crop/fill behavior without changing the selected Screen geometry.
 
@@ -42,4 +42,4 @@ Use the Zoom page when the desired change is crop/fill or subtitle-safe placemen
 
 ---
 
-[← Configuration guide index](README.md)
+[← VP Renderer](8-vp-renderer.md) · [Configuration guide index](README.md)

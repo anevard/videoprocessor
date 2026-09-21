@@ -1,6 +1,6 @@
-# 13. DirectShow — Input Processing
+# DirectShow — Input Processing
 
-![DirectShow Input Processing screen](images/13-directshow-processing.png)
+![DirectShow Input Processing screen](images/9b-input-processing.png)
 
 This tab has the same four input-policy fields as the VP Renderer Input Processing tab, but stores them for DirectShow:
 
@@ -13,4 +13,4 @@ Each can inherit the General value or override it for DirectShow. Keep the Direc
 
 ---
 
-[← Configuration guide index](README.md)
+[← DirectShow](9-directshow.md) · [Configuration guide index](README.md)

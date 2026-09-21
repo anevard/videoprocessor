@@ -1,6 +1,6 @@
-# 4. DirectShow — General
+# DirectShow — General
 
-![DirectShow General screen](images/04-directshow-general.png)
+![DirectShow General screen](images/9a-general.png)
 
 This screen affects DirectShow renderers only. It contains Timing and Renderer overrides cards.
 
@@ -22,4 +22,4 @@ These are synchronization controls. Change them only when measurements or a rend
 
 ---
 
-[← Configuration guide index](README.md)
+[← DirectShow](9-directshow.md) · [Configuration guide index](README.md)

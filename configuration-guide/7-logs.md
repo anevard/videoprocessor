@@ -1,6 +1,6 @@
-# 11. Logs
+# Logs
 
-![Logs screen](images/11-logs.png)
+![Logs screen](images/7-logs.png)
 
 - **Enable logging** — Enables VideoProcessor log files. Logging is enabled by default in the current editor.
 - **Enable enhanced logging** — Keeps all logs and writes additional live telemetry files. Use it while diagnosing a problem; it creates more diagnostic data.

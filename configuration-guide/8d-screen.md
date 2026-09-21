@@ -1,6 +1,6 @@
-# 5. VP Renderer — Screen
+# VP Renderer — Screen
 
-![Screen configuration screen](images/05-screen.png)
+![Screen configuration screen](images/8d-screen.png)
 
 Screen profiles describe the physical presentation geometry and screen-relative behavior. Screen selection is independent from Zoom selection.
 
@@ -43,4 +43,4 @@ Use metadata overrides only when the source metadata is absent or known to be wr
 
 ---
 
-[← Configuration guide index](README.md)
+[← VP Renderer](8-vp-renderer.md) · [Configuration guide index](README.md)

@@ -1,6 +1,6 @@
-# 10. VP Renderer — NLS
+# Shaders — NLS
 
-![NLS screen](images/10-nls.png)
+![NLS screen](images/4c-nls.png)
 
 NLS means nonlinear stretch. The NLS tab manages shipped/custom nonlinear-stretch modes plus the special **Off** option. One NLS mode can be active at a time; the first matching mode wins.
 
@@ -20,4 +20,4 @@ NLS changes the shape of the picture intentionally. Keep it conceptually separat
 
 ---
 
-[← Configuration guide index](README.md)
+[← Shaders](4-shaders.md) · [Configuration guide index](README.md)

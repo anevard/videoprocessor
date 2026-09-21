@@ -1,3 +1,5 @@
+![VideoProcessor banner](../images/vp%20banner.png)
+
 # VideoProcessor Configuration Guide (first draft)
 
 > Draft status: first-pass documentation for review. The screenshots are real captures from the deployed VideoProcessor configuration editor. They show the UI as it was available during capture, including local device, monitor, renderer, and profile names.
@@ -5,6 +7,10 @@
 This guide explains the configuration editor screen by screen and tab by tab. It is written for an operator who wants to understand what a setting does before changing it, rather than for someone editing the `.cfg` file by hand. For the configuration file itself, see [CONFIGURATION.html](../CONFIGURATION.html).
 
 ## Contents
+
+**Getting started**
+
+- [Installing VideoProcessor](install.md) — install, update, move and uninstall; what setup replaces and what it keeps.
 
 **Reference**
 
@@ -15,24 +21,15 @@ This guide explains the configuration editor screen by screen and tab by tab. It
 
 | | Screen | What it covers |
 | --- | --- | --- |
-| 1 | [General](01-general.md) | Startup, capture hardware, display selection, shared input metadata defaults |
-| 2 | [Queue](02-queue.md) | Frame-queue profiles and buffering policy |
-| 3 | [VP Renderer — Rendering](03-rendering.md) | Quality preset, tone mapping, gamut mapping, peak detection, processing |
-| 4 | [DirectShow — General](04-directshow-general.md) | DirectShow timing and renderer colour overrides |
-| 5 | [VP Renderer — Screen](05-screen.md) | Presentation geometry, subtitle placement, HDR analysis protection |
-| 6 | [LLDV](06-lldv.md) | Low-Latency Dolby Vision metadata profiles |
-| 7 | [Shortcuts — Shortcuts](07-shortcuts.md) | Application, capture and renderer key chords |
-| 8 | [Actions](08-actions.md) | External commands triggered by VideoProcessor events |
-| 9 | [VP Renderer — Standard shaders](09-standard-shaders.md) | Optional shader effects and their ordering |
-| 10 | [VP Renderer — NLS](10-nls.md) | Nonlinear-stretch modes |
-| 11 | [Logs](11-logs.md) | Log enablement, enhanced diagnostics, retention |
-| 12 | [VP Renderer — Processing](12-vp-renderer-processing.md) | VP Renderer input-policy overrides |
-| 13 | [DirectShow — Input Processing](13-directshow-processing.md) | DirectShow input-policy overrides |
-| 14 | [VP Renderer — Color / Output](14-color-output.md) | Display calibration, LUT slots, transfer, output transport |
-| 15 | [Shaders — Setup](15-shaders-setup.md) | Shader cache maintenance |
-| 16 | [Shortcuts — Setup](16-shortcuts-setup.md) | Shortcut focus behaviour |
-| 17 | [VP Renderer — Scaling](17-scaling.md) | Upscaler, downscaler, anti-ringing |
-| 18 | [VP Renderer — Zoom](18-zoom.md) | Crop and fill behaviour, subtitle bounds |
+| 1 | [General](1-general.md) | Startup, capture hardware, display selection, shared input metadata defaults |
+| 2 | [Queue](2-queue.md) | Frame-queue profiles and buffering policy |
+| 3 | [LLDV](3-lldv.md) | Low-Latency Dolby Vision metadata profiles |
+| 4 | [Shaders](4-shaders.md) | Shader cache, standard shader profiles, nonlinear stretch — 3 tabs |
+| 5 | [Actions](5-actions.md) | External commands triggered by VideoProcessor events |
+| 6 | [Shortcuts](6-shortcuts.md) | Key chords and shortcut focus behaviour — 2 tabs |
+| 7 | [Logs](7-logs.md) | Log enablement, enhanced diagnostics, retention |
+| 8 | [VP Renderer](8-vp-renderer.md) | Rendering, colour and output, scaling, screen, zoom, input policy — 6 tabs |
+| 9 | [DirectShow](9-directshow.md) | DirectShow timing, colour overrides and input policy — 2 tabs |
 
 ## Before you begin
 
@@ -78,12 +75,12 @@ For the current origin beta tip, [`v1.3.005-beta`](https://github.com/billslack2
 
 When the picture is wrong, change one conceptual layer at a time:
 
-1. **[General](01-general.md)** — Confirm capture device, input connection, monitor, renderer, and shared input metadata.
-2. **[Input Processing](12-vp-renderer-processing.md)** — Confirm the active renderer is not overriding the General metadata unexpectedly.
-3. **[Rendering](03-rendering.md)** — Check quality, target luminance, tone mapping, gamut mapping, peak detection, dithering, and LUT selection.
-4. **[Color / Output](14-color-output.md)** — Check calibrated gamut/gamma, LUT slots and input gamma, output range, and presentation path.
-5. **[Scaling](17-scaling.md) / [Screen](05-screen.md) / [Zoom](18-zoom.md)** — Separate filter quality from geometry and crop decisions.
-6. **[Logs](11-logs.md)** — Enable enhanced logging only for the diagnostic capture, then return to normal logging when finished.
+1. **[General](1-general.md)** — Confirm capture device, input connection, monitor, renderer, and shared input metadata.
+2. **[Input Processing](8f-processing.md)** — Confirm the active renderer is not overriding the General metadata unexpectedly.
+3. **[Rendering](8a-rendering.md)** — Check quality, target luminance, tone mapping, gamut mapping, peak detection, dithering, and LUT selection.
+4. **[Color / Output](8b-color-output.md)** — Check calibrated gamut/gamma, LUT slots and input gamma, output range, and presentation path.
+5. **[Scaling](8c-scaling.md) / [Screen](8d-screen.md) / [Zoom](8e-zoom.md)** — Separate filter quality from geometry and crop decisions.
+6. **[Logs](7-logs.md)** — Enable enhanced logging only for the diagnostic capture, then return to normal logging when finished.
 
 When comparing screenshots or support reports, record the active profile names and rules. Two machines can show the same controls while resolving different effective values because their profile order, hardware, display, or discovered renderer list differs.
 

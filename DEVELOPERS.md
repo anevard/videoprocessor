@@ -1,7 +1,15 @@
-
 # For developers
 
-Get the source from https://github.com/defl/videoprocessor
+> **Out of date — pending a maintainer update.** This page has not kept pace with the solution.
+> `VideoProcessor-Config`, its tests and `OutputProbe` build with the v143 toolset, so Visual
+> Studio 2019 alone cannot build the solution; the config editor is also a Qt 6 application, whose
+> prerequisites are documented in
+> [src/VideoProcessor-Config/README.md](src/VideoProcessor-Config/README.md). The release
+> packaging section below describes only the legacy packager and predates the VP-0192 installer in
+> [docs/VP-0192_INSTALLER.md](docs/VP-0192_INSTALLER.md). Check anything here against the project
+> files before relying on it.
+
+Get the source from https://github.com/billslack2/videoprocessor
 
  * MSVC 2019 community edition
     * Install MFC libraries

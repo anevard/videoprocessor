@@ -1,6 +1,6 @@
-# 9. VP Renderer — Standard shaders
+# Shaders — Standard
 
-![Standard shaders screen](images/09-standard-shaders.png)
+![Standard shaders screen](images/4b-standard.png)
 
 Standard shaders are optional ordinary shader effects. They are separate from NLS modes and other manual shader sections.
 
@@ -25,4 +25,4 @@ The DirectShow and VP Renderer file fields are separate because a shader file ma
 
 ---
 
-[← Configuration guide index](README.md)
+[← Shaders](4-shaders.md) · [Configuration guide index](README.md)

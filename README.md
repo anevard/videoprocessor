@@ -11,29 +11,16 @@ _Capture cards cannot capture HDCP protected data, VideoProcessor can only proce
 # Install
 
 Download the x64 Setup executable from [Releases](https://github.com/billslack2/videoprocessor/releases) and run it
-normally, **not as administrator**. Close VideoProcessor and save and close Config — including its tray icon —
-first; setup never force-terminates them.
-
-Setup is self-contained and works offline. It installs Microsoft-signed x64 Visual C++ runtime DLLs beside the
-application, so there is no system-wide redistributable to run and no elevation prompt for the runtime. Fresh
-installs default to your local `Programs\VideoProcessor`; to adopt an existing ZIP installation, select its actual
-root — for example `C:\Videoprocessor\vp` — rather than its parent. The location is remembered per Windows user.
-
-Updating replaces the application binaries and the bundled user guides. Your `VideoProcessor.cfg`,
-`VideoProcessor.state`, profiles, custom shaders and LUTs, logs and caches are retained.
-`VideoProcessor.cfg.example` is a reference, not a replacement for your settings. Keep `VideoProcessor.exe` and
-`vprenderer\VideoProcessorVPRenderer.dll` from the same release — they are one versioned pair.
-
-See [docs/VP-0192_INSTALLER.md](docs/VP-0192_INSTALLER.md) for the full install and runtime contract, including
-uninstall, relocation and recovery.
+normally, **not as administrator** — the [install guide](configuration-guide/install.md) covers destinations,
+updating, moving and uninstalling.
 
 # Documentation
 
-- **[Configuration guide](configuration-guide/)** — the configuration editor screen by screen, with screenshots.
+- [Configuration guide](configuration-guide/README.md) — the configuration editor screen by screen, with screenshots.
   Start here if you want to understand what a setting does before you change it.
-- **[Configuration reference](CONFIGURATION.html)** — the `VideoProcessor.cfg` keys, section by section. Use this
+- [Configuration reference](CONFIGURATION.html) — the `VideoProcessor.cfg` keys, section by section. Use this
   when you are reading or editing the configuration file directly.
-- [DEVELOPERS.md](DEVELOPERS.md) — building from source.
+- [Developers.md](DEVELOPERS.md) — building from source.
 
 # License & legal
 

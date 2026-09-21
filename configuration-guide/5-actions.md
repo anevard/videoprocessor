@@ -1,6 +1,6 @@
-# 8. Actions
+# Actions
 
-![Actions screen](images/08-actions.png)
+![Actions screen](images/5-actions.png)
 
 Actions run external commands when selected VideoProcessor events occur. They are retained as drafts when disabled and have no implicit priority.
 

@@ -1,6 +1,6 @@
-# 12. VP Renderer — Processing
+# VP Renderer — Processing
 
-![VP Renderer Processing screen](images/12-vp-renderer-processing.png)
+![VP Renderer Processing screen](images/8f-processing.png)
 
 The tab is labelled **Processing**; the page inside it is headed "Input processing".
 
@@ -15,4 +15,4 @@ Use these overrides when one renderer path needs different interpretation than t
 
 ---
 
-[← Configuration guide index](README.md)
+[← VP Renderer](8-vp-renderer.md) · [Configuration guide index](README.md)

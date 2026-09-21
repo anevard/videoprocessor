@@ -1,6 +1,6 @@
-# 3. VP Renderer — Rendering
+# VP Renderer — Rendering
 
-![Rendering configuration screen](images/03-rendering.png)
+![Rendering configuration screen](images/8a-rendering.png)
 
 Rendering is a profile editor for the VP Renderer’s image-processing pipeline. It is intentionally separate from Color / Output: Rendering describes how source pixels are processed, while Color / Output describes the display calibration and transport target.
 
@@ -9,6 +9,8 @@ Rendering is a profile editor for the VP Renderer’s image-processing pipeline.
 - **Rendering quality** — Selects the broad quality/performance preset: **High**, **Balanced**, or **Fast**. The preset can resolve several automatic choices below. The small status text under an **Auto** control is the effective choice after the preset and hardware are considered.
 
 ## Tone mapping
+
+<img src="images/8a-tone-mapping.png" alt="Tone mapping section of the Rendering tab" width="588">
 
 - **Target nits** — VP's target display peak/white policy in nits. It is the luminance target used when mapping HDR content to the configured display target; it is not a measurement of the current Windows HDR panel brightness.
 - **HDR tone-map target black** — Target black level in nits. An explicit value is useful when the display’s black floor is known; **Auto** lets the profile use its normal default behavior.
@@ -21,14 +23,16 @@ Together, these settings determine how VP adapts the source to the display: tone
 
 ## Processing
 
+<img src="images/8a-processing.png" alt="Processing section of the Rendering tab" width="592">
+
 - **Debanding** — Reduces visible bands in smooth gradients. **Standard** and **Light** trade quality and GPU work; **Off** disables the pass.
 - **Dithering** — Adds controlled noise or error diffusion before quantization to reduce banding. The editor exposes blue noise, ordered patterns, white noise, several error-diffusion kernels, **Auto**, and **Off**.
 - **Display bit depth** — Chooses the precision target for the final rendered picture: **Auto**, **10-bit or higher**, or **8-bit**. This affects how VP prepares the signal and applies dithering; it is not a guarantee that Windows, the cable, or the panel is operating at that depth.
 
 ## Calibration ownership
 
-The current beta keeps display calibration and calibration LUT controls on **Color / Output**, not on Rendering. Rendering retains the HDR target luminance/black policy, quality preset, tone mapping, gamut mapping, peak detection, debanding, dithering, and display-bit-depth controls. See [Color / Output](14-color-output.md) for the calibration method, target gamut, gamma, LUT slots, and output transport.
+The current beta keeps display calibration and calibration LUT controls on **Color / Output**, not on Rendering. Rendering retains the HDR target luminance/black policy, quality preset, tone mapping, gamut mapping, peak detection, debanding, dithering, and display-bit-depth controls. See [Color / Output](8b-color-output.md) for the calibration method, target gamut, gamma, LUT slots, and output transport.
 
 ---
 
-[← Configuration guide index](README.md)
+[← VP Renderer](8-vp-renderer.md) · [Configuration guide index](README.md)

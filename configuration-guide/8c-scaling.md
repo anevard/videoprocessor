@@ -1,6 +1,6 @@
-# 17. VP Renderer — Scaling
+# VP Renderer — Scaling
 
-![Scaling configuration screen](images/17-scaling.png)
+![Scaling configuration screen](images/8c-scaling.png)
 
 Scaling profiles choose the reconstruction filters used when the source and target sizes differ.
 
@@ -14,4 +14,4 @@ The current editor labels automatic choices as **Auto** and shows the resolved v
 
 ---
 
-[← Configuration guide index](README.md)
+[← VP Renderer](8-vp-renderer.md) · [Configuration guide index](README.md)

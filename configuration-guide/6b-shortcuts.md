@@ -1,6 +1,6 @@
-# 7. Shortcuts — Shortcuts
+# Shortcuts — Shortcuts
 
-![Shortcuts screen](images/07-shortcuts.png)
+![Shortcuts screen](images/6b-shortcuts.png)
 
 The Shortcuts tab assigns key chords. The editor validates chords and shows the built-in default where one exists. Clear and save a field to disable that shortcut.
 
@@ -37,4 +37,4 @@ Profile editors also expose Shortcut key and Cycle shortcut key fields. Those ar
 
 ---
 
-[← Configuration guide index](README.md)
+[← Shortcuts](6-shortcuts.md) · [Configuration guide index](README.md)

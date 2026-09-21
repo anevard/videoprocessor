@@ -1,6 +1,6 @@
-# 6. LLDV
+# LLDV
 
-![LLDV configuration screen](images/06-lldv.png)
+![LLDV configuration screen](images/3-lldv.png)
 
 LLDV is an ordered profile list shared by the available renderers. The first profile is the default; shortcut, cycle, and rule selection choose among the configured LLDV metadata profiles. The selected profile supplies the Dolby Vision metadata used by the active renderer.
 

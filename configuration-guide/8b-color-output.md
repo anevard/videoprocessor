@@ -1,10 +1,12 @@
-# 14. VP Renderer — Color / Output
+# VP Renderer — Color / Output
 
-![Color and Output configuration screen](images/14-color-output.png)
+![Color and Output configuration screen](images/8b-color-output.png)
 
 The current origin beta editor presents display calibration and output controls together on this tab. The old Output page redirects here. Use this screen when the question is “what display response and output behavior should the processed picture target?”
 
 ## Live status and display calibration
+
+<img src="images/8b-display-calibration.png" alt="Display calibration section of the Color / Output tab" width="558">
 
 - **Live output status** — Reports the output settings currently being used by the running renderer, separately from unsaved edits. **Unavailable** means that VP cannot report the live state; it is not proof that saved preferences are active.
 - **Enable display calibration 3D LUT** — Enables the calibration-LUT path for this Color / Output profile.
@@ -54,6 +56,8 @@ In this beta, Color / Output contains the display target, target gamut, calibrat
 
 ## Output
 
+<img src="images/8b-output.png" alt="Output section of the Color / Output tab" width="556">
+
 - **Presentation preference** — **Prefer flip (allow fallback)**, **Flip model**, or **BitBlt model**. These describe the preferred presentation model; they do not guarantee that Windows will promote a surface to independent flip or bypass composition.
 - **RGB output range** — **Full** or **Limited**.
 - **Limited transport transfer** — Transfer declaration for Limited RGB transport: 2.2 or 2.4.
@@ -62,6 +66,8 @@ In this beta, Color / Output contains the display target, target gamut, calibrat
 - **Compatibility status** — Read-only notes that explain an incompatible or constrained combination.
 
 ## Output Experiments (beta)
+
+<img src="images/8b-output-experiments.png" alt="Output Experiments section of the Color / Output tab" width="560">
 
 These controls are diagnostic/experimental rather than normal calibration controls:
 
@@ -82,4 +88,4 @@ When a usable HDR LUT is attached, **HDR LUT input gamma** tells VP how the HDR 
 
 ---
 
-[← Configuration guide index](README.md)
+[← VP Renderer](8-vp-renderer.md) · [Configuration guide index](README.md)

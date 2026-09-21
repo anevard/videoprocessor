@@ -1,6 +1,6 @@
-# 2. Queue
+# Queue
 
-![Queue configuration screen](images/02-queue.png)
+![Queue configuration screen](images/2-queue.png)
 
 Queue is an ordered profile editor. It controls how many frames VP keeps available and how it recovers after a render restart or an unusually deep queue.
 
