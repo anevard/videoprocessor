@@ -3078,19 +3078,36 @@ namespace
 		return false;
 	}
 
-	std::vector<RankedDisplayRefreshRate> RankDisplayRefreshRates(
+	struct RankedDisplayRefreshRates
+	{
+		std::vector<RankedDisplayRefreshRate> rates;
+		size_t ceilingDropped = 0;
+		bool ceilingArmed = false;
+	};
+
+	// The ceiling is applied to the pure selection vector, before the conversion
+	// to the renderer-local type, so the decision never sees a Windows type. The
+	// two counts are returned rather than logged here, because the caller owns the
+	// line and the numbers must be the ones the decision actually produced.
+	RankedDisplayRefreshRates RankDisplayRefreshRates(
 		const DISPLAYCONFIG_RATIONAL& input, bool interlaced,
-		const std::vector<DISPLAYCONFIG_RATIONAL>& supportedRates)
+		const std::vector<DISPLAYCONFIG_RATIONAL>& supportedRates,
+		double limitHz, uint32_t desktopWidth, uint32_t desktopHeight)
 	{
 		std::vector<DisplayRefreshRational> candidates;
 		candidates.reserve(supportedRates.size());
 		for (const auto& rate : supportedRates)
 			candidates.push_back({ rate.Numerator, rate.Denominator });
-		std::vector<RankedDisplayRefreshRate> ranked;
-		for (const auto& selection : RankDisplayRefreshModesForInput(
-			{ input.Numerator, input.Denominator }, interlaced, candidates))
+		const DisplayRateCeilingResult ceiling = ApplyDisplayRateCeiling(
+			RankDisplayRefreshModesForInput(
+				{ input.Numerator, input.Denominator }, interlaced, candidates),
+			limitHz, desktopWidth, desktopHeight);
+		RankedDisplayRefreshRates ranked;
+		ranked.ceilingDropped = ceiling.dropped;
+		ranked.ceilingArmed = ceiling.armed;
+		for (const auto& selection : ceiling.retained)
 		{
-			ranked.push_back({ { selection.selected.numerator, selection.selected.denominator },
+			ranked.rates.push_back({ { selection.selected.numerator, selection.selected.denominator },
 				selection.path, selection.requestedRateHz, selection.doubledRate });
 		}
 		return ranked;
@@ -3161,7 +3178,7 @@ namespace
 			m_finalRestoreAttempted = true;
 		}
 
-		bool HasPendingRestore() const { return m_changed; }
+		bool HasPendingRestore() const { return m_changed || m_resolutionChanged; }
 
 		void Switch(HWND hwnd, const VideoState& state, const RendererSettings& settings)
 		{
@@ -3201,7 +3218,57 @@ namespace
 			DebugLog::Log("libplacebo refresh-rate policy: input=%.6f Hz interlaced=%d policy=%s preferred=%.6f Hz",
 				contentRate, interlaced ? 1 : 0,
 				interlaced ? "field-rate" : "native-first", RefreshRateHz(targetRefreshRate));
-			if (RefreshRatesEqual(m_originalRefreshRate, targetRefreshRate))
+
+			// The desktop raster is what the link carries, so that is what moves.
+			// The source resolution never enters this: a 1080p60 source on a 2160p
+			// desktop still goes out at 2160p60, and that is the case this prevents.
+			// Capture the mode first; Restore() needs the one the operator had.
+			// This instance is a renderer member, so Switch() can run again without
+			// an intervening Restore(). Only the first change owns the original:
+			// re-capturing would record the target raster as the mode to put back
+			// and the desktop would never climb back to its real one. The live
+			// raster below is still read fresh, which is what the ceiling needs.
+			DEVMODEW currentMode{};
+			currentMode.dmSize = sizeof(currentMode);
+			const bool haveDesktopMode = EnumDisplaySettingsW(
+				m_displayDeviceName.c_str(), ENUM_CURRENT_SETTINGS,
+				&currentMode) != FALSE;
+			if (haveDesktopMode && !m_resolutionChanged)
+				m_originalDisplayMode = currentMode;
+			uint32_t desktopWidth = haveDesktopMode ? currentMode.dmPelsWidth : 0;
+			uint32_t desktopHeight = haveDesktopMode ? currentMode.dmPelsHeight : 0;
+			// Both decisions are written against a real raster. An unknown one must
+			// not be read as "not the target", which would arm the ceiling and drop
+			// a desktop we could not put back, so the limit is off for this switch.
+			const double limitHz = haveDesktopMode ? settings.highRateLimitHz : 0.0;
+			if (!haveDesktopMode && settings.highRateLimitHz > 0.0)
+				DebugLog::Log(
+					"libplacebo display-resolution policy: current desktop mode unreadable; leaving the resolution alone");
+			if (haveDesktopMode)
+			{
+				const DisplayResolutionSelection resolution =
+					SelectDisplayResolutionForRate(RefreshRateHz(targetRefreshRate),
+						limitHz, desktopWidth, desktopHeight);
+				DebugLog::Log(
+					"libplacebo display-resolution policy: preferred=%.6f Hz limit=%.3f desktop=%ux%u wanted=%ux%u action=%s",
+					RefreshRateHz(targetRefreshRate), limitHz,
+					desktopWidth, desktopHeight,
+					resolution.change ? resolution.width : desktopWidth,
+					resolution.change ? resolution.height : desktopHeight,
+					resolution.change ? "drop" : "none");
+				if (resolution.change &&
+					ApplyDesktopRaster(resolution.width, resolution.height))
+				{
+					desktopWidth = resolution.width;
+					desktopHeight = resolution.height;
+				}
+			}
+
+			// Once the raster has moved, m_originalRefreshRate was measured at the
+			// old one and Windows has picked a rate of its own for the new mode, so
+			// this comparison is against a stale number and must not short-circuit.
+			if (!m_resolutionChanged &&
+				RefreshRatesEqual(m_originalRefreshRate, targetRefreshRate))
 			{
 				DebugLog::Log(
 					"libplacebo refresh-rate switch: display already %.6f Hz for %.6f Hz input",
@@ -3223,8 +3290,42 @@ namespace
 					RefreshRateHz(m_originalRefreshRate));
 				return;
 			}
-			const std::vector<RankedDisplayRefreshRate> rankedRates =
-				RankDisplayRefreshRates(inputRefreshRate, interlaced, supportedRates);
+			RankedDisplayRefreshRates ranked = RankDisplayRefreshRates(
+				inputRefreshRate, interlaced, supportedRates,
+				limitHz, desktopWidth, desktopHeight);
+			if (ranked.ceilingArmed)
+				DebugLog::Log(
+					"libplacebo display-resolution ceiling: limit=%.3f Hz dropped=%zu remaining=%zu",
+					limitHz, ranked.ceilingDropped, ranked.rates.size());
+			// The ceiling took everything: a source whose only usable candidate is
+			// above the limit is above-limit content in all but name, so drop to the
+			// target raster and re-rank rather than retaining the current rate.
+			// Smooth motion at 1080p beats full resolution with judder. This block is
+			// straight-line, so there can never be a third pass.
+			if (ranked.ceilingArmed && ranked.rates.empty())
+			{
+				DebugLog::Log(
+					"libplacebo display-resolution fallback: no candidate at or below limit; dropping to 1080p");
+				if (ApplyDesktopRaster(HIGH_RATE_TARGET_WIDTH, HIGH_RATE_TARGET_HEIGHT))
+				{
+					desktopWidth = HIGH_RATE_TARGET_WIDTH;
+					desktopHeight = HIGH_RATE_TARGET_HEIGHT;
+					supportedRates.clear();
+					if (!QueryDxgiSupportedRefreshRates(m_displayDeviceName, supportedRates))
+					{
+						DebugLog::Log(
+							"libplacebo refresh-rate switch: DXGI rational mode enumeration failed after resolution fallback; retaining %.6f Hz",
+							RefreshRateHz(m_originalRefreshRate));
+						return;
+					}
+					// The desktop is now at the target raster, so the ceiling disarms
+					// itself on this pass; the limit is passed unchanged deliberately.
+					ranked = RankDisplayRefreshRates(
+						inputRefreshRate, interlaced, supportedRates,
+						limitHz, desktopWidth, desktopHeight);
+				}
+			}
+			const std::vector<RankedDisplayRefreshRate>& rankedRates = ranked.rates;
 			if (rankedRates.empty())
 			{
 				DebugLog::Log(
@@ -3364,8 +3465,17 @@ namespace
 
 		bool Restore()
 		{
-			if (!m_changed)
+			if (!m_changed && !m_resolutionChanged)
 				return true;
+
+			// The raster goes back before the rate. m_originalRefreshRate was
+			// measured at the original raster, and the two-observation verifier
+			// below has to watch the display that number came from. A resolution
+			// change can also outlive a refresh switch that never took, so this
+			// cannot be conditional on m_changed.
+			const bool rasterRestored = RestoreDesktopRaster();
+			if (!m_changed)
+				return rasterRestored;
 
 			std::vector<DISPLAYCONFIG_PATH_INFO> paths;
 			std::vector<DISPLAYCONFIG_MODE_INFO> modes;
@@ -3443,6 +3553,61 @@ namespace
 				RefreshRateHz(m_originalRefreshRate), RefreshRateHz(m_originalRefreshRate));
 			m_restoreFailureCount = 0;
 			m_changed = false;
+			return rasterRestored;
+		}
+
+		// No frequency field is set: the refresh switch owns the rate, and naming
+		// one here would fight it. Success is confirmed by re-reading the live mode
+		// rather than trusting the return code.
+		bool ApplyDesktopRaster(uint32_t width, uint32_t height)
+		{
+			DEVMODEW wanted{};
+			wanted.dmSize = sizeof(wanted);
+			wanted.dmPelsWidth = width;
+			wanted.dmPelsHeight = height;
+			wanted.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+			const LONG result = ChangeDisplaySettingsExW(
+				m_displayDeviceName.c_str(), &wanted, nullptr, CDS_FULLSCREEN, nullptr);
+			DEVMODEW observed{};
+			observed.dmSize = sizeof(observed);
+			const bool live = result == DISP_CHANGE_SUCCESSFUL &&
+				EnumDisplaySettingsW(m_displayDeviceName.c_str(),
+					ENUM_CURRENT_SETTINGS, &observed) != FALSE &&
+				observed.dmPelsWidth == width && observed.dmPelsHeight == height;
+			if (!live)
+			{
+				// A failed change leaves the desktop where it was, which is exactly
+				// what arms the ceiling. No separate blocked flag is needed.
+				DebugLog::Log(
+					"libplacebo display-resolution switch failed: wanted=%ux%u error=%ld; leaving the desktop alone",
+					width, height, result);
+				return false;
+			}
+			m_resolutionChanged = true;
+			DebugLog::Log(
+				"libplacebo display-resolution switch: desktop now %ux%u", width, height);
+			return true;
+		}
+
+		bool RestoreDesktopRaster()
+		{
+			if (!m_resolutionChanged)
+				return true;
+			const LONG result = ChangeDisplaySettingsExW(
+				m_displayDeviceName.c_str(), &m_originalDisplayMode, nullptr,
+				CDS_FULLSCREEN, nullptr);
+			if (result != DISP_CHANGE_SUCCESSFUL)
+			{
+				DebugLog::Log(
+					"libplacebo display-resolution restore failed: %lux%lu error=%ld; external_state=unverified",
+					m_originalDisplayMode.dmPelsWidth,
+					m_originalDisplayMode.dmPelsHeight, result);
+				return false;
+			}
+			DebugLog::Log(
+				"libplacebo display-resolution restore: desktop back to %lux%lu",
+				m_originalDisplayMode.dmPelsWidth, m_originalDisplayMode.dmPelsHeight);
+			m_resolutionChanged = false;
 			return true;
 		}
 
@@ -3465,6 +3630,11 @@ namespace
 
 		std::wstring m_displayDeviceName;
 		DISPLAYCONFIG_RATIONAL m_originalRefreshRate{};
+		// The desktop mode as the operator had it, captured before any change.
+		// Restored whole, including a mode the link cannot lock if that is what
+		// was set before VP started.
+		DEVMODEW m_originalDisplayMode{};
+		bool m_resolutionChanged = false;
 		unsigned int m_restoreFailureCount = 0;
 		bool m_changed = false;
 		bool m_finalRestoreAttempted = false;
