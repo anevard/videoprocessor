@@ -134,6 +134,18 @@ namespace MainConfigSchema
 				}
 		auto generalRules = commandLineRules;
 		generalRules.push_back(recoveryRule);
+		// Highest rate VP may put on the wire while the desktop sits at a raster
+		// the link may not carry. [general] only: not a [command_line] option.
+		generalRules.push_back(ConfigSchema::KeyRule{ "high_rate_limit_hz",
+			[](const std::string& value)
+			{
+				const std::string trimmed = ConfigFile::Trim(value);
+				if (ConfigFile::NormalizeName(trimmed) == "off") return true;
+				double hz = 0.0;
+				return DisplayRuleExpression::ParseNumber(trimmed, hz) &&
+					std::isfinite(hz) && hz >= 1.0 && hz <= 1000.0;
+			},
+			"off, or a finite number from 1 to 1000" });
 		if (hasUnifiedRenderer &&
 			!ConfigSchema::ValidateSection(
 				config, "general", generalRules, error))

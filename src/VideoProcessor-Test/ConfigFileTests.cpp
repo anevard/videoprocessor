@@ -1930,6 +1930,37 @@ namespace VideoProcessorTest
 			DeleteFileA(path);
 		}
 
+		TEST_METHOD(HighRateLimitIsAGeneralKeyInTheCurrentLayout)
+		{
+			char directory[MAX_PATH] = {}, path[MAX_PATH] = {};
+			Assert::IsTrue(GetTempPathA(ARRAYSIZE(directory), directory) > 0);
+			Assert::IsTrue(GetTempFileNameA(directory, "vph", 0, path) != 0);
+			struct Case { const char* section; const char* value; bool valid; };
+			for (const Case& test : {
+				Case{ "general", "off", true },
+				Case{ "general", "Off", true },
+				Case{ "general", "60", true },
+				Case{ "general", "59.94", true },
+				Case{ "general", "0", false },
+				Case{ "general", "1001", false },
+				Case{ "general", "fast", false },
+				Case{ "command_line", "60", false } })
+			{
+				{
+					std::ofstream file(path, std::ios::out | std::ios::trunc);
+					file << "[" << test.section << "]\nhigh_rate_limit_hz: "
+						<< test.value << "\n[vprenderer.Default]\n";
+				}
+				ConfigFile config;
+				Assert::IsTrue(config.Load(path));
+				std::string error;
+				Assert::AreEqual(test.valid, MainConfigSchema::Validate(config, error));
+				if (!test.valid)
+					Assert::IsTrue(error.find("high_rate_limit_hz") != std::string::npos);
+			}
+			DeleteFileA(path);
+		}
+
 		TEST_METHOD(MainConfigSchemaValidatesTargetOnlyDisplaySessionMode)
 		{
 			char temporaryDirectory[MAX_PATH] = {};

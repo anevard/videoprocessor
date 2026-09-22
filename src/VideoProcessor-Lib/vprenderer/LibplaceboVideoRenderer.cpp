@@ -2159,12 +2159,13 @@ namespace
 			settings.switchRefreshRate =
 				settings.refreshRateSwitchMode != RefreshRateSwitchMode::Never;
 
-		// The schema refuses an out-of-range value before the renderer is built, so
-		// reaching the fallback here means the key arrived by some other route. Fall
-		// back to off rather than refusing to render: the cost is the feature, not
-		// the session.
+		// Application setting in [general], like switch_refresh_rate. The schema
+		// refuses an out-of-range value before the renderer is built, so reaching
+		// the fallback here means the key arrived by some other route. Fall back to
+		// off rather than refusing to render: the cost is the feature, not the
+		// session.
 		settings.highRateLimitHz = 0.0;
-		if (TryGetDisplayString(config, "high_rate_limit_hz", rawValue))
+		if (config.TryGetString("general", "high_rate_limit_hz", rawValue))
 		{
 			const std::string trimmed = ConfigFile::Trim(rawValue);
 			double parsedLimit = 0.0;
