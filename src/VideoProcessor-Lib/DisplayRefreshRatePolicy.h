@@ -114,6 +114,53 @@ std::vector<DisplayRefreshModeSelection> RankDisplayRefreshModesForInput(
 	const DisplayRefreshRational& input, bool interlaced,
 	const std::vector<DisplayRefreshRational>& candidates);
 
+// The single raster both high-rate decisions below are written against. A link
+// that cannot carry a high rate at the desktop raster is expected to carry it
+// here. The selector and the ceiling must read the same pair: if they disagreed
+// about what this raster is, a successful drop would leave the ceiling armed and
+// the high rate would never be applied at all.
+constexpr uint32_t HIGH_RATE_TARGET_WIDTH = 1920;
+constexpr uint32_t HIGH_RATE_TARGET_HEIGHT = 1080;
+
+struct DisplayResolutionSelection
+{
+	uint32_t width = 0;
+	uint32_t height = 0;
+	bool change = false;
+};
+
+// Choose the desktop raster for a rate that is already resolved: preferredRateHz
+// is the rate the caller is about to request, with any interlaced field-rate
+// doubling already folded in. A limitHz of zero is off and never changes
+// anything.
+//
+// This deliberately takes no original raster and can therefore only ever
+// propose the target raster or no change; it cannot express a climb back to a
+// larger desktop while a high rate is live. Restoring the original mode belongs
+// to the caller's own retirement path.
+DisplayResolutionSelection SelectDisplayResolutionForRate(
+	double preferredRateHz, double limitHz,
+	uint32_t desktopWidth, uint32_t desktopHeight);
+
+struct DisplayRateCeilingResult
+{
+	std::vector<DisplayRefreshModeSelection> retained;
+	size_t dropped = 0;
+	bool armed = false;
+};
+
+// Refuse rates above the limit while the desktop is at any raster other than
+// the target. The ceiling is a function of where the desktop actually ended up,
+// never of whether a mode set failed and never of what the display claims it can
+// do; an EDID may advertise a mode the link cannot lock.
+//
+// An emptied result is reported, not resolved: what to do about it needs the
+// display calls the caller owns. Retained entries keep their incoming rank
+// order.
+DisplayRateCeilingResult ApplyDisplayRateCeiling(
+	const std::vector<DisplayRefreshModeSelection>& ranked, double limitHz,
+	uint32_t desktopWidth, uint32_t desktopHeight);
+
 bool DisplayRefreshRatesExactlyEqual(
 	const DisplayRefreshRational& first,
 	const DisplayRefreshRational& second);

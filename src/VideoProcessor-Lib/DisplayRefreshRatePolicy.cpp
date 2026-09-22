@@ -65,6 +65,32 @@ DisplayRefreshRateResult Result(
 	result.shouldRecalculate = shouldRecalculate;
 	return result;
 }
+
+bool DesktopIsHighRateTarget(uint32_t desktopWidth, uint32_t desktopHeight)
+{
+	return desktopWidth == HIGH_RATE_TARGET_WIDTH &&
+		desktopHeight == HIGH_RATE_TARGET_HEIGHT;
+}
+
+// A limit is live only when it is a usable positive number. Zero is the
+// configured off value; a non-finite or negative limit is treated as off rather
+// than as a ceiling of zero, which would refuse every candidate.
+bool HighRateLimitIsActive(double limitHz)
+{
+	return std::isfinite(limitHz) && limitHz > 0.0;
+}
+
+// Strictly above, so a rate at exactly the limit is carried at the desktop
+// raster. A rate that cannot be compared at all counts as exceeding the limit:
+// the guarantee being kept is that no rate is applied above the limit away from
+// the target raster, and an unreadable rate cannot be shown to satisfy it.
+// Both decisions share this predicate, so the selector can never move the
+// desktop for a rate the ceiling would then keep, or leave it for one the
+// ceiling would then drop.
+bool RateExceedsLimit(double rateHz, double limitHz)
+{
+	return !std::isfinite(rateHz) || rateHz > limitHz;
+}
 }
 
 
@@ -166,6 +192,47 @@ std::vector<DisplayRefreshModeSelection> RankDisplayRefreshModesForInput(
 		appendGroup({ input.numerator * 2, input.denominator }, true);
 	}
 	return ranked;
+}
+
+DisplayResolutionSelection SelectDisplayResolutionForRate(
+	double preferredRateHz, double limitHz,
+	uint32_t desktopWidth, uint32_t desktopHeight)
+{
+	DisplayResolutionSelection selection;
+	selection.width = desktopWidth;
+	selection.height = desktopHeight;
+	if (!HighRateLimitIsActive(limitHz)) return selection;
+	if (!RateExceedsLimit(preferredRateHz, limitHz)) return selection;
+	if (DesktopIsHighRateTarget(desktopWidth, desktopHeight)) return selection;
+	selection.width = HIGH_RATE_TARGET_WIDTH;
+	selection.height = HIGH_RATE_TARGET_HEIGHT;
+	selection.change = true;
+	return selection;
+}
+
+DisplayRateCeilingResult ApplyDisplayRateCeiling(
+	const std::vector<DisplayRefreshModeSelection>& ranked, double limitHz,
+	uint32_t desktopWidth, uint32_t desktopHeight)
+{
+	DisplayRateCeilingResult result;
+	result.armed = HighRateLimitIsActive(limitHz) &&
+		!DesktopIsHighRateTarget(desktopWidth, desktopHeight);
+	if (!result.armed)
+	{
+		result.retained = ranked;
+		return result;
+	}
+	result.retained.reserve(ranked.size());
+	for (const auto& selection : ranked)
+	{
+		if (RateExceedsLimit(selection.selectedRateHz, limitHz))
+		{
+			++result.dropped;
+			continue;
+		}
+		result.retained.push_back(selection);
+	}
+	return result;
 }
 
 bool DisplayRefreshRatesExactlyEqual(

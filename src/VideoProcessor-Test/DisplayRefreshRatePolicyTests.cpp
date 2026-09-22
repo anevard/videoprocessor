@@ -381,5 +381,142 @@ namespace Tests
 			Assert::IsTrue(ShouldSwitchRefreshRateForPresentationTarget(true,
 				RefreshRateSwitchMode::Always));
 		}
+
+		static DisplayRefreshModeSelection RankedRate(double selectedRateHz)
+		{
+			DisplayRefreshModeSelection selection;
+			selection.path = DisplayRefreshModeSelectionPath::ExactOrClose;
+			selection.selectedRateHz = selectedRateHz;
+			return selection;
+		}
+
+		TEST_METHOD(HighRateLimitOffNeverMovesTheDesktop)
+		{
+			const auto high = SelectDisplayResolutionForRate(
+				59.94, 0.0, 3840, 2160);
+			Assert::IsFalse(high.change);
+			Assert::AreEqual(3840u, high.width);
+			Assert::AreEqual(2160u, high.height);
+			Assert::IsFalse(SelectDisplayResolutionForRate(
+				119.88, 0.0, 1920, 1080).change);
+		}
+
+		TEST_METHOD(HighRateAboveLimitSelectsTheTargetRaster)
+		{
+			const auto selection = SelectDisplayResolutionForRate(
+				59.94, 30.0, 3840, 2160);
+			Assert::IsTrue(selection.change);
+			Assert::AreEqual(HIGH_RATE_TARGET_WIDTH, selection.width);
+			Assert::AreEqual(HIGH_RATE_TARGET_HEIGHT, selection.height);
+		}
+
+		// The selector proposes no raster of its own below the limit; returning
+		// to a larger desktop is the caller's restore path, not this decision.
+		TEST_METHOD(HighRateAtOrBelowLimitLeavesTheDesktopAlone)
+		{
+			const auto below = SelectDisplayResolutionForRate(
+				23.976, 30.0, 3840, 2160);
+			Assert::IsFalse(below.change);
+			Assert::AreEqual(3840u, below.width);
+			Assert::AreEqual(2160u, below.height);
+			Assert::IsFalse(SelectDisplayResolutionForRate(
+				30.0, 30.0, 3840, 2160).change);
+			Assert::IsTrue(SelectDisplayResolutionForRate(
+				30.001, 30.0, 3840, 2160).change);
+		}
+
+		TEST_METHOD(HighRateAlreadyAtTargetRasterRequestsNoChange)
+		{
+			const auto selection = SelectDisplayResolutionForRate(
+				59.94, 30.0, 1920, 1080);
+			Assert::IsFalse(selection.change);
+			Assert::AreEqual(1920u, selection.width);
+			Assert::AreEqual(1080u, selection.height);
+		}
+
+		// An unreadable rate cannot be shown to satisfy the limit, so it is
+		// treated as exceeding it rather than waved through.
+		TEST_METHOD(HighRateNonFinitePreferredRateIsTreatedAsAboveLimit)
+		{
+			Assert::IsTrue(SelectDisplayResolutionForRate(
+				std::numeric_limits<double>::quiet_NaN(), 30.0,
+				3840, 2160).change);
+			Assert::IsTrue(SelectDisplayResolutionForRate(
+				std::numeric_limits<double>::infinity(), 30.0,
+				3840, 2160).change);
+		}
+
+		TEST_METHOD(RateCeilingIsDisarmedWithoutALimit)
+		{
+			const std::vector<DisplayRefreshModeSelection> ranked{
+				RankedRate(59.94), RankedRate(29.97) };
+			const auto result = ApplyDisplayRateCeiling(
+				ranked, 0.0, 3840, 2160);
+			Assert::IsFalse(result.armed);
+			Assert::AreEqual(size_t{ 0 }, result.dropped);
+			Assert::AreEqual(size_t{ 2 }, result.retained.size());
+			Assert::AreEqual(59.94, result.retained[0].selectedRateHz, 1e-9);
+		}
+
+		TEST_METHOD(RateCeilingIsDisarmedAtTheTargetRaster)
+		{
+			const std::vector<DisplayRefreshModeSelection> ranked{
+				RankedRate(59.94), RankedRate(29.97) };
+			const auto result = ApplyDisplayRateCeiling(
+				ranked, 30.0, 1920, 1080);
+			Assert::IsFalse(result.armed);
+			Assert::AreEqual(size_t{ 0 }, result.dropped);
+			Assert::AreEqual(size_t{ 2 }, result.retained.size());
+		}
+
+		TEST_METHOD(RateCeilingDropsRatesAboveTheLimitAndKeepsRankOrder)
+		{
+			const std::vector<DisplayRefreshModeSelection> ranked{
+				RankedRate(59.94), RankedRate(29.97), RankedRate(23.976) };
+			const auto result = ApplyDisplayRateCeiling(
+				ranked, 30.0, 3840, 2160);
+			Assert::IsTrue(result.armed);
+			Assert::AreEqual(size_t{ 1 }, result.dropped);
+			Assert::AreEqual(size_t{ 2 }, result.retained.size());
+			Assert::AreEqual(29.97, result.retained[0].selectedRateHz, 1e-9);
+			Assert::AreEqual(23.976, result.retained[1].selectedRateHz, 1e-9);
+		}
+
+		TEST_METHOD(RateCeilingKeepsARateExactlyAtTheLimit)
+		{
+			const std::vector<DisplayRefreshModeSelection> ranked{
+				RankedRate(30.0) };
+			const auto result = ApplyDisplayRateCeiling(
+				ranked, 30.0, 3840, 2160);
+			Assert::IsTrue(result.armed);
+			Assert::AreEqual(size_t{ 0 }, result.dropped);
+			Assert::AreEqual(size_t{ 1 }, result.retained.size());
+		}
+
+		// The empty outcome is reported, not resolved. Falling back to the
+		// target raster needs display calls this function does not make.
+		TEST_METHOD(RateCeilingReportsAnEmptiedCandidateList)
+		{
+			const std::vector<DisplayRefreshModeSelection> ranked{
+				RankedRate(59.94) };
+			const auto result = ApplyDisplayRateCeiling(
+				ranked, 30.0, 3840, 2160);
+			Assert::IsTrue(result.armed);
+			Assert::AreEqual(size_t{ 1 }, result.dropped);
+			Assert::IsTrue(result.retained.empty());
+		}
+
+		// The two decisions must agree on the raster, or a successful drop
+		// would leave the ceiling armed and the rate would never be applied.
+		TEST_METHOD(HighRateSelectorAndCeilingAgreeOnTheTargetRaster)
+		{
+			const auto selection = SelectDisplayResolutionForRate(
+				59.94, 30.0, 3840, 2160);
+			Assert::IsTrue(selection.change);
+			const auto result = ApplyDisplayRateCeiling(
+				{ RankedRate(59.94) }, 30.0, selection.width, selection.height);
+			Assert::IsFalse(result.armed);
+			Assert::AreEqual(size_t{ 1 }, result.retained.size());
+		}
 	};
 }
