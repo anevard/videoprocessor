@@ -747,6 +747,19 @@ namespace RendererProfileConfig
 			ConfigSchema::Boolean("live_profile_updates"),
 			ConfigSchema::Choice("switch_refresh_rate",
 				{ "true", "false", "never", "fullscreen_only", "full_screen_only", "always" }),
+			// Registered here and nowhere else. [vpvr.general] is the only section
+			// whose keys this vector admits, so every other section rejects the key
+			// by name rather than silently ignoring it.
+			ConfigSchema::KeyRule{ "high_rate_limit_hz",
+				[](const std::string& value)
+				{
+					const std::string trimmed = ConfigFile::Trim(value);
+					if (ConfigFile::NormalizeName(trimmed) == "off") return true;
+					double hz = 0.0;
+					return DisplayRuleExpression::ParseNumber(trimmed, hz) &&
+						std::isfinite(hz) && hz >= 1.0 && hz <= 1000.0;
+				},
+				"off, or a finite number from 1 to 1000" },
 			ConfigSchema::Boolean("output_diagnostics"),
 			ConfigSchema::Boolean("diagnostic_disable_shader_cache"),
 			ConfigSchema::Boolean("diagnostic_disable_compute"),

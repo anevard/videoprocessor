@@ -951,6 +951,9 @@ namespace
 		bool switchRefreshRate = true;
 		RefreshRateSwitchMode refreshRateSwitchMode =
 			RefreshRateSwitchMode::FullscreenOnly;
+		// Highest rate that may reach the wire while the desktop sits at a raster
+		// other than the high-rate target. Zero is off, which is today's behaviour.
+		double highRateLimitHz = 0.0;
 		std::string quality = "high";
 		std::string toneMapping = "auto";
 		std::string gamutMapping = "auto";
@@ -1061,7 +1064,8 @@ namespace
 		stream
 			<< settings.configurationIdentity << '|' << settings.configurationPath << '|'
             << settings.sdrTargetNits << '|' << settings.sdrBlackNits << '|'
-			<< static_cast<int>(settings.refreshRateSwitchMode) << '|' << settings.quality << '|'
+			<< static_cast<int>(settings.refreshRateSwitchMode) << '|'
+			<< settings.highRateLimitHz << '|' << settings.quality << '|'
 			<< settings.toneMapping << '|' << settings.gamutMapping << '|'
 			<< static_cast<int>(settings.peakDetection) << '|'
 			<< settings.hasContrastRecovery << '|' << settings.contrastRecovery << '|'
@@ -2154,6 +2158,26 @@ namespace
 		else
 			settings.switchRefreshRate =
 				settings.refreshRateSwitchMode != RefreshRateSwitchMode::Never;
+
+		// The schema refuses an out-of-range value before the renderer is built, so
+		// reaching the fallback here means the key arrived by some other route. Fall
+		// back to off rather than refusing to render: the cost is the feature, not
+		// the session.
+		settings.highRateLimitHz = 0.0;
+		if (TryGetDisplayString(config, "high_rate_limit_hz", rawValue))
+		{
+			const std::string trimmed = ConfigFile::Trim(rawValue);
+			double parsedLimit = 0.0;
+			if (ConfigFile::NormalizeName(trimmed) == "off")
+				settings.highRateLimitHz = 0.0;
+			else if (DisplayRuleExpression::ParseNumber(trimmed, parsedLimit) &&
+				std::isfinite(parsedLimit) && parsedLimit >= 1.0 && parsedLimit <= 1000.0)
+				settings.highRateLimitHz = parsedLimit;
+			else
+				DebugLog::Log(
+					"libplacebo: invalid high_rate_limit_hz value '%s'; using off",
+					rawValue.c_str());
+		}
 
 		settings.quality = ReadChoice(
 			config, "quality", "high", { "fast", "balanced", "high" });
