@@ -3136,6 +3136,118 @@ namespace
 		return ranked;
 	}
 
+	// High-rate resolution overlay: the link cannot carry 2160p above 30 Hz.
+	// The desktop raster is a function of the rate on the wire: above 30 Hz is
+	// 1920x1080, 30 Hz and below is 3840x2160. ApplyDisplayRefreshRate sets both
+	// in one SetDisplayConfig call, and every switch, rollback and restore goes
+	// through it, so no path can leave a high rate at 2160p.
+	constexpr UINT64 HIGH_RATE_LIMIT_HZ = 30;
+
+	bool DisplayRasterForRefreshRate(const DISPLAYCONFIG_RATIONAL& refreshRate,
+		UINT32& width, UINT32& height)
+	{
+		if (refreshRate.Denominator == 0)
+			return false;
+		const bool highRate = static_cast<UINT64>(refreshRate.Numerator) >
+			HIGH_RATE_LIMIT_HZ * refreshRate.Denominator;
+		width = highRate ? 1920 : 3840;
+		height = highRate ? 1080 : 2160;
+		return true;
+	}
+
+	DISPLAYCONFIG_MODE_INFO* PathModeInfo(DISPLAYCONFIG_PATH_INFO& path,
+		std::vector<DISPLAYCONFIG_MODE_INFO>& modes, UINT32 modeCount,
+		DISPLAYCONFIG_MODE_INFO_TYPE type)
+	{
+		const bool virtualMode =
+			(path.flags & DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE) != 0;
+		UINT32 index = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+		if (type == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE)
+			index = virtualMode ? path.sourceInfo.sourceModeInfoIdx :
+				path.sourceInfo.modeInfoIdx;
+		else
+			index = virtualMode ? path.targetInfo.targetModeInfoIdx :
+				path.targetInfo.modeInfoIdx;
+		if (index >= modeCount || index >= modes.size() ||
+			modes[index].infoType != type)
+		{
+			return nullptr;
+		}
+		return &modes[index];
+	}
+
+	// Reads the desktop raster and the timing actually on the wire from the
+	// same CCD query SetDisplayConfig acts on. EnumDisplaySettings is not used:
+	// on the 2026-09-22 run it was the one API that disagreed with the others.
+	struct DisplayWireState
+	{
+		UINT32 desktopWidth = 0;
+		UINT32 desktopHeight = 0;
+		UINT32 wireWidth = 0;
+		UINT32 wireHeight = 0;
+		DISPLAYCONFIG_RATIONAL wireRate{};
+	};
+
+	bool QueryDisplayWireState(const std::wstring& displayDeviceName,
+		DisplayWireState& state)
+	{
+		std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+		std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+		UINT32 pathCount = 0;
+		UINT32 modeCount = 0;
+		size_t pathIndex = 0;
+		if (!QueryDisplayPath(
+			displayDeviceName, paths, modes, pathCount, modeCount, pathIndex))
+		{
+			return false;
+		}
+		DISPLAYCONFIG_PATH_INFO& path = paths[pathIndex];
+		const DISPLAYCONFIG_MODE_INFO* source = PathModeInfo(
+			path, modes, modeCount, DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE);
+		if (!source)
+			return false;
+		state = {};
+		state.desktopWidth = source->sourceMode.width;
+		state.desktopHeight = source->sourceMode.height;
+		state.wireRate = path.targetInfo.refreshRate;
+		if (const DISPLAYCONFIG_MODE_INFO* target = PathModeInfo(
+			path, modes, modeCount, DISPLAYCONFIG_MODE_INFO_TYPE_TARGET))
+		{
+			const auto& signal = target->targetMode.targetVideoSignalInfo;
+			state.wireWidth = signal.activeSize.cx;
+			state.wireHeight = signal.activeSize.cy;
+		}
+		return true;
+	}
+
+	// True when the desktop raster already matches the rule for this rate.
+	bool DisplayRasterMatchesRefreshRate(const std::wstring& displayDeviceName,
+		const DISPLAYCONFIG_RATIONAL& refreshRate)
+	{
+		UINT32 width = 0;
+		UINT32 height = 0;
+		DisplayWireState state;
+		return DisplayRasterForRefreshRate(refreshRate, width, height) &&
+			QueryDisplayWireState(displayDeviceName, state) &&
+			state.desktopWidth == width && state.desktopHeight == height;
+	}
+
+	void LogDisplayWireState(const std::wstring& displayDeviceName,
+		const char* phase)
+	{
+		DisplayWireState state;
+		if (!QueryDisplayWireState(displayDeviceName, state))
+		{
+			DebugLog::Log("libplacebo display wire: phase=%s state=unreadable",
+				phase);
+			return;
+		}
+		DebugLog::Log(
+			"libplacebo display wire: phase=%s desktop=%ux%u wire=%ux%u@%.6f Hz",
+			phase, state.desktopWidth, state.desktopHeight,
+			state.wireWidth, state.wireHeight, RefreshRateHz(state.wireRate));
+	}
+
 	LONG ApplyDisplayRefreshRate(
 		std::vector<DISPLAYCONFIG_PATH_INFO>& paths,
 		std::vector<DISPLAYCONFIG_MODE_INFO>& modes,
@@ -3147,10 +3259,33 @@ namespace
 		DISPLAYCONFIG_PATH_INFO& path = paths[pathIndex];
 		path.targetInfo.refreshRate = refreshRate;
 
+		UINT32 rasterWidth = 0;
+		UINT32 rasterHeight = 0;
+		DISPLAYCONFIG_MODE_INFO* source = PathModeInfo(
+			path, modes, modeCount, DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE);
+		if (source && DisplayRasterForRefreshRate(
+			refreshRate, rasterWidth, rasterHeight))
+		{
+			DebugLog::Log(
+				"libplacebo display raster: rate=%.6f Hz limit=%llu Hz "
+				"raster=%ux%u previous=%ux%u",
+				RefreshRateHz(refreshRate), HIGH_RATE_LIMIT_HZ,
+				rasterWidth, rasterHeight,
+				source->sourceMode.width, source->sourceMode.height);
+			source->sourceMode.width = rasterWidth;
+			source->sourceMode.height = rasterHeight;
+		}
+		else
+		{
+			DebugLog::Log(
+				"libplacebo display raster: rate=%.6f Hz source mode unavailable; "
+				"raster unchanged", RefreshRateHz(refreshRate));
+		}
+
 		// QueryDisplayConfig supplies the current target mode. If that mode stays
 		// referenced, SetDisplayConfig ignores targetInfo.refreshRate and uses the
-		// mode's existing vSyncFreq. Keep the source mode (and therefore desktop
-		// resolution) fixed, but ask Windows to select a target timing for the new
+		// mode's existing vSyncFreq. The source mode carries the raster chosen
+		// above; ask Windows to select a target timing for that raster at the new
 		// rational refresh rate.
 		if ((path.flags & DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE) != 0)
 			path.targetInfo.targetModeInfoIdx = DISPLAYCONFIG_PATH_TARGET_MODE_IDX_INVALID;
@@ -3241,12 +3376,14 @@ namespace
 			DebugLog::Log("libplacebo refresh-rate policy: input=%.6f Hz interlaced=%d policy=%s preferred=%.6f Hz",
 				contentRate, interlaced ? 1 : 0,
 				interlaced ? "field-rate" : "native-first", RefreshRateHz(targetRefreshRate));
-			if (RefreshRatesEqual(m_originalRefreshRate, targetRefreshRate))
+			if (RefreshRatesEqual(m_originalRefreshRate, targetRefreshRate) &&
+				DisplayRasterMatchesRefreshRate(m_displayDeviceName, targetRefreshRate))
 			{
 				DebugLog::Log(
 					"libplacebo refresh-rate switch: display already %.6f Hz for %.6f Hz input",
 					RefreshRateHz(m_originalRefreshRate),
 					contentRate);
+				LogDisplayWireState(m_displayDeviceName, "already");
 				RunRefreshRateCommand(settings, RefreshRateHz(m_originalRefreshRate));
 				PublishEvent("refresh.confirmed",
 					RefreshRateHz(m_originalRefreshRate),
@@ -3290,7 +3427,9 @@ namespace
 				// were unavailable/rejected. Confirm it without another mode set.
 				DISPLAYCONFIG_RATIONAL currentRefreshRate{};
 				if (GetCurrentRefreshRate(currentRefreshRate) &&
-					RefreshRatesEqual(currentRefreshRate, candidate.refreshRate))
+					RefreshRatesEqual(currentRefreshRate, candidate.refreshRate) &&
+					DisplayRasterMatchesRefreshRate(m_displayDeviceName,
+						candidate.refreshRate))
 				{
 					DebugLog::Log("libplacebo refresh-rate candidate already active: actual=%.6f Hz attempt=%zu/%zu",
 						RefreshRateHz(currentRefreshRate), attempt + 1, rankedRates.size());
@@ -3324,15 +3463,20 @@ namespace
 					continue;
 				}
 
+				// A mode set changes external state even when verification fails, so
+				// the original mode is owed back from here on.
+				m_changed = true;
 				DISPLAYCONFIG_RATIONAL actualRefreshRate{};
-				if (VerifyCurrentRefreshRate(candidate.refreshRate, actualRefreshRate))
+				if (VerifyCurrentRefreshRate(candidate.refreshRate, actualRefreshRate) &&
+					DisplayRasterMatchesRefreshRate(m_displayDeviceName,
+						candidate.refreshRate))
 				{
-					m_changed = true;
 					DebugLog::Log(
 						"libplacebo refresh-rate switch verified: input=%.6f Hz target=%.6f Hz previous=%.6f Hz actual=%.6f Hz attempt=%zu/%zu",
 						contentRate, RefreshRateHz(candidate.refreshRate),
 						RefreshRateHz(m_originalRefreshRate),
 						RefreshRateHz(actualRefreshRate), attempt + 1, rankedRates.size());
+					LogDisplayWireState(m_displayDeviceName, "switch");
 					RunRefreshRateCommand(settings, RefreshRateHz(actualRefreshRate));
 					PublishEvent("refresh.applied", RefreshRateHz(actualRefreshRate),
 						RefreshRateHz(candidate.refreshRate),
@@ -3343,6 +3487,7 @@ namespace
 				DebugLog::Log(
 					"libplacebo refresh-rate candidate unverified: candidate=%.6f Hz actual=%.6f Hz; restoring before next candidate",
 					RefreshRateHz(candidate.refreshRate), RefreshRateHz(actualRefreshRate));
+				LogDisplayWireState(m_displayDeviceName, "unverified");
 				std::vector<DISPLAYCONFIG_PATH_INFO> restorePaths;
 				std::vector<DISPLAYCONFIG_MODE_INFO> restoreModes;
 				UINT32 restorePathCount = 0;
@@ -3476,6 +3621,7 @@ namespace
 				RefreshRateHz(m_originalRefreshRate),
 				m_originalRefreshRate.Numerator,
 				m_originalRefreshRate.Denominator);
+			LogDisplayWireState(m_displayDeviceName, "restore");
 			RunRefreshRateCommand(
 				m_refreshCommandSettings,
 				RefreshRateHz(m_originalRefreshRate));
