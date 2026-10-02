@@ -3260,6 +3260,46 @@ namespace
 			state.scaling);
 	}
 
+	// Swapchain size for the render window. VP is system-DPI-aware (the MSVC
+	// manifest default) and the rig's 4K desktop runs at 200%; at 1080p the
+	// display moves to 100% and Windows reports a fullscreen window as 3840x2160,
+	// so the picture would be rendered at 4K and shrunk again by the compositor.
+	// A window that covers its whole monitor is sized to the physical display
+	// mode instead. A child or partial window keeps its client size.
+	bool PresentationSizeForWindow(HWND hwnd, LONG& width, LONG& height)
+	{
+		RECT client{};
+		if (!GetClientRect(hwnd, &client))
+			return false;
+		width = std::max<LONG>(1, client.right - client.left);
+		height = std::max<LONG>(1, client.bottom - client.top);
+
+		RECT window{};
+		MONITORINFOEXW monitorInfo{};
+		monitorInfo.cbSize = sizeof(monitorInfo);
+		DEVMODEW mode{};
+		mode.dmSize = sizeof(mode);
+		const HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+		if (GetWindowRect(hwnd, &window) &&
+			GetMonitorInfoW(monitor, &monitorInfo) &&
+			EqualRect(&window, &monitorInfo.rcMonitor) &&
+			width == monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left &&
+			height == monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top &&
+			EnumDisplaySettingsW(monitorInfo.szDevice, ENUM_CURRENT_SETTINGS, &mode) &&
+			mode.dmPelsWidth > 0 && mode.dmPelsHeight > 0 &&
+			(static_cast<LONG>(mode.dmPelsWidth) != width ||
+				static_cast<LONG>(mode.dmPelsHeight) != height))
+		{
+			DebugLog::Log(
+				"libplacebo presentation size: window=%ldx%ld physical=%lux%lu "
+				"using=physical reason=fullscreen-dpi-virtualized",
+				width, height, mode.dmPelsWidth, mode.dmPelsHeight);
+			width = static_cast<LONG>(mode.dmPelsWidth);
+			height = static_cast<LONG>(mode.dmPelsHeight);
+		}
+		return true;
+	}
+
 	// Sets raster and rate in ONE legacy mode set, from the driver's own mode
 	// list. On the rig (modeprobe, 2026-10-02) this is the only route that put a
 	// real 1920x1080 timing on the wire: SetDisplayConfig with an invalidated
@@ -6459,8 +6499,9 @@ struct LibplaceboVideoRenderer::Impl
 	{
 		if (!d3d11 || !d3d11->device)
 			return false;
-		RECT client{};
-		if (!GetClientRect(videoHwnd, &client))
+		LONG clientWidth = 0;
+		LONG clientHeight = 0;
+		if (!PresentationSizeForWindow(videoHwnd, clientWidth, clientHeight))
 			return false;
 		CComQIPtr<IDXGIDevice> dxgiDevice(d3d11->device);
 		CComPtr<IDXGIAdapter> adapter;
@@ -6475,8 +6516,8 @@ struct LibplaceboVideoRenderer::Impl
 		}
 
 		DXGI_SWAP_CHAIN_DESC1 desc{};
-		desc.Width = static_cast<UINT>(std::max<LONG>(1, client.right - client.left));
-		desc.Height = static_cast<UINT>(std::max<LONG>(1, client.bottom - client.top));
+		desc.Width = static_cast<UINT>(clientWidth);
+		desc.Height = static_cast<UINT>(clientHeight);
 		// Match libplacebo's own D3D11 8-bit picker. Supplying BGRA here while
 		// asking libplacebo to disable 10-bit makes its first resize replace the
 		// externally created format, defeating the authoritative VP request.
@@ -7014,14 +7055,15 @@ struct LibplaceboVideoRenderer::Impl
 		}
 
 		ApplySwapchainColorHint();
-		RECT client{};
-		if (!GetClientRect(videoHwnd, &client))
+		LONG clientWidth = 0;
+		LONG clientHeight = 0;
+		if (!PresentationSizeForWindow(videoHwnd, clientWidth, clientHeight))
 		{
 			markUnavailable("failed to query the render window during swapchain recreation");
 			return false;
 		}
-		int width = std::max<LONG>(1, client.right - client.left);
-		int height = std::max<LONG>(1, client.bottom - client.top);
+		int width = static_cast<int>(clientWidth);
+		int height = static_cast<int>(clientHeight);
 		if (!pl_swapchain_resize(swapchain, &width, &height))
 		{
 			markUnavailable("failed to resize the recreated DXGI swapchain");
@@ -7528,11 +7570,12 @@ struct LibplaceboVideoRenderer::Impl
 			outputPlan.valid ? outputPlan.targetTransfer :
 				LibplaceboOutput::TargetTransfer::SWAPCHAIN);
 
-		RECT client{};
-		if (!GetClientRect(videoHwnd, &client))
+		LONG clientWidth = 0;
+		LONG clientHeight = 0;
+		if (!PresentationSizeForWindow(videoHwnd, clientWidth, clientHeight))
 			throw std::runtime_error("Failed to query libplacebo render window size");
-		int width = std::max<LONG>(1, client.right - client.left);
-		int height = std::max<LONG>(1, client.bottom - client.top);
+		int width = static_cast<int>(clientWidth);
+		int height = static_cast<int>(clientHeight);
 		if (!pl_swapchain_resize(swapchain, &width, &height))
 			throw std::runtime_error("Failed to initialize libplacebo swapchain size");
 		// Creating the D3D11 device/swapchain can itself cause Windows to restore
@@ -15450,11 +15493,12 @@ struct LibplaceboVideoRenderer::Impl
 		if (!swapchain)
 			return;
 
-		RECT client{};
-		if (!GetClientRect(videoHwnd, &client))
+		LONG clientWidth = 0;
+		LONG clientHeight = 0;
+		if (!PresentationSizeForWindow(videoHwnd, clientWidth, clientHeight))
 			return;
-		int width = std::max<LONG>(1, client.right - client.left);
-		int height = std::max<LONG>(1, client.bottom - client.top);
+		int width = static_cast<int>(clientWidth);
+		int height = static_cast<int>(clientHeight);
 		if (!pl_swapchain_resize(swapchain, &width, &height))
 			DebugLog::Log("libplacebo: swapchain resize failed (%d x %d)", width, height);
 		else
