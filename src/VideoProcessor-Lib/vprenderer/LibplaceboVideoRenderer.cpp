@@ -14540,11 +14540,19 @@ struct LibplaceboVideoRenderer::Impl
 			const NativeStatsOverlayPlacement::Rect pictureRect{
 				target.crop.x0, target.crop.y0,
 				target.crop.x1, target.crop.y1 };
+			// The stats panel is a fixed-size bitmap, so size it as a
+			// share of the output instead: 1.25x its native size on a 2160-line
+			// output, and the same proportion on 1080p or any other height. The
+			// inset follows the same proportion.
+			constexpr float kStatsOverlayScaleAt2160 = 1.25f;
+			const float statsOverlayOutputScale = dstHeight / 2160.0f;
 			const NativeStatsOverlayPlacement::Result placement =
 				NativeStatsOverlayPlacement::Place(
 					pictureRect, outputRect,
 					AnamorphicPresentation::OverlayWidth(static_cast<float>(statsOverlayTexture->params.w), anamorphicScale),
-					static_cast<float>(statsOverlayTexture->params.h));
+					static_cast<float>(statsOverlayTexture->params.h),
+					NativeStatsOverlayPlacement::kDefaultInsetPixels * statsOverlayOutputScale,
+					kStatsOverlayScaleAt2160 * statsOverlayOutputScale);
 			overlayPart.dst = {
 				placement.panel.left, placement.panel.top,
 				placement.panel.right, placement.panel.bottom };
