@@ -2898,8 +2898,8 @@ namespace
 	// High-rate resolution overlay: the link cannot carry 2160p above 30 Hz.
 	// The desktop raster is a function of the rate on the wire: above 30 Hz is
 	// 1920x1080, 30 Hz and below is 3840x2160. ApplyDisplayRefreshRate sets both
-	// in one SetDisplayConfig call, and every switch, rollback and restore goes
-	// through it, so no path can leave a high rate at 2160p.
+	// in one mode set, and every switch, rollback and restore goes through it,
+	// so no path can leave a high rate at 2160p.
 	constexpr UINT64 HIGH_RATE_LIMIT_HZ = 30;
 
 	bool DisplayRasterForRefreshRate(const DISPLAYCONFIG_RATIONAL& refreshRate,
@@ -2945,6 +2945,7 @@ namespace
 		UINT32 wireWidth = 0;
 		UINT32 wireHeight = 0;
 		DISPLAYCONFIG_RATIONAL wireRate{};
+		UINT32 scaling = 0;
 	};
 
 	bool QueryDisplayWireState(const std::wstring& displayDeviceName,
@@ -2969,6 +2970,7 @@ namespace
 		state.desktopWidth = source->sourceMode.width;
 		state.desktopHeight = source->sourceMode.height;
 		state.wireRate = path.targetInfo.refreshRate;
+		state.scaling = static_cast<UINT32>(path.targetInfo.scaling);
 		if (const DISPLAYCONFIG_MODE_INFO* target = PathModeInfo(
 			path, modes, modeCount, DISPLAYCONFIG_MODE_INFO_TYPE_TARGET))
 		{
@@ -2979,16 +2981,25 @@ namespace
 		return true;
 	}
 
-	// True when the desktop raster already matches the rule for this rate.
+	// True when the desktop raster AND the timing on the wire match the rule for
+	// this rate. The 2026-10-01 rig run showed the desktop can reach 1920x1080
+	// while the driver keeps a 3840x2160 timing and scales, so the desktop alone
+	// proves nothing about the link. An unreadable target mode falls back to the
+	// desktop check rather than refusing every switch.
 	bool DisplayRasterMatchesRefreshRate(const std::wstring& displayDeviceName,
 		const DISPLAYCONFIG_RATIONAL& refreshRate)
 	{
 		UINT32 width = 0;
 		UINT32 height = 0;
 		DisplayWireState state;
-		return DisplayRasterForRefreshRate(refreshRate, width, height) &&
-			QueryDisplayWireState(displayDeviceName, state) &&
-			state.desktopWidth == width && state.desktopHeight == height;
+		if (!DisplayRasterForRefreshRate(refreshRate, width, height) ||
+			!QueryDisplayWireState(displayDeviceName, state) ||
+			state.desktopWidth != width || state.desktopHeight != height)
+		{
+			return false;
+		}
+		return state.wireWidth == 0 ||
+			(state.wireWidth == width && state.wireHeight == height);
 	}
 
 	void LogDisplayWireState(const std::wstring& displayDeviceName,
@@ -3002,12 +3013,40 @@ namespace
 			return;
 		}
 		DebugLog::Log(
-			"libplacebo display wire: phase=%s desktop=%ux%u wire=%ux%u@%.6f Hz",
+			"libplacebo display wire: phase=%s source=%ux%u wire=%ux%u@%.6f Hz scaling=%u",
 			phase, state.desktopWidth, state.desktopHeight,
-			state.wireWidth, state.wireHeight, RefreshRateHz(state.wireRate));
+			state.wireWidth, state.wireHeight, RefreshRateHz(state.wireRate),
+			state.scaling);
+	}
+
+	// Sets raster and rate in ONE legacy mode set, from the driver's own mode
+	// list. On the rig (modeprobe, 2026-10-02) this is the only route that put a
+	// real 1920x1080 timing on the wire: SetDisplayConfig with an invalidated
+	// target mode, with or without identity scaling, kept the 3840x2160 timing
+	// and scaled. The legacy rate is the integer the driver lists (59 = 59.94,
+	// 23 = 23.976); callers verify the rational rate and the wire afterwards.
+	LONG ApplyLegacyDisplayMode(const std::wstring& displayDeviceName,
+		UINT32 width, UINT32 height, const DISPLAYCONFIG_RATIONAL& refreshRate)
+	{
+		DEVMODEW mode{};
+		mode.dmSize = sizeof(mode);
+		if (!EnumDisplaySettingsW(displayDeviceName.c_str(),
+			ENUM_CURRENT_SETTINGS, &mode))
+		{
+			mode = {};
+			mode.dmSize = sizeof(mode);
+		}
+		mode.dmPelsWidth = width;
+		mode.dmPelsHeight = height;
+		mode.dmDisplayFrequency = refreshRate.Denominator != 0 ?
+			refreshRate.Numerator / refreshRate.Denominator : 0;
+		mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+		return ChangeDisplaySettingsExW(displayDeviceName.c_str(), &mode, nullptr,
+			CDS_FULLSCREEN, nullptr);
 	}
 
 	LONG ApplyDisplayRefreshRate(
+		const std::wstring& displayDeviceName,
 		std::vector<DISPLAYCONFIG_PATH_INFO>& paths,
 		std::vector<DISPLAYCONFIG_MODE_INFO>& modes,
 		UINT32 pathCount,
@@ -3020,19 +3059,38 @@ namespace
 
 		UINT32 rasterWidth = 0;
 		UINT32 rasterHeight = 0;
-		DISPLAYCONFIG_MODE_INFO* source = PathModeInfo(
+		const DISPLAYCONFIG_MODE_INFO* source = PathModeInfo(
 			path, modes, modeCount, DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE);
 		if (source && DisplayRasterForRefreshRate(
 			refreshRate, rasterWidth, rasterHeight))
 		{
+			// Any raster change, and every mode at the reduced raster, goes
+			// through the legacy route. Only a rate change that stays at
+			// 3840x2160 keeps the CCD route below, which the rig shows lands
+			// on the native timing.
+			const bool rasterChanges = source->sourceMode.width != rasterWidth ||
+				source->sourceMode.height != rasterHeight;
+			const bool reducedRaster = rasterWidth != 3840 || rasterHeight != 2160;
+			if (rasterChanges || reducedRaster)
+			{
+				const LONG result = ApplyLegacyDisplayMode(displayDeviceName,
+					rasterWidth, rasterHeight, refreshRate);
+				DebugLog::Log(
+					"libplacebo display raster: route=legacy rate=%.6f Hz limit=%llu Hz "
+					"raster=%ux%u previous=%ux%u legacy_hz=%u result=%ld",
+					RefreshRateHz(refreshRate), HIGH_RATE_LIMIT_HZ,
+					rasterWidth, rasterHeight,
+					source->sourceMode.width, source->sourceMode.height,
+					refreshRate.Denominator != 0 ?
+						refreshRate.Numerator / refreshRate.Denominator : 0,
+					result);
+				return result;
+			}
 			DebugLog::Log(
-				"libplacebo display raster: rate=%.6f Hz limit=%llu Hz "
-				"raster=%ux%u previous=%ux%u",
+				"libplacebo display raster: route=ccd rate=%.6f Hz limit=%llu Hz "
+				"raster=%ux%u unchanged",
 				RefreshRateHz(refreshRate), HIGH_RATE_LIMIT_HZ,
-				rasterWidth, rasterHeight,
-				source->sourceMode.width, source->sourceMode.height);
-			source->sourceMode.width = rasterWidth;
-			source->sourceMode.height = rasterHeight;
+				rasterWidth, rasterHeight);
 		}
 		else
 		{
@@ -3043,8 +3101,8 @@ namespace
 
 		// QueryDisplayConfig supplies the current target mode. If that mode stays
 		// referenced, SetDisplayConfig ignores targetInfo.refreshRate and uses the
-		// mode's existing vSyncFreq. The source mode carries the raster chosen
-		// above; ask Windows to select a target timing for that raster at the new
+		// mode's existing vSyncFreq. Keep the source mode (and therefore desktop
+		// resolution) fixed, but ask Windows to select a target timing for the new
 		// rational refresh rate.
 		if ((path.flags & DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE) != 0)
 			path.targetInfo.targetModeInfoIdx = DISPLAYCONFIG_PATH_TARGET_MODE_IDX_INVALID;
@@ -3210,7 +3268,7 @@ namespace
 					DebugLog::Log("libplacebo refresh-rate candidate skipped: active display path disappeared");
 					break;
 				}
-				const LONG switchResult = ApplyDisplayRefreshRate(candidatePaths,
+				const LONG switchResult = ApplyDisplayRefreshRate(m_displayDeviceName, candidatePaths,
 					candidateModes, candidatePathCount, candidateModeCount,
 					candidatePathIndex, candidate.refreshRate);
 				if (switchResult != ERROR_SUCCESS)
@@ -3254,7 +3312,7 @@ namespace
 				size_t restorePathIndex = 0;
 				if (!QueryDisplayPath(m_displayDeviceName, restorePaths, restoreModes,
 					restorePathCount, restoreModeCount, restorePathIndex) ||
-					ApplyDisplayRefreshRate(restorePaths, restoreModes, restorePathCount,
+					ApplyDisplayRefreshRate(m_displayDeviceName, restorePaths, restoreModes, restorePathCount,
 						restoreModeCount, restorePathIndex, m_originalRefreshRate) != ERROR_SUCCESS ||
 					!VerifyCurrentRefreshRate(m_originalRefreshRate, actualRefreshRate))
 				{
@@ -3328,7 +3386,7 @@ namespace
 			}
 
 			const LONG restoreResult = ApplyDisplayRefreshRate(
-				paths, modes, pathCount, modeCount, pathIndex,
+				m_displayDeviceName, paths, modes, pathCount, modeCount, pathIndex,
 				m_originalRefreshRate);
 			if (restoreResult != ERROR_SUCCESS)
 			{
