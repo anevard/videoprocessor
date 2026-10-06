@@ -58,6 +58,12 @@ namespace DtmTuning
 		std::string preset;
 		std::array<bool, KeyCount> present{};
 		std::array<double, KeyCount> values{};
+		// Overrides of his renderer settings, applied only while tuned. Unset
+		// means his configuration's value stands.
+		bool hasPeakDetection = false;
+		std::string peakDetection; // auto | on | high_quality | off
+		bool hasContrastRecovery = false;
+		double contrastRecovery = 0.0; // [0, 1]
 
 		bool Has(Key key) const { return present[static_cast<size_t>(key)]; }
 		float Value(Key key) const
@@ -87,7 +93,8 @@ namespace DtmTuning
 	bool WriteIni(const std::string& text, std::string& error);
 
 	// One line per key: "key <name> <default> <min> <max> <effective|->",
-	// then "mode", "preset" and "message" lines, for the laptop tuner.
+	// then "override peak_detection|contrast_recovery <value|->", "mode",
+	// "preset" and "message" lines, for the laptop tuner.
 	std::string DescribeForTuner(const ParseResult& result);
 
 	// Open, append one line and close, with shared write, so the exe and the

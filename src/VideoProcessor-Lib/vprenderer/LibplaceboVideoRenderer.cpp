@@ -2566,6 +2566,24 @@ namespace
 		const DtmTuning::ParseResult dtmTuning = DtmTuning::Load();
 		DtmTuning::LogIfChanged("renderer", dtmTuning);
 		settings.dtmTuning = dtmTuning.settings;
+		// While tuned, a preset's two renderer overrides beat every profile's
+		// value. Stock, or no INI, leaves his configuration in charge.
+		if (settings.dtmTuning.tuned)
+		{
+			const DtmTuning::Settings& tuning = settings.dtmTuning;
+			if (tuning.hasPeakDetection)
+				settings.peakDetection =
+					tuning.peakDetection == "off" ? PeakDetection::Off :
+					tuning.peakDetection == "on" ? PeakDetection::Standard :
+					tuning.peakDetection == "high_quality" ? PeakDetection::HighQuality :
+					PeakDetection::Auto;
+			if (tuning.hasContrastRecovery)
+			{
+				settings.hasContrastRecovery = true;
+				settings.contrastRecovery =
+					static_cast<float>(tuning.contrastRecovery);
+			}
+		}
 		return settings;
 	}
 
@@ -3749,6 +3767,9 @@ struct LibplaceboVideoRenderer::Impl
 	ULONGLONG osdCacheTick = 0;
 	CString osdOutputMode;
 	CString osdDisplayLut;
+	// Overlay DTM tuner context: 1 HDR source, 0 SDR, -1 not yet rendered.
+	// Written only when the luminance contract changes.
+	std::atomic<int> dtmSourceHdr{ -1 };
 	std::string displayLutPath;
 	std::string displayLutConstrainedBaseDirectory;
 	std::string displayLutTarget = "none";
@@ -11505,6 +11526,8 @@ struct LibplaceboVideoRenderer::Impl
 		if (lastLuminanceSignature != luminanceSignature.str())
 		{
 			lastLuminanceSignature = luminanceSignature.str();
+			dtmSourceHdr.store(pl_color_space_is_hdr(&image.color) ? 1 : 0,
+				std::memory_order_relaxed);
 			DebugLog::Log(
 				"LUMINANCE_CONTRACT input_sdr=%d source_transfer=%s source_luma=%.7g..%.2f source_effective_hdr=%d target_transfer=%s target_luma=%.7g..%.2f target_effective_hdr=%d hdr_destination=%.7g..%.2f format=%s dxgi=%s peak_eligible=%d",
 				state.eotf == EOTF::SDR ? 1 : 0,
@@ -16499,6 +16522,30 @@ bool LibplaceboVideoRenderer::FormatOutputModeInfoLocked(CString& details) const
 	}
 	value += " | DTM: ";
 	value += m_impl->activeSettings.dtmTuning.OsdLabel().c_str();
+	// Not drawn on the OSD: what the tuner needs to dim unused keys and to
+	// show his renderer settings as resolved. Must stay the last tag.
+	{
+		const auto& active = m_impl->activeSettings;
+		const auto& colorMap = m_impl->colorMapParams;
+		const int sourceHdr = m_impl->dtmSourceHdr.load(std::memory_order_relaxed);
+		CStringA context;
+		context.Format(
+			" | DTMCTX: curve=%s curve_setting=%s gamut=%s gamut_setting=%s peak=%s peak_setting=%s contrast_recovery=%.3f quality=%s source=%s",
+			colorMap.tone_mapping_function && colorMap.tone_mapping_function->name ?
+				colorMap.tone_mapping_function->name : "none",
+			active.toneMapping.c_str(),
+			colorMap.gamut_mapping && colorMap.gamut_mapping->name ?
+				colorMap.gamut_mapping->name : "none",
+			active.gamutMapping.c_str(),
+			m_impl->renderParams.peak_detect_params ? "on" : "off",
+			active.peakDetection == PeakDetection::Off ? "off" :
+				active.peakDetection == PeakDetection::Standard ? "on" :
+				active.peakDetection == PeakDetection::HighQuality ? "high_quality" : "auto",
+			colorMap.contrast_recovery,
+			active.quality.c_str(),
+			sourceHdr == 1 ? "hdr" : sourceHdr == 0 ? "sdr" : "unknown");
+		value += context;
+	}
 	details = CString(value);
 	return true;
 }
