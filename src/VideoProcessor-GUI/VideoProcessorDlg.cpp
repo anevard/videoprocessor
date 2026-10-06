@@ -3166,6 +3166,18 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 		DtmTuning::ParseResult parsed = DtmTuning::Parse(text);
 		if (!present)
 			parsed.messages.insert(parsed.messages.begin(), readMessage);
+		// The renderer's resolved curve and settings ride the output-mode
+		// string (cached, so never blocked by Present). A Set answers before the
+		// render thread applies it; the tuner asks again for the new context.
+		std::string context = "unavailable";
+		CString outputMode;
+		if (m_videoRenderer && m_videoRenderer->GetOutputModeInfo(outputMode))
+		{
+			const CStringA narrow(outputMode);
+			const int tag = narrow.Find(" | DTMCTX: ");
+			if (tag >= 0)
+				context = static_cast<const char*>(narrow.Mid(tag + 11));
+		}
 		Frame response;
 		response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 		response.payload.push_back(DtmTuningPayloadVersion);
@@ -3173,6 +3185,7 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 			!WriteString(response.payload,
 				"ini_path " + ConfigurationRpcUtf8(DtmTuning::IniPath()) + "\n" +
 				"ini_present " + (present ? "1" : "0") + "\n" +
+				"context " + context + "\n" +
 				DtmTuning::DescribeForTuner(parsed)))
 			return ConfigurationRpcError(operation,
 				"DTM tuning state exceeded the RPC limit.");

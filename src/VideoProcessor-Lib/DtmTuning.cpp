@@ -119,6 +119,18 @@ namespace
 					FormatNumber(result.settings.values[index]);
 				any = true;
 			}
+			if (result.settings.hasPeakDetection)
+			{
+				summary += std::string(any ? "," : "") + "peak_detection=" +
+					result.settings.peakDetection;
+				any = true;
+			}
+			if (result.settings.hasContrastRecovery)
+			{
+				summary += std::string(any ? "," : "") + "contrast_recovery=" +
+					FormatNumber(result.settings.contrastRecovery);
+				any = true;
+			}
 			if (!any) summary += "none";
 		}
 		return summary;
@@ -159,6 +171,8 @@ std::string Settings::Fingerprint() const
 		stream << '|';
 		if (present[index]) stream << values[index];
 	}
+	stream << '|' << (hasPeakDetection ? peakDetection : "") << '|';
+	if (hasContrastRecovery) stream << contrastRecovery;
 	return stream.str();
 }
 
@@ -265,6 +279,37 @@ ParseResult Parse(const std::string& text)
 	const auto& keys = Keys();
 	for (const auto& entry : preset->entries)
 	{
+		if (entry.first == "peak_detection")
+		{
+			// His spellings, canonicalised (see ReadPeakDetection).
+			const std::string value = Lower(entry.second);
+			settings.hasPeakDetection = true;
+			if (value == "auto" || value == "off" || value == "high_quality")
+				settings.peakDetection = value;
+			else if (value == "on" || value == "default" || value == "true")
+				settings.peakDetection = "on";
+			else if (value == "false")
+				settings.peakDetection = "off";
+			else
+			{
+				settings.hasPeakDetection = false;
+				result.messages.push_back("peak_detection = '" + entry.second +
+					"' rejected, not auto, on, high_quality or off; his value stands");
+			}
+			continue;
+		}
+		if (entry.first == "contrast_recovery")
+		{
+			double value = 0.0;
+			settings.hasContrastRecovery =
+				ParseNumber(entry.second, value) && value >= 0.0 && value <= 1.0;
+			if (settings.hasContrastRecovery)
+				settings.contrastRecovery = value;
+			else
+				result.messages.push_back("contrast_recovery = '" + entry.second +
+					"' rejected, outside [0, 1]; his value stands");
+			continue;
+		}
 		size_t index = 0;
 		while (index < KeyCount && entry.first != keys[index].name) ++index;
 		if (index == KeyCount)
@@ -408,6 +453,10 @@ std::string DescribeForTuner(const ParseResult& result)
 	std::string text;
 	text += "mode " + std::string(result.settings.tuned ? "tuned" : "stock") + "\n";
 	text += "preset " + result.settings.preset + "\n";
+	text += "override peak_detection " + std::string(
+		result.settings.hasPeakDetection ? result.settings.peakDetection : "-") + "\n";
+	text += "override contrast_recovery " + (result.settings.hasContrastRecovery ?
+		FormatNumber(result.settings.contrastRecovery) : std::string("-")) + "\n";
 	const auto& keys = Keys();
 	for (size_t index = 0; index < KeyCount; ++index)
 	{
