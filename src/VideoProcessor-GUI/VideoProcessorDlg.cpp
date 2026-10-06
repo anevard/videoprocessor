@@ -68,6 +68,7 @@
 #include <RendererProfileConfig.h>
 #include <MainConfigSchema.h>
 #include <UnifiedProfileRuntime.h>
+#include <DtmTuning.h>
 
 
 #include "VideoProcessorDlg.h"
@@ -3117,10 +3118,68 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 		operation != static_cast<uint16_t>(Operation::GetCapabilities) &&
 		operation != static_cast<uint16_t>(Operation::ApplyConfig) &&
 		operation != static_cast<uint16_t>(Operation::SelectProfile) &&
-		operation != static_cast<uint16_t>(Operation::RunAction))
+		operation != static_cast<uint16_t>(Operation::RunAction) &&
+		operation != static_cast<uint16_t>(Operation::GetDtmTuning) &&
+		operation != static_cast<uint16_t>(Operation::SetDtmTuning))
 		return ConfigurationRpcError(operation, "Unsupported RPC operation.");
 	if (m_wantToTerminate)
 		return ConfigurationRpcError(operation, "VideoProcessor is stopping.");
+
+	// Overlay DTM tuning (anevard/dtm-tuning). The INI is ours, not his
+	// configuration, so this never touches ConfigFile or ApplyConfig. The
+	// renderer DLL re-reads the INI in its own settings load.
+	if (operation == static_cast<uint16_t>(Operation::GetDtmTuning) ||
+		operation == static_cast<uint16_t>(Operation::SetDtmTuning))
+	{
+		const bool set = operation == static_cast<uint16_t>(Operation::SetDtmTuning);
+		size_t cursor = 1;
+		std::string candidate;
+		if (request.payload.empty() ||
+			request.payload[0] != DtmTuningPayloadVersion ||
+			(set ? !ReadString(request.payload, cursor, candidate) ||
+				cursor != request.payload.size() :
+				request.payload.size() != 1))
+			return ConfigurationRpcError(operation,
+				"Invalid DTM tuning request for this VP build.");
+		if (set)
+		{
+			if (candidate.size() > DtmTuning::MaximumIniBytes ||
+				candidate.find('\0') != std::string::npos)
+				return ConfigurationRpcError(operation,
+					"DTM tuning text is too large or not text.");
+			std::string error;
+			if (!DtmTuning::WriteIni(candidate, error))
+			{
+				DtmTuning::Log("vp", "SetDtmTuning failed: " + error);
+				return ConfigurationRpcError(operation, error);
+			}
+			DtmTuning::Log("vp", "SetDtmTuning received: " +
+				std::to_string(candidate.size()) + " bytes written to dtm_tuning.ini");
+			DtmTuning::LogResult("vp", DtmTuning::Parse(candidate));
+			// Not OnCommandReapplyRules: it returns early when the selection is
+			// unchanged, which an INI-only edit always is. The renderer compares
+			// effective fingerprints, so only the dtm_tuning field moves.
+			ApplyUnifiedProfileSnapshot(m_profileRuntime.GetSnapshot(), true, false);
+		}
+		std::string text;
+		std::string readMessage;
+		const bool present = DtmTuning::ReadIni(text, readMessage);
+		DtmTuning::ParseResult parsed = DtmTuning::Parse(text);
+		if (!present)
+			parsed.messages.insert(parsed.messages.begin(), readMessage);
+		Frame response;
+		response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+		response.payload.push_back(DtmTuningPayloadVersion);
+		if (!WriteString(response.payload, text) ||
+			!WriteString(response.payload,
+				"ini_path " + ConfigurationRpcUtf8(DtmTuning::IniPath()) + "\n" +
+				"ini_present " + (present ? "1" : "0") + "\n" +
+				DtmTuning::DescribeForTuner(parsed)))
+			return ConfigurationRpcError(operation,
+				"DTM tuning state exceeded the RPC limit.");
+		return response;
+	}
+
 	if (request.payload.size() < 2 ||
 		Read16(request.payload.data()) != ConfigurationCompatibilityVersion)
 		return ConfigurationRpcError(operation,
