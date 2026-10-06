@@ -20,6 +20,7 @@
 #include <RendererPostStallResetAdvisor.h>
 #include <UnifiedProfileRuntime.h>
 #include <DebugLog.h>
+#include <DtmTuning.h>
 #include <DisplayRuleExpression.h>
 #include <microsoft_directshow/MadVRShaderLoader.h>
 #include <vprenderer/AlphaCadenceCorrectionPolicy.h>
@@ -850,6 +851,9 @@ namespace
 		bool calibrationLutP3D65PathRejected = false;
 		bool calibrationLutBt2020PathRejected = false;
 		std::string calibrationLutConstrainedBaseDirectory;
+		// Overlay DTM tuning, read from dtm_tuning.ini by this DLL. Stock unless
+		// the INI selects a tuned preset.
+		DtmTuning::Settings dtmTuning;
 	};
 
 	AlphaSourceCrop::VerticalPictureAlignment ResolveVerticalPictureAlignment(
@@ -939,7 +943,8 @@ namespace
 			<< settings.calibrationLutBt709PathRejected << '|'
 			<< settings.calibrationLutP3D65PathRejected << '|'
 			<< settings.calibrationLutBt2020PathRejected << '|'
-			<< settings.calibrationLutConstrainedBaseDirectory;
+			<< settings.calibrationLutConstrainedBaseDirectory << '|'
+			<< settings.dtmTuning.Fingerprint();
 		return stream.str();
 	}
 
@@ -2553,6 +2558,11 @@ namespace
 		// dependency once all profiles have been applied, so it never reaches the
 		// output path in an invalid state.
 		NormalizeSdrBlackLevel(settings);
+		// Read here, never per frame: this runs on renderer start, a source
+		// change and an application-state apply (including SetDtmTuning).
+		const DtmTuning::ParseResult dtmTuning = DtmTuning::Load();
+		DtmTuning::LogIfChanged("renderer", dtmTuning);
+		settings.dtmTuning = dtmTuning.settings;
 		return settings;
 	}
 
@@ -5196,6 +5206,40 @@ struct LibplaceboVideoRenderer::Impl
 			scopeSubtitlePaddingPixels,
 			scopeSubtitleTargetBufferPixels);
 		LogResolvedRenderOptions(lifecycle);
+		ApplyDtmTuning(settings.dtmTuning);
+	}
+
+	// Overlay DTM tuning. Runs after the normal settings and the vp.log
+	// description, so vp.log keeps describing the stock projection. Stock
+	// touches nothing; a tuned preset overrides only the keys it names.
+	void ApplyDtmTuning(const DtmTuning::Settings& tuning)
+	{
+		if (!tuning.tuned)
+			return;
+		using DtmTuning::Key;
+		auto set = [&tuning](Key key, float& field)
+		{
+			if (tuning.Has(key))
+				field = tuning.Value(key);
+		};
+		pl_tone_map_constants& tone = colorMapParams.tone_constants;
+		set(Key::KneeAdaptation, tone.knee_adaptation);
+		set(Key::KneeMinimum, tone.knee_minimum);
+		set(Key::KneeMaximum, tone.knee_maximum);
+		set(Key::KneeDefault, tone.knee_default);
+		set(Key::SlopeTuning, tone.slope_tuning);
+		set(Key::SlopeOffset, tone.slope_offset);
+		set(Key::SplineContrast, tone.spline_contrast);
+		set(Key::KneeOffset, tone.knee_offset);
+		set(Key::ReinhardContrast, tone.reinhard_contrast);
+		if (renderParams.peak_detect_params)
+		{
+			set(Key::Percentile, peakDetectParams.percentile);
+			set(Key::SmoothingPeriod, peakDetectParams.smoothing_period);
+			set(Key::SceneThresholdLow, peakDetectParams.scene_threshold_low);
+			set(Key::SceneThresholdHigh, peakDetectParams.scene_threshold_high);
+			set(Key::BlackCutoff, peakDetectParams.black_cutoff);
+		}
 	}
 
 	HdrPeakAnalysisCrop::Decision ApplyHdrPeakAnalysisCrop(
@@ -7514,6 +7558,7 @@ struct LibplaceboVideoRenderer::Impl
 			next.calibrationLutBt2020PathRejected;
 		currentTransport.calibrationLutConstrainedBaseDirectory =
 			next.calibrationLutConstrainedBaseDirectory;
+		currentTransport.dtmTuning = next.dtmTuning;
 		nextTransport.sdrTargetPrimaries = "rec709";
 		nextTransport.reportBt2020ToDisplay = false;
 		return EffectiveSettingsFingerprint(currentTransport, false) ==
@@ -7569,6 +7614,8 @@ struct LibplaceboVideoRenderer::Impl
 			current.calibrationLutConstrainedBaseDirectory !=
 				next.calibrationLutConstrainedBaseDirectory,
 			"calibration_lut");
+		changed(current.dtmTuning.Fingerprint() != next.dtmTuning.Fingerprint(),
+			"dtm_tuning");
 		changed(current.outputPresentation != next.outputPresentation,
 			"output_presentation");
 		changed(current.outputRange != next.outputRange, "output_range");
@@ -16237,6 +16284,8 @@ bool LibplaceboVideoRenderer::FormatOutputModeInfoLocked(CString& details) const
 				m_impl->lastSdrGammaDecision.actualTarget));
 		value += gamma;
 	}
+	value += " | DTM: ";
+	value += m_impl->activeSettings.dtmTuning.OsdLabel().c_str();
 	details = CString(value);
 	return true;
 }

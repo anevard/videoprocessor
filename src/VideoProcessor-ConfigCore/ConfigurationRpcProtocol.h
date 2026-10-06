@@ -19,6 +19,9 @@ namespace ConfigurationRpcProtocol
 	constexpr size_t HeaderBytes = 12;
 	constexpr uint16_t ResponseFlag = 0x8000;
 	constexpr uint16_t ErrorFlag = 0x4000;
+	// First byte of every GetDtmTuning/SetDtmTuning payload, request and reply.
+	// Independent of ConfigurationCompatibilityVersion, which the editor owns.
+	constexpr uint8_t DtmTuningPayloadVersion = 1;
 
 	enum class Operation : uint16_t
 	{
@@ -29,7 +32,11 @@ namespace ConfigurationRpcProtocol
 		DiscoveryReply = 5,
 		GetActiveProfileStatus = 6,
 		SelectProfile = 7,
-		RunAction = 8
+		RunAction = 8,
+		// Overlay-only DTM tuning push (anevard/dtm-tuning). Not part of the
+		// editor contract, so the wire version is unchanged.
+		GetDtmTuning = 9,
+		SetDtmTuning = 10
 	};
 
 	struct Frame
@@ -77,6 +84,8 @@ namespace ConfigurationRpcProtocol
 		case static_cast<uint16_t>(Operation::GetActiveProfileStatus):
 		case static_cast<uint16_t>(Operation::SelectProfile):
 		case static_cast<uint16_t>(Operation::RunAction):
+		case static_cast<uint16_t>(Operation::GetDtmTuning):
+		case static_cast<uint16_t>(Operation::SetDtmTuning):
 			return true;
 		default:
 			return false;

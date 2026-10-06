@@ -716,6 +716,19 @@ void StatsOverlayWindow::DrawStats(HDC hdc)
 		y += lineHeight;
 	}
 
+	// Overlay DTM tuning state, carried as the last output-mode detail.
+	const int dtmTag = m_stats.outputMode.Find(TEXT(" | DTM: "));
+	if (dtmTag >= 0)
+	{
+		CString dtm = m_stats.outputMode.Mid(dtmTag + 8);
+		const int nextDetail = dtm.Find(TEXT(" | "));
+		if (nextDetail >= 0)
+			dtm = dtm.Left(nextDetail);
+		line.Format(TEXT("DTM: %s"), static_cast<LPCTSTR>(dtm));
+		DrawText(hdc, line, PADDING, y);
+		y += lineHeight;
+	}
+
 	// Video Conversion
 	line.Format(TEXT("Video Conv:       %-s"), m_stats.videoConversion.IsEmpty() ? TEXT("---") : m_stats.videoConversion);
 	DrawText(hdc, line, PADDING, y);
@@ -993,6 +1006,8 @@ int StatsOverlayWindow::CalculateRequiredHeight(const StatsData& stats) const
 		if (stats.outputMode.Find(TEXT(" | PRESENTER: ")) >= 0)
 			++lineCount;
 		if (stats.outputMode.Find(TEXT(" | CONTRACT: ")) >= 0)
+			++lineCount;
+		if (stats.outputMode.Find(TEXT(" | DTM: ")) >= 0)
 			++lineCount;
 	}
 	if (!stats.displayLut.IsEmpty())
