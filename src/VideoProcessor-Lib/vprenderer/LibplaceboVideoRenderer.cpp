@@ -819,6 +819,8 @@ namespace
 		std::vector<DisplayOutputMode> allowedDisplayModes;
 		std::string outputDisplayProfile;
         std::string outputDisplayMonitor;
+		// [general] scale_osd: size the stats OSD as a share of the output.
+		bool scaleOsd = false;
 		std::string quality = "high";
 		std::string toneMapping = "auto";
 		std::string gamutMapping = "auto";
@@ -961,7 +963,7 @@ namespace
 		for (const DisplayOutputMode& mode : settings.allowedDisplayModes)
 			stream << mode.width << 'x' << mode.height << 'p'
 				<< mode.refreshRate.numerator << '/' << mode.refreshRate.denominator << ',';
-		stream << '|' << settings.quality << '|'
+		stream << '|' << settings.scaleOsd << '|' << settings.quality << '|'
 			<< settings.toneMapping << '|' << settings.gamutMapping << '|'
 			<< static_cast<int>(settings.peakDetection) << '|'
 			<< settings.customToneMapping << '|'
@@ -2160,6 +2162,7 @@ namespace
 		RendererSettings settings;
 		activeRule.clear();
 		if (!config.IsLoaded()) return settings;
+		config.TryGetBool("general", "scale_osd", settings.scaleOsd);
         TryGetDisplayBool(config, "subtitle_bbox_test", settings.subtitleBoxTest);
         TryGetDisplayBool(config, "subtitle_cut_paste_test", settings.subtitleCutPasteTest);
         std::string subtitleBackground;
@@ -17768,13 +17771,16 @@ releaseDriftBaseRetention =
 			// inset follows the same proportion.
 			constexpr float kStatsOverlayScaleAt2160 = 1.25f;
 			const float statsOverlayOutputScale = dstHeight / 2160.0f;
+			const bool scaleOsd = activeSettings.scaleOsd;
 			const NativeStatsOverlayPlacement::Result placement =
 				NativeStatsOverlayPlacement::Place(
 					pictureRect, outputRect,
 					AnamorphicPresentation::OverlayWidth(static_cast<float>(statsOverlayTexture->params.w), anamorphicScale),
 					static_cast<float>(statsOverlayTexture->params.h),
-					NativeStatsOverlayPlacement::kDefaultInsetPixels * statsOverlayOutputScale,
-					kStatsOverlayScaleAt2160 * statsOverlayOutputScale);
+					scaleOsd ?
+						NativeStatsOverlayPlacement::kDefaultInsetPixels * statsOverlayOutputScale :
+						NativeStatsOverlayPlacement::kDefaultInsetPixels,
+					scaleOsd ? kStatsOverlayScaleAt2160 * statsOverlayOutputScale : 1.0f);
 			overlayPart.dst = {
 				placement.panel.left, placement.panel.top,
 				placement.panel.right, placement.panel.bottom };
