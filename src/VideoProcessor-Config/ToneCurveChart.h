@@ -37,7 +37,7 @@ public:
         setAccessibleName(kind == Kind::Tone ? QStringLiteral("Tone curve chart") :
             QStringLiteral("Gamma tracking chart"));
     }
-    void setData(Data data) { data_ = std::move(data); valid_ = true; update(); }
+    void setData(Data chart) { data_ = std::move(chart); valid_ = true; update(); }
     void clear() { valid_ = false; update(); }
 
     static QString Nits(double nits)
@@ -55,10 +55,11 @@ protected:
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        QFont small = font();
-        small.setPixelSize(11);
-        painter.setFont(small);
-        const QFontMetrics metrics(small);
+        // Not "small": the Windows headers define it as a macro.
+        QFont chartFont = font();
+        chartFont.setPixelSize(11);
+        painter.setFont(chartFont);
+        const QFontMetrics metrics(chartFont);
         if (!valid_ || data_.sourcePq.empty() ||
             data_.result.profilePq.size() != data_.sourcePq.size())
             return;

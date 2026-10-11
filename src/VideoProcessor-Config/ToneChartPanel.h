@@ -142,9 +142,9 @@ private:
         request.sourcePq.resize(kSamples + 1);
         for (int i = 0; i <= kSamples; ++i) request.sourcePq[i] = static_cast<double>(i) / kSamples;
 
-        ToneCurveChart::Data data;
+        ToneCurveChart::Data chart;
         std::wstring error;
-        if (!functions.sample(request, data.result, error))
+        if (!functions.sample(request, chart.result, error))
         {
             showUnavailable(QStringLiteral("Charts need VP Renderer's files. %1")
                 .arg(error.empty() ? QString() : QStringLiteral("Missing: %1").arg(QString::fromStdWString(error))));
@@ -157,19 +157,19 @@ private:
             static_cast<QWidget*>(sceneNote_) })
             widget->show();
 
-        data.sourcePq = request.sourcePq;
-        data.targetPq = functions.nitsToPq(request.targetNits);
-        data.sceneAverage = request.sceneAverageKnown;
-        data.pqToNits = functions.pqToNits;
+        chart.sourcePq = request.sourcePq;
+        chart.targetPq = functions.nitsToPq(request.targetNits);
+        chart.sceneAverage = request.sceneAverageKnown;
+        chart.pqToNits = functions.pqToNits;
         for (double nits : { 0.1, 1.0, 10.0, 100.0, 400.0, 1000.0, 4000.0, 10000.0 })
-            data.xTicks.emplace_back(functions.nitsToPq(nits), ToneCurveChart::Nits(nits));
+            chart.xTicks.emplace_back(functions.nitsToPq(nits), ToneCurveChart::Nits(nits));
         for (double nits : { 0.1, 1.0, 10.0, 25.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0,
             400.0, 600.0, 1000.0, 2000.0, 4000.0 })
             if (nits < request.targetNits * 0.95)
-                data.yTicks.emplace_back(functions.nitsToPq(nits), ToneCurveChart::Nits(nits));
-        data.yTicks.emplace_back(data.targetPq, ToneCurveChart::Nits(request.targetNits));
-        tone_->setData(data);
-        tracking_->setData(data);
+                chart.yTicks.emplace_back(functions.nitsToPq(nits), ToneCurveChart::Nits(nits));
+        chart.yTicks.emplace_back(chart.targetPq, ToneCurveChart::Nits(request.targetNits));
+        tone_->setData(chart);
+        tracking_->setData(chart);
 
         peakLabel_->setText((request.sceneAverageKnown ? QStringLiteral("Scene peak: %1 nits") :
             QStringLiteral("Mastering peak: %1 nits")).arg(ToneCurveChart::Nits(request.scenePeakNits)));
