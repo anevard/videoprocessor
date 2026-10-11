@@ -10,6 +10,8 @@
 #include "ProfileListController.h"
 #include "InlineColorPicker.h"
 #include "ToneMappingControl.h"
+#include "ToneChartPanel.h"
+#include "ToneGuiRules.h"
 #include <ConfigurationApplyPolicy.h>
 #include <ConfigurationIdentity.h>
 #include <ConfigurationLiveApply.h>
@@ -3452,6 +3454,14 @@ QStringList ConfigEditorWindow::validationErrors(QStringList& fields,
             errors.push_back(QStringLiteral("[%1] %2").arg(section, QString::fromStdString(toneError)));
             fields.push_back(controlName(section, QString::fromStdString(toneKey)));
         }
+        // GUI-only tone rules: they block Save and Apply here and leave VP's
+        // loader unchanged, so no saved configuration stops loading.
+        else if (ToneGuiRules::Problem toneRule; !ToneGuiRules::Check([&](const char* key) {
+            return inheritedLuminance(QString::fromUtf8(key)).toStdString();
+        }, toneRule)) {
+            errors.push_back(QStringLiteral("[%1] %2").arg(section, QString::fromStdString(toneRule.message)));
+            fields.push_back(controlName(section, QString::fromStdString(toneRule.key)));
+        }
         const QString white = value(section, QStringLiteral("sdr_target_nits")).trimmed();
         std::string expected;
         if (!white.isEmpty() && !RendererProfileConfig::ValidateProfileSetting(
@@ -4847,6 +4857,7 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
     auto fields = std::make_shared<std::vector<Field>>();
     std::function<void()> updateOutputCompatibility = [] {};
     std::function<void()> updateToneControls = [] {};
+    ToneChartPanel* toneCharts = nullptr;
 
     auto* splitter = new ResponsiveSplitter;
 
@@ -5981,6 +5992,31 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                 for (int i = start; i < end; ++i) toneControls[i]->restoreDefault();
             });
         }
+        // His three sections stay open. Settings the chosen curve or peak
+        // detection cannot use are hidden with a note, and the charts sit in a
+        // third column beside them.
+        std::array<QLabel*, 3> toneNotes{};
+        for (int section = 0; section < 3; ++section) {
+            const QString id = QString::fromUtf8(ids[section]);
+            if (auto* toggle = profileFields->findChild<QToolButton*>(QStringLiteral("rendererSection.") + id)) {
+                toggle->setChecked(true);
+                toggle->setCheckable(false);
+                toggle->setArrowType(Qt::NoArrow);
+                toggle->setAccessibleDescription(QString::fromUtf8(headings[section]));
+            }
+            toneNotes[section] = helpLabel(QString());
+            toneNotes[section]->setObjectName(QStringLiteral("rendererSection.%1.hiddenNote").arg(id));
+            toneNotes[section]->hide();
+            if (auto* content = profileFields->findChild<QWidget*>(QStringLiteral("rendererSection.%1.content").arg(id)))
+                if (auto* contentLayout = qobject_cast<QVBoxLayout*>(content->layout()))
+                    contentLayout->insertWidget(1, toneNotes[section]);
+        }
+        auto* peakNote = helpLabel(QString());
+        peakNote->setObjectName(QStringLiteral("rendererSection.tonePeak.modeNote"));
+        peakNote->hide();
+        if (auto* content = profileFields->findChild<QWidget*>(QStringLiteral("rendererSection.tonePeak.content")))
+            content->layout()->addWidget(peakNote);
+        toneCharts = new ToneChartPanel;
         updateToneControls = [toneControls, toneMapping, peakDetection, renderingQuality, state] {
             if (state->loading) return;
             QString curve = effectiveChoiceValue(toneMapping);
@@ -6017,10 +6053,123 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                 return toneControls[ToneMappingTuning::Find(name)]->configuredValue().toStdString();
             }, error, key)) toneControls[ToneMappingTuning::Find(key)]->setError(QString::fromStdString(error));
         };
+        // Around his update: hide what he disabled, show the GUI-only rules on
+        // the controls, and redraw the charts from the profile as VP resolves
+        // it (this profile, then the first profile, then [vprenderer]).
+        const auto inheritedTone = [this, state](const char* key) {
+            const QString name = QString::fromUtf8(key);
+            QString result = value(state->section, name).trimmed();
+            const QStringList profiles = profileSections(QStringLiteral("vprenderer"));
+            if (result.isEmpty() && !profiles.isEmpty()) result = value(profiles.front(), name).trimmed();
+            if (result.isEmpty()) result = value(QStringLiteral("vprenderer"), name).trimmed();
+            return result;
+        };
+        auto peakNoteSection = std::make_shared<QString>();
+        updateToneControls = [his = updateToneControls, toneControls, toneNotes, peakNote, peakNoteSection,
+            toneCharts, toneMapping, state, inheritedTone] {
+            his();
+            if (state->loading) return;
+            if (*peakNoteSection != state->section) peakNote->hide();
+            const auto sectionOf = [](int i) {
+                return i < ToneMappingTuning::KneeOffset ? 0 : i < ToneMappingTuning::Percentile ? 1 : 2;
+            };
+            std::array<QStringList, 3> hidden;
+            for (int i = 0; i < ToneMappingTuning::Count; ++i) {
+                const bool usable = toneControls[i]->isEnabled();
+                toneControls[i]->setVisible(usable);
+                if (!usable) hidden[sectionOf(i)] << QString::fromUtf8(ToneMappingTuning::Specs()[i].label);
+            }
+
+            // His Validate has already put its error on its control; the GUI-only
+            // rules add theirs only when his pass.
+            const auto configured = [&](const char* name) {
+                return toneControls[ToneMappingTuning::Find(name)]->configuredValue().toStdString();
+            };
+            std::string error, key;
+            ToneGuiRules::Problem problem;
+            const bool hisValid = ToneMappingTuning::Validate(configured, error, key);
+            const bool rulesValid = !hisValid || ToneGuiRules::Check(configured, problem);
+            if (!rulesValid)
+                toneControls[ToneMappingTuning::Find(problem.key)]->setError(QString::fromStdString(problem.message));
+            const int failing = !hisValid ? ToneMappingTuning::Find(key) :
+                !rulesValid ? ToneMappingTuning::Find(problem.key) : -1;
+
+            QString curve = effectiveChoiceValue(toneMapping);
+            if (curve.isEmpty() || curve == "auto") curve = "spline";
+            const QString curveName = curve == "bt2390" ? QStringLiteral("BT.2390") :
+                curve == "st2094-40" ? QStringLiteral("ST2094-40") :
+                curve == "reinhard" ? QStringLiteral("Reinhard") : QStringLiteral("Spline");
+            for (int section = 0; section < 3; ++section) {
+                QString text;
+                if (!hidden[section].isEmpty())
+                    text = QStringLiteral("Hidden: %1. %2 The profile keeps their values.").arg(
+                        hidden[section].join(QStringLiteral(", ")), section < 2 ?
+                        QStringLiteral("The %1 curve does not use them.").arg(curveName) :
+                        QStringLiteral("Peak detection is off."));
+                // A hidden setting still blocks Save and Apply when it breaks a rule.
+                if (failing >= 0 && sectionOf(failing) == section && !toneControls[failing]->isEnabled())
+                    text += QStringLiteral(" Hidden setting %1 breaks a rule: show it by %2, or reset it.").arg(
+                        QString::fromUtf8(ToneMappingTuning::Specs()[failing].label),
+                        QString::fromUtf8(ToneGuiRules::ShowHint(failing)));
+                toneNotes[section]->setText(text.trimmed());
+                toneNotes[section]->setVisible(!text.isEmpty());
+            }
+
+            ToneCurveProvider::Request request;
+            const auto choice = [&](const char* name, const char* fallback) {
+                const QString chosen = inheritedTone(name).toLower();
+                return (chosen.isEmpty() ? QString::fromLatin1(fallback) : chosen).toStdString();
+            };
+            request.quality = choice("quality", "high");
+            request.toneMapping = choice("tone_mapping", "auto");
+            request.peakDetection = choice("peak_detection", "auto");
+            const std::string peak = request.peakDetection != "auto" ? request.peakDetection :
+                request.quality == "fast" ? "off" : request.quality == "balanced" ? "on" : "high_quality";
+            request.sceneAverageKnown = peak != "off";
+            ToneMappingTuning::Read([&](const char* name, std::string& raw) {
+                raw = inheritedTone(name).toStdString();
+                return !raw.empty();
+            }, request.toneTuning);
+            double white = 0.0, black = HdrTargetLuminance::DefaultBlack;
+            request.targetNits = HdrTargetLuminance::ParseWhite(inheritedTone("sdr_target_nits").toStdString(), white) ?
+                white : 203.0;
+            const QString blackText = inheritedTone("sdr_black_nits").toLower();
+            if (!blackText.isEmpty()) HdrTargetLuminance::ParseBlack(blackText.toStdString(), request.targetNits, black);
+            request.blackNits = black;
+            toneCharts->setRequest(request);
+        };
         for (auto* control : toneControls)
             connect(control->editor(), &QLineEdit::textChanged, this, [updateToneControls] { updateToneControls(); });
         for (auto* combo : { toneMapping, peakDetection, renderingQuality })
             connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this, [updateToneControls] { updateToneControls(); });
+        // Peak-detection mode and percentile are one setting: libplacebo's high
+        // quality differs from standard only by percentile 99.995. Changing the
+        // mode clears the profile's percentile; a percentile that names a mode
+        // selects that mode instead of being stored.
+        auto coupling = std::make_shared<bool>(false);
+        connect(peakDetection, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [toneControls, peakNote, state, coupling](int) {
+            if (state->loading || *coupling) return;
+            peakNote->hide();
+            toneControls[ToneMappingTuning::Percentile]->restoreDefault();
+        });
+        connect(toneControls[ToneMappingTuning::Percentile]->editor(), &QLineEdit::textChanged, this,
+            [toneControls, peakDetection, peakNote, peakNoteSection, state, coupling](const QString& text) {
+            if (state->loading || *coupling) return;
+            bool ok = false;
+            const double percentile = text.trimmed().toDouble(&ok);
+            const char* mode = ok ? ToneGuiRules::ModeForPercentile(percentile) : nullptr;
+            const int index = mode ? peakDetection->findData(QString::fromLatin1(mode)) : -1;
+            if (index < 0) return;
+            *coupling = true;
+            peakDetection->setCurrentIndex(index);
+            toneControls[ToneMappingTuning::Percentile]->restoreDefault();
+            *coupling = false;
+            peakNote->setText(QStringLiteral("Percentile %1 is the same as peak detection %2, so the mode was set to %2.")
+                .arg(text.trimmed(), peakDetection->itemText(index)));
+            *peakNoteSection = state->section;
+            peakNote->show();
+        });
 
         form = addCollapsibleSection(QStringLiteral("processing"), QStringLiteral("Processing"),
             QString(), false);
@@ -7258,6 +7407,15 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
     splitter->setSizes({ 310, 620 });
+    if (toneCharts)
+    {
+        // Rendering only: the tone charts, held in view while the page scrolls.
+        splitter->addWidget(new ToneStickyColumn(createCard(QStringLiteral("Tone charts"),
+            QStringLiteral("What the selected profile's tone settings do, against PQ: the source as mastered."),
+            toneCharts)));
+        splitter->setStretchFactor(2, 1);
+        splitter->setSizes({ 260, 540, 560 });
+    }
     auto* page=createPage(title, description, splitter);
     if(sectionPrefix==QStringLiteral("vprenderer.subtitles")) {
         splitter->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Minimum);
