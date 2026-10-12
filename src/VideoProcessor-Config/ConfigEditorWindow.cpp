@@ -1833,6 +1833,7 @@ void ConfigEditorWindow::loadConfiguration()
     if (configurationLoaded_ && !document_->existedAtLoad)
     {
         seedCalibratedProfile(QStringLiteral("vprenderer"), QStringLiteral("vprenderer.Default"));
+        seedCalibratedProfile(QStringLiteral("vprenderer.scaling"), QStringLiteral("vprenderer.scaling.Default"));
         seedCalibratedProfile(QStringLiteral("vprenderer.color"), QStringLiteral("vprenderer.color.Default"));
     }
 }
@@ -1889,8 +1890,12 @@ void ConfigEditorWindow::seedCalibratedProfile(const QString& root, const QStrin
     { document_->SetKnown(section.toStdString(), key, value); };
     if (root == QStringLiteral("vprenderer"))
     {
-        set("quality", "high"); set("sdr_target_nits", "100");
-        set("sdr_black_nits", "0"); set("display_bit_depth", "10");
+        set("sdr_target_nits", "100"); set("sdr_black_nits", "0");
+    }
+    else if (root == QStringLiteral("vprenderer.scaling"))
+    {
+        // Moved from the Rendering seed with their settings.
+        set("quality", "high"); set("display_bit_depth", "10");
         set("dithering", "auto");
     }
     else if (root == QStringLiteral("vprenderer.color"))
@@ -2215,13 +2220,13 @@ void ConfigEditorWindow::migrateProcessingToScaling()
 {
     if (!configurationLoaded_ || !document_) return;
 
-    // Debanding, dithering and dither target depth are Scaling settings now,
+    // Quality, debanding, dithering and dither target depth are Scaling settings now,
     // with no tie to any Rendering profile. VP still reads them from a
     // Rendering profile, applied after Scaling, so none may stay behind there.
     // The default Rendering profile's values go to the first (default) Scaling
     // profile where it does not set them; the other profiles inherit them as
     // any Scaling setting. Other Rendering profiles' values are dropped.
-    const QStringList keys = { QStringLiteral("deband_strength"),
+    const QStringList keys = { QStringLiteral("quality"), QStringLiteral("deband_strength"),
         QStringLiteral("dithering"), QStringLiteral("display_bit_depth") };
     const QStringList rendering = profileSections(QStringLiteral("vprenderer"));
     bool found = false;
@@ -3043,8 +3048,9 @@ void ConfigEditorWindow::refreshCalibrationControls()
 
 void ConfigEditorWindow::refreshRendererAutoStatus()
 {
+    // Quality lives on the Scaling / Quality page and decides only its Autos.
     const auto qualityControl = findChild<QComboBox*>(
-        QStringLiteral("config.vprenderer.quality"));
+        QStringLiteral("config.vprenderer.scaling.quality"));
     const QString quality = effectiveChoiceValue(qualityControl);
     const auto qualityValue = [&quality](const QString& high,
         const QString& balanced, const QString& fast)
@@ -3099,13 +3105,11 @@ void ConfigEditorWindow::refreshRendererAutoStatus()
             text = QStringLiteral("Perceptual");
         else if (binding.key == QStringLiteral("peak_detection"))
         {
-            text = qualityValue(QStringLiteral("High quality"),
-                QStringLiteral("Standard"), QStringLiteral("Off"));
+            text = QStringLiteral("High quality"); // tone mapping ignores Quality
         }
         else if (binding.key == QStringLiteral("contrast_recovery"))
         {
-            text = qualityValue(QStringLiteral("0.30"), QStringLiteral("0.00"),
-                QStringLiteral("0.00"));
+            text = QStringLiteral("0.30"); // tone mapping ignores Quality
         }
         else if (binding.key == QStringLiteral("upscaler"))
         {
@@ -3161,6 +3165,16 @@ void ConfigEditorWindow::refreshRendererAutoStatus()
         binding.label->setText(QStringLiteral("Auto: %1").arg(text));
         binding.label->setVisible(true);
     }
+    // Under Quality on the Scaling / Quality page: what it decides there.
+    if (auto* warning = findChild<QLabel*>(QStringLiteral("scalingQualityWarning")))
+        warning->setText(QStringLiteral("Quality decides what Auto means on this page. %1 gives: "
+            "upscaler %2, downscaler %3, sigmoid %4, debanding %5, dithering %6. Tone mapping ignores it.")
+            .arg(qualityValue(QStringLiteral("High"), QStringLiteral("Balanced"), QStringLiteral("Fast")),
+                qualityValue(QStringLiteral("EWA Lanczos sharp"), QStringLiteral("Lanczos"), QStringLiteral("built-in sampling")),
+                qualityValue(QStringLiteral("Hermite"), QStringLiteral("Hermite"), QStringLiteral("built-in sampling")),
+                qualityValue(QStringLiteral("on"), QStringLiteral("on"), QStringLiteral("off")),
+                qualityValue(QStringLiteral("Standard"), QStringLiteral("off"), QStringLiteral("off")),
+                qualityValue(QStringLiteral("blue noise"), QStringLiteral("blue noise"), QStringLiteral("off"))));
 }
 
 QLineEdit* ConfigEditorWindow::bindTextField(const QString& section, const QString& key, const QString& fallback)
@@ -6025,7 +6039,8 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
         // repeat that for settings cleared since.
         static const QString noInheritance = QStringLiteral(
             "No inheritance on this page: each profile uses only its own settings. "
-            "Auto means libplacebo's default, never the default profile's value.");
+            "Auto means libplacebo's value (its high-quality one for peak detection and contrast recovery), "
+            "never the default profile's value.");
         noInheritanceNote = helpLabel(noInheritance);
         noInheritanceNote->setObjectName(QStringLiteral("rendererNoInheritanceNote"));
         noInheritanceNote->setStyleSheet(QStringLiteral("color: #ff8d86;"));
@@ -6144,42 +6159,10 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                     "Save or Apply keeps them.").arg(filled->first).arg(filled->second.join(QStringLiteral(", ")));
             noInheritanceNote->setText(text);
         };
-        // Under Rendering quality: what it decides for this profile's Auto
-        // settings, and for every Auto setting on the Scaling page. The values
-        // are his Auto status labels (refreshRendererAutoStatus).
-        auto qualityWarning = std::make_shared<QPointer<QLabel>>();
-        const auto refreshQualityWarning = [this, state, qualityWarning] {
-            QLabel* warning = *qualityWarning;
-            if (!warning) return;
-            const QString quality = value(state->section, QStringLiteral("quality")).trimmed().toLower();
-            const auto pick = [&](const char* high, const char* balanced, const char* fast) {
-                return QString::fromUtf8(quality == QStringLiteral("fast") ? fast :
-                    quality == QStringLiteral("balanced") ? balanced : high);
-            };
-            const auto isAuto = [&](const char* key) {
-                const QString raw = value(state->section, QString::fromUtf8(key)).trimmed();
-                return raw.isEmpty() || raw.compare(QStringLiteral("auto"), Qt::CaseInsensitive) == 0;
-            };
-            QStringList here;
-            if (isAuto("peak_detection"))
-                here << QStringLiteral("peak detection ") + pick("High quality", "Standard", "Off (no dynamic tone mapping)");
-            if (isAuto("contrast_recovery"))
-                here << QStringLiteral("contrast recovery ") + pick("0.30", "0.00", "0.00");
-            const QString name = pick("High", "Balanced", "Fast");
-            warning->setText(QStringLiteral("Quality decides what Auto means. %1").arg(here.isEmpty() ?
-                QStringLiteral("No setting on this page is Auto in this profile.") :
-                QStringLiteral("%1 gives this profile's Auto settings: %2.").arg(name, here.join(QStringLiteral(", ")))) +
-                QStringLiteral(" On the Scaling / Quality page, every Auto upscaler, downscaler, sigmoid, debanding and dithering follows it too: %1, %2, %3, %4, %5.")
-                    .arg(pick("EWA Lanczos sharp", "Lanczos", "Built-in sampling"),
-                        pick("Hermite", "Hermite", "Built-in sampling"), pick("sigmoid on", "sigmoid on", "sigmoid off"),
-                        pick("debanding Standard", "debanding off", "debanding off"),
-                        pick("dithering Blue noise", "dithering Blue noise", "dithering off")));
-        };
         // His grey ("inherited") here marks a value at its unset meaning, Auto
         // and the like; a value taken from another profile is now this one's own.
-        restyleRenderingFields = [this, state, fields, unsetValue, refreshQualityWarning] {
+        restyleRenderingFields = [this, state, fields, unsetValue] {
             if (state->section.isEmpty()) return;
-            refreshQualityWarning();
             for (const Field& field : *fields)
             {
                 if (field.key == QStringLiteral("output_diagnostics") ||
@@ -6198,18 +6181,6 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                 field.widget->style()->polish(field.widget);
             }
         };
-		form = addPlainForm();
-		auto* renderingQuality = addChoice(QStringLiteral("Rendering quality"),
-			QStringLiteral("quality"), { QStringLiteral("high"),
-			QStringLiteral("balanced"), QStringLiteral("fast") });
-		connect(renderingQuality, qOverload<int>(&QComboBox::currentIndexChanged), this,
-			[this](int) { refreshRendererAutoStatus(); });
-        // Amber: a warning, not an error; it blocks nothing.
-        auto* qualityWarningLabel = helpLabel(QString());
-        qualityWarningLabel->setObjectName(QStringLiteral("rendererQualityWarning"));
-        qualityWarningLabel->setStyleSheet(QStringLiteral("color: #e8a93b;"));
-        form->addRow(qualityWarningLabel);
-        *qualityWarning = qualityWarningLabel;
 
         form = addCollapsibleSection(QStringLiteral("toneMapping"),
             QStringLiteral("Tone Mapping: General"), QStringLiteral(
@@ -6336,7 +6307,7 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
         if (auto* content = profileFields->findChild<QWidget*>(QStringLiteral("rendererSection.tonePeak.content")))
             content->layout()->addWidget(peakNote);
         toneCharts = new ToneChartPanel;
-        updateToneControls = [this, toneControls, toneMapping, peakDetection, renderingQuality, state, dynamicTarget, customToneMapping] {
+        updateToneControls = [this, toneControls, toneMapping, peakDetection, state, dynamicTarget, customToneMapping] {
             if (state->loading) return;
             const bool beta = rendererChoice_ && effectiveChoiceValue(rendererChoice_).compare(
                 QStringLiteral("VP Renderer (Beta)"), Qt::CaseInsensitive) == 0;
@@ -6345,8 +6316,8 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
             QString curve = effectiveChoiceValue(toneMapping);
             if (curve.isEmpty() || curve == "auto") curve = "spline";
             QString peak = effectiveChoiceValue(peakDetection);
-            const QString quality = effectiveChoiceValue(renderingQuality);
-            if (peak.isEmpty() || peak == "auto") peak = quality == "fast" ? "off" : quality == "balanced" ? "on" : "high_quality";
+            // Tone mapping ignores Quality (a Scaling setting): Auto is High quality.
+            if (peak.isEmpty() || peak == "auto") peak = "high_quality";
             for (int i = 0; i < ToneMappingTuning::Count; ++i) {
                 const bool enabled = i < ToneMappingTuning::SlopeTuning ? (curve == "spline" || curve == "st2094-40") :
                     i < ToneMappingTuning::KneeOffset ? curve == "spline" :
@@ -6408,11 +6379,9 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                 const QString chosen = get(name).toLower();
                 return (chosen.isEmpty() ? QString::fromLatin1(fallback) : chosen).toStdString();
             };
-            request.quality = choice("quality", "high");
             request.toneMapping = choice("tone_mapping", "auto");
             request.peakDetection = choice("peak_detection", "auto");
-            const std::string peak = request.peakDetection != "auto" ? request.peakDetection :
-                request.quality == "fast" ? "off" : request.quality == "balanced" ? "on" : "high_quality";
+            const std::string peak = request.peakDetection != "auto" ? request.peakDetection : "high_quality";
             request.sceneAverageKnown = peak != "off";
             ToneMappingTuning::Read([&](const char* name, std::string& raw) {
                 raw = get(name).toStdString();
@@ -6537,7 +6506,7 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
         }
         for (auto* control : toneControls)
             connect(control->editor(), &QLineEdit::textChanged, this, [updateToneControls] { updateToneControls(); });
-        for (auto* combo : { toneMapping, peakDetection, renderingQuality })
+        for (auto* combo : { toneMapping, peakDetection })
             connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this, [updateToneControls] { updateToneControls(); });
         // Target white and black move every curve, so they redraw the charts too.
         for (auto* edit : { sdrTargetWhiteLevel, sdrBlackLevel })
@@ -6581,6 +6550,18 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
 	{
 		form = addCollapsibleSection(QStringLiteral("scaling"), QStringLiteral("Scaling"),
 			QString(), false);
+        // Moved from the Rendering page: Quality decides only this page's Auto
+        // settings; tone mapping ignores it.
+        auto* quality = addChoice(QStringLiteral("Quality"),
+            QStringLiteral("quality"), { QStringLiteral("high"),
+            QStringLiteral("balanced"), QStringLiteral("fast") });
+        connect(quality, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int) { refreshRendererAutoStatus(); });
+        // Amber: a warning, not an error; refreshRendererAutoStatus fills it.
+        auto* qualityWarning = helpLabel(QString());
+        qualityWarning->setObjectName(QStringLiteral("scalingQualityWarning"));
+        qualityWarning->setStyleSheet(QStringLiteral("color: #e8a93b;"));
+        form->addRow(qualityWarning);
 		auto* upscaler = addChoice(QStringLiteral("Upscaler"),
 			QStringLiteral("upscaler"), { QStringLiteral("AUTO"),
 			QStringLiteral("ewa_lanczos4sharpest"),
@@ -6645,7 +6626,7 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
         dithering->setItemText(15, QStringLiteral("Error diffusion: Sierra 3"));
         dithering->setItemText(16, QStringLiteral("Off"));
         dithering->setToolTip(QStringLiteral(
-            "Auto follows the rendering-quality preset: Blue noise for Balanced "
+            "Auto follows Quality above: Blue noise for Balanced "
             "and High, or Off for Fast. Blue noise is libplacebo's default and "
             "recommended mode. Ordered modes and White noise are alternate "
             "libplacebo methods. Error-diffusion modes require compute shaders "

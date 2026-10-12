@@ -27,8 +27,11 @@ directshow.conversion.conversion_method	OPTIMIZED
 directshow.conversion.conversion_method	STANDARD
 directshow.ppm.ppm	AUTO
 vprenderer.quality	fast
+vprenderer.scaling.quality	fast
 vprenderer.quality	balanced
+vprenderer.scaling.quality	balanced
 vprenderer.quality	high
+vprenderer.scaling.quality	high
 vprenderer.tone_mapping	AUTO
 vprenderer.tone_mapping	spline
 vprenderer.tone_mapping	bt2390
