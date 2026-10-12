@@ -3165,16 +3165,62 @@ void ConfigEditorWindow::refreshRendererAutoStatus()
         binding.label->setText(QStringLiteral("Auto: %1").arg(text));
         binding.label->setVisible(true);
     }
-    // Under Quality on the Scaling / Quality page: what it decides there.
+    // Scaling / Quality: grey marks a setting at Auto or not set, in every
+    // profile, as on Rendering / DTM (his grey marks only inherited ones).
+    // This runs after his change handler and after a profile loads.
+    QList<QComboBox*> scalingChoices;
+    if (qualityControl) scalingChoices << qualityControl;
+    for (const RendererAutoStatusBinding& binding : rendererAutoStatusBindings_)
+        if (binding.sectionPrefix == QStringLiteral("vprenderer.scaling"))
+            if (auto* combo = qobject_cast<QComboBox*>(binding.control))
+                scalingChoices << combo;
+    for (QComboBox* combo : scalingChoices)
+    {
+        const QString selected = combo->currentData().toString().trimmed();
+        const bool grey = selected.isEmpty() ||
+            selected.compare(QStringLiteral("auto"), Qt::CaseInsensitive) == 0;
+        if (combo->property("inherited").toBool() == grey) continue;
+        combo->setProperty("inherited", grey);
+        combo->style()->unpolish(combo);
+        combo->style()->polish(combo);
+    }
+    // Under Quality on the Scaling / Quality page: what it still decides (the
+    // settings at Auto) and what the profile sets itself. As before the move,
+    // a changed setting overrides only its own part of the preset.
     if (auto* warning = findChild<QLabel*>(QStringLiteral("scalingQualityWarning")))
-        warning->setText(QStringLiteral("Quality decides what Auto means on this page. %1 gives: "
-            "upscaler %2, downscaler %3, sigmoid %4, debanding %5, dithering %6. Tone mapping ignores it.")
-            .arg(qualityValue(QStringLiteral("High"), QStringLiteral("Balanced"), QStringLiteral("Fast")),
-                qualityValue(QStringLiteral("EWA Lanczos sharp"), QStringLiteral("Lanczos"), QStringLiteral("built-in sampling")),
-                qualityValue(QStringLiteral("Hermite"), QStringLiteral("Hermite"), QStringLiteral("built-in sampling")),
-                qualityValue(QStringLiteral("on"), QStringLiteral("on"), QStringLiteral("off")),
-                qualityValue(QStringLiteral("Standard"), QStringLiteral("off"), QStringLiteral("off")),
-                qualityValue(QStringLiteral("blue noise"), QStringLiteral("blue noise"), QStringLiteral("off"))));
+    {
+        const std::pair<const char*, QString> decided[] = {
+            { "upscaler", QStringLiteral("upscaler ") + qualityValue(QStringLiteral("EWA Lanczos sharp"), QStringLiteral("Lanczos"), QStringLiteral("built-in sampling")) },
+            { "downscaler", QStringLiteral("downscaler ") + qualityValue(QStringLiteral("Hermite"), QStringLiteral("Hermite"), QStringLiteral("built-in sampling")) },
+            { "sigmoid", QStringLiteral("sigmoid ") + qualityValue(QStringLiteral("on"), QStringLiteral("on"), QStringLiteral("off")) },
+            { "deband_strength", QStringLiteral("debanding ") + qualityValue(QStringLiteral("Standard"), QStringLiteral("off"), QStringLiteral("off")) },
+            { "dithering", QStringLiteral("dithering ") + qualityValue(QStringLiteral("blue noise"), QStringLiteral("blue noise"), QStringLiteral("off")) } };
+        // Each covered setting: at Auto (Quality decides it), set in this
+        // profile, or not set here and taken from the default (first) profile.
+        QStringList gives, own, fromDefault;
+        for (const auto& [key, text] : decided)
+            for (const RendererAutoStatusBinding& binding : rendererAutoStatusBindings_)
+            {
+                const auto* combo = qobject_cast<QComboBox*>(binding.control);
+                if (binding.sectionPrefix != QStringLiteral("vprenderer.scaling") ||
+                    binding.key != QLatin1String(key) || !combo)
+                    continue;
+                const QString selected = combo->currentData().toString().trimmed();
+                const QString effective = selected.isEmpty() ?
+                    combo->property("effectiveValue").toString().trimmed() : selected;
+                if (effective.isEmpty() || effective.compare(QStringLiteral("auto"), Qt::CaseInsensitive) == 0)
+                    gives << text;
+                else
+                    (selected.isEmpty() ? fromDefault : own) << text.section(u' ', 0, 0);
+            }
+        const QString name = qualityValue(QStringLiteral("High"), QStringLiteral("Balanced"), QStringLiteral("Fast"));
+        warning->setText((gives.isEmpty() ?
+            QStringLiteral("Quality decides nothing in this profile: every setting it covers has a value.") :
+            QStringLiteral("Quality decides Auto here. %1 gives: %2.").arg(name, gives.join(QStringLiteral(", ")))) +
+            (own.isEmpty() ? QString() : QStringLiteral(" Set in this profile: %1.").arg(own.join(QStringLiteral(", ")))) +
+            (fromDefault.isEmpty() ? QString() : QStringLiteral(" Set in the default profile: %1.").arg(fromDefault.join(QStringLiteral(", ")))) +
+            QStringLiteral(" Tone mapping ignores it."));
+    }
 }
 
 QLineEdit* ConfigEditorWindow::bindTextField(const QString& section, const QString& key, const QString& fallback)
@@ -6548,8 +6594,8 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
 
 	else if (sectionPrefix == QStringLiteral("vprenderer.scaling"))
 	{
-		form = addCollapsibleSection(QStringLiteral("scaling"), QStringLiteral("Scaling"),
-			QString(), false);
+        // Above both sections: Quality decides Auto in each of them.
+        form = addPlainForm();
         // Moved from the Rendering page: Quality decides only this page's Auto
         // settings; tone mapping ignores it.
         auto* quality = addChoice(QStringLiteral("Quality"),
@@ -6562,6 +6608,8 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
         qualityWarning->setObjectName(QStringLiteral("scalingQualityWarning"));
         qualityWarning->setStyleSheet(QStringLiteral("color: #e8a93b;"));
         form->addRow(qualityWarning);
+		form = addCollapsibleSection(QStringLiteral("scaling"), QStringLiteral("Scaling"),
+			QString(), false);
 		auto* upscaler = addChoice(QStringLiteral("Upscaler"),
 			QStringLiteral("upscaler"), { QStringLiteral("AUTO"),
 			QStringLiteral("ewa_lanczos4sharpest"),
