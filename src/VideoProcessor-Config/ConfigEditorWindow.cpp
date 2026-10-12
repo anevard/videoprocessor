@@ -1041,6 +1041,7 @@ ConfigEditorWindow::ConfigEditorWindow(QString configPath, quintptr ownerHandle,
     migrateSharedRefreshRate();
 	migrateRefreshRateSwitchMode();
     migrateSeparatedRendererProfiles();
+    migrateProcessingToScaling();
     migrateUnifiedColorOutputProfiles();
     migrateCalibrationProfiles();
     migrateViewportZoomProfiles();
@@ -1680,6 +1681,7 @@ bool ConfigEditorWindow::selectAnotherTarget(const Target& target)
 	migrateSharedRefreshRate();
 	migrateRefreshRateSwitchMode();
 	migrateSeparatedRendererProfiles();
+	migrateProcessingToScaling();
 	migrateUnifiedColorOutputProfiles();
 	migrateCalibrationProfiles();
 	migrateViewportZoomProfiles();
@@ -2207,6 +2209,63 @@ void ConfigEditorWindow::migrateSeparatedRendererProfiles()
         dirty_ = true;
         hasPendingMigrations_ = true;
     }
+}
+
+void ConfigEditorWindow::migrateProcessingToScaling()
+{
+    if (!configurationLoaded_ || !document_) return;
+
+    // Debanding, dithering and dither target depth are Scaling settings now,
+    // with no tie to any Rendering profile. VP still reads them from a
+    // Rendering profile, applied after Scaling, so none may stay behind there.
+    // The default Rendering profile's values go to the first (default) Scaling
+    // profile where it does not set them; the other profiles inherit them as
+    // any Scaling setting. Other Rendering profiles' values are dropped.
+    const QStringList keys = { QStringLiteral("deband_strength"),
+        QStringLiteral("dithering"), QStringLiteral("display_bit_depth") };
+    const QStringList rendering = profileSections(QStringLiteral("vprenderer"));
+    bool found = false;
+    for (const QString& section : rendering)
+        for (const QString& key : keys + QStringList{ QStringLiteral("deband") })
+            found = found || !value(section, key).isEmpty();
+    if (!found) return;
+
+    // His legacy deband key, read as his profile loader reads it; the Scaling
+    // family accepts only deband_strength.
+    const auto settingIn = [this](const QString& section, const QString& key) {
+        QString configured = value(section, key).trimmed();
+        if (configured.isEmpty() && key == QStringLiteral("deband_strength"))
+        {
+            const QString legacy = value(section, QStringLiteral("deband")).trimmed().toLower();
+            if (legacy == QStringLiteral("on") || legacy == QStringLiteral("true")) configured = QStringLiteral("default");
+            else if (legacy == QStringLiteral("off") || legacy == QStringLiteral("false")) configured = QStringLiteral("off");
+            else if (legacy == QStringLiteral("auto")) configured = QStringLiteral("AUTO");
+        }
+        return configured;
+    };
+    QStringList scaling = profileSections(QStringLiteral("vprenderer.scaling"));
+    if (!rendering.isEmpty())
+    {
+        QString target = scaling.isEmpty() ? QString() : scaling.front();
+        for (const QString& key : keys)
+        {
+            const QString moved = settingIn(rendering.front(), key);
+            if (moved.isEmpty()) continue;
+            if (target.isEmpty())
+            {
+                target = QStringLiteral("vprenderer.scaling.Default");
+                document_->AddSection(target.toStdString());
+            }
+            if (value(target, key).isEmpty())
+                document_->SetKnown(target.toStdString(), key.toStdString().c_str(),
+                    moved.toLocal8Bit().constData());
+        }
+    }
+    for (const QString& section : rendering)
+        for (const QString& key : keys + QStringList{ QStringLiteral("deband") })
+            document_->RemoveKnown(section.toStdString(), key.toStdString().c_str());
+    dirty_ = true;
+    hasPendingMigrations_ = true;
 }
 
 void ConfigEditorWindow::loadDiscoveryCache()
@@ -4220,11 +4279,11 @@ QWidget* ConfigEditorWindow::createShell()
             vpNavigation->setChecked(true);
             showSectionTabs({ { QStringLiteral("Rendering / DTM"), 2 },
 				{ QStringLiteral("Color / Output"), 16 },
-				{ QStringLiteral("Scaling"), 17 },
+				{ QStringLiteral("Scaling / Quality"), 17 },
 				{ QStringLiteral("Screen"), 4 },
 				{ QStringLiteral("Zoom"), 18 },
                 { QStringLiteral("Subtitles"), 19 },
-				{ QStringLiteral("Processing"), 11 } }, page);
+				{ QStringLiteral("Input Processing"), 11 } }, page);
         }
         else if (page == 3 || page == 12)
         {
@@ -6106,17 +6165,15 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                 here << QStringLiteral("peak detection ") + pick("High quality", "Standard", "Off (no dynamic tone mapping)");
             if (isAuto("contrast_recovery"))
                 here << QStringLiteral("contrast recovery ") + pick("0.30", "0.00", "0.00");
-            if (isAuto("deband_strength") && value(state->section, QStringLiteral("deband")).trimmed().isEmpty())
-                here << QStringLiteral("debanding ") + pick("Standard", "Off", "Off");
-            if (isAuto("dithering"))
-                here << QStringLiteral("dithering ") + pick("Blue noise", "Blue noise", "Off");
             const QString name = pick("High", "Balanced", "Fast");
             warning->setText(QStringLiteral("Quality decides what Auto means. %1").arg(here.isEmpty() ?
                 QStringLiteral("No setting on this page is Auto in this profile.") :
                 QStringLiteral("%1 gives this profile's Auto settings: %2.").arg(name, here.join(QStringLiteral(", ")))) +
-                QStringLiteral(" On the Scaling page, every Auto upscaler, downscaler and sigmoid follows it too: %1, %2, %3.")
+                QStringLiteral(" On the Scaling / Quality page, every Auto upscaler, downscaler, sigmoid, debanding and dithering follows it too: %1, %2, %3, %4, %5.")
                     .arg(pick("EWA Lanczos sharp", "Lanczos", "Built-in sampling"),
-                        pick("Hermite", "Hermite", "Built-in sampling"), pick("sigmoid on", "sigmoid on", "sigmoid off")));
+                        pick("Hermite", "Hermite", "Built-in sampling"), pick("sigmoid on", "sigmoid on", "sigmoid off"),
+                        pick("debanding Standard", "debanding off", "debanding off"),
+                        pick("dithering Blue noise", "dithering Blue noise", "dithering off")));
         };
         // His grey ("inherited") here marks a value at its unset meaning, Auto
         // and the like; a value taken from another profile is now this one's own.
@@ -6518,8 +6575,42 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
             *peakNoteSection = state->section;
             peakNote->show();
         });
+    }
 
-        form = addCollapsibleSection(QStringLiteral("processing"), QStringLiteral("Processing"),
+	else if (sectionPrefix == QStringLiteral("vprenderer.scaling"))
+	{
+		form = addCollapsibleSection(QStringLiteral("scaling"), QStringLiteral("Scaling"),
+			QString(), false);
+		auto* upscaler = addChoice(QStringLiteral("Upscaler"),
+			QStringLiteral("upscaler"), { QStringLiteral("AUTO"),
+			QStringLiteral("ewa_lanczos4sharpest"),
+			QStringLiteral("ewa_lanczossharp"), QStringLiteral("ewa_lanczos"),
+			QStringLiteral("lanczos"), QStringLiteral("catmull_rom"),
+			QStringLiteral("bicubic"), QStringLiteral("gaussian"),
+			QStringLiteral("oversample"), QStringLiteral("bilinear"),
+			QStringLiteral("nearest"), QStringLiteral("none") });
+		upscaler->setItemText(upscaler->findData(QStringLiteral("none")),
+			QStringLiteral("Built-in GPU sampling"));
+		addRendererAutoStatus(QStringLiteral("upscaler"), upscaler);
+		auto* downscaler = addChoice(QStringLiteral("Downscaler"),
+			QStringLiteral("downscaler"), { QStringLiteral("AUTO"),
+			QStringLiteral("lanczos"), QStringLiteral("mitchell"),
+			QStringLiteral("catmull_rom"),
+			QStringLiteral("bicubic"), QStringLiteral("gaussian"),
+			QStringLiteral("hermite"), QStringLiteral("bilinear"),
+			QStringLiteral("box"), QStringLiteral("gpu") });
+		downscaler->setItemText(downscaler->findData(QStringLiteral("gpu")),
+			QStringLiteral("Built-in GPU sampling"));
+		addRendererAutoStatus(QStringLiteral("downscaler"), downscaler);
+		auto* antiRinging = addChoice(QStringLiteral("Anti-ringing"),
+			QStringLiteral("sigmoid"), { QStringLiteral("AUTO"),
+			QStringLiteral("on"), QStringLiteral("off") });
+		antiRinging->setToolTip(QStringLiteral(
+			"Optional sigmoidization before upscaling. It reduces ringing artifacts; Auto uses the scaling-quality preset."));
+		addRendererAutoStatus(QStringLiteral("sigmoid"), antiRinging);
+        // Moved from the Rendering page: ordinary Scaling settings, inherited
+        // from the first Scaling profile like the scalers above.
+        form = addCollapsibleSection(QStringLiteral("debandingDithering"), QStringLiteral("Debanding & Dithering"),
             QString(), false);
         auto* debanding = addChoice(QStringLiteral("Debanding"), QStringLiteral("deband_strength"), { QStringLiteral("AUTO"), QStringLiteral("default"), QStringLiteral("light"), QStringLiteral("off") });
         debanding->setItemText(debanding->findData(QStringLiteral("default")), QStringLiteral("Standard"));
@@ -6563,46 +6654,12 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
         addRendererAutoStatus(QStringLiteral("dithering"), dithering);
         auto* displayBitDepth = addChoice(QStringLiteral("Dither target depth"),
             QStringLiteral("display_bit_depth"),
-            {  QStringLiteral("10"), QStringLiteral("8") });
+            { QStringLiteral("AUTO"), QStringLiteral("10"), QStringLiteral("8") });
         displayBitDepth->setItemText(displayBitDepth->findData(QStringLiteral("10")), QStringLiteral("10-bit"));
         displayBitDepth->setItemText(displayBitDepth->findData(QStringLiteral("8")), QStringLiteral("8-bit"));
         displayBitDepth->setToolTip(QStringLiteral(
             "Dithering precision, clamped to the active surface depth. This does not configure GPU/HDMI bit depth or detect panel precision."));
         addRendererAutoStatus(QStringLiteral("display_bit_depth"), displayBitDepth);
-
-
-    }
-
-	else if (sectionPrefix == QStringLiteral("vprenderer.scaling"))
-	{
-		form = addPlainForm();
-		auto* upscaler = addChoice(QStringLiteral("Upscaler"),
-			QStringLiteral("upscaler"), { QStringLiteral("AUTO"),
-			QStringLiteral("ewa_lanczos4sharpest"),
-			QStringLiteral("ewa_lanczossharp"), QStringLiteral("ewa_lanczos"),
-			QStringLiteral("lanczos"), QStringLiteral("catmull_rom"),
-			QStringLiteral("bicubic"), QStringLiteral("gaussian"),
-			QStringLiteral("oversample"), QStringLiteral("bilinear"),
-			QStringLiteral("nearest"), QStringLiteral("none") });
-		upscaler->setItemText(upscaler->findData(QStringLiteral("none")),
-			QStringLiteral("Built-in GPU sampling"));
-		addRendererAutoStatus(QStringLiteral("upscaler"), upscaler);
-		auto* downscaler = addChoice(QStringLiteral("Downscaler"),
-			QStringLiteral("downscaler"), { QStringLiteral("AUTO"),
-			QStringLiteral("lanczos"), QStringLiteral("mitchell"),
-			QStringLiteral("catmull_rom"),
-			QStringLiteral("bicubic"), QStringLiteral("gaussian"),
-			QStringLiteral("hermite"), QStringLiteral("bilinear"),
-			QStringLiteral("box"), QStringLiteral("gpu") });
-		downscaler->setItemText(downscaler->findData(QStringLiteral("gpu")),
-			QStringLiteral("Built-in GPU sampling"));
-		addRendererAutoStatus(QStringLiteral("downscaler"), downscaler);
-		auto* antiRinging = addChoice(QStringLiteral("Anti-ringing"),
-			QStringLiteral("sigmoid"), { QStringLiteral("AUTO"),
-			QStringLiteral("on"), QStringLiteral("off") });
-		antiRinging->setToolTip(QStringLiteral(
-			"Optional sigmoidization before upscaling. It reduces ringing artifacts; Auto uses the scaling-quality preset."));
-		addRendererAutoStatus(QStringLiteral("sigmoid"), antiRinging);
 	}
     else if (sectionPrefix == QStringLiteral("vprenderer.subtitles"))
     {
@@ -8021,7 +8078,7 @@ QWidget* ConfigEditorWindow::createRendererPage()
 
 QWidget* ConfigEditorWindow::createScalingPage()
 {
-	return createProfilePage(QStringLiteral("Scaling"),
+	return createProfilePage(QStringLiteral("Scaling / Quality"),
 		QStringLiteral("Configure ordered scaling profiles. The first profile in the list is the default."),
 		QStringLiteral("vprenderer.scaling"));
 }

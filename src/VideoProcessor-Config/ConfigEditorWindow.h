@@ -153,6 +153,7 @@ private:
     void migrateSharedRefreshRate();
 	void migrateRefreshRateSwitchMode();
     void migrateSeparatedRendererProfiles();
+    void migrateProcessingToScaling();
     void migrateUnifiedColorOutputProfiles();
     void migrateCalibrationProfiles();
     void migrateViewportZoomProfiles();
