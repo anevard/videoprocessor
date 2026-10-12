@@ -6203,10 +6203,18 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
         addRendererAutoStatus(QStringLiteral("gamut_mapping"), gamutMapping);
         auto* customToneMapping = addBoolean(QStringLiteral("Gamut overflow correction (Experimental)"), QStringLiteral("custom_tone_mapping"));
         customToneMapping->setToolTip(QStringLiteral("Off: original tone/gamut mapping. On: smoothly compresses colors near or beyond the target gamut or brightness limits after the selected gamut mapping during HDR tone mapping. May reduce brightness or saturation. Default: Off. Apply to compare."));
-        auto* peakDetection = addChoice(QStringLiteral("Peak detection"), QStringLiteral("peak_detection"), { QStringLiteral("AUTO"), QStringLiteral("high_quality"), QStringLiteral("on"), QStringLiteral("off") });
-        peakDetection->setItemText(peakDetection->findData(QStringLiteral("on")),
-            QStringLiteral("Standard"));
-        addRendererAutoStatus(QStringLiteral("peak_detection"), peakDetection);
+        // Each of them carries an amber Beta tag after its label, greyed or not.
+        const auto tagBeta = [](QLabel* label) {
+            if (!label) return;
+            label->setWordWrap(true);
+            label->setText(label->text().toHtmlEscaped() + QStringLiteral(" <span style=\"color:#e8a93b\">Beta</span>"));
+        };
+        tagBeta(qobject_cast<QLabel*>(form->labelForField(dynamicTarget)));
+        tagBeta(qobject_cast<QLabel*>(form->labelForField(customToneMapping)));
+        for (int i : { ToneMappingTuning::FilmStrength, ToneMappingTuning::MasteringClip })
+            for (auto* label : toneControls[i]->findChildren<QLabel*>())
+                if (label->buddy() == toneControls[i]->editor()) tagBeta(label);
+        QComboBox* peakDetection = nullptr; // heads the Peak Detection section below
         auto* contrastRecovery = addText(QStringLiteral("Contrast recovery (0 to 2)"), QStringLiteral("contrast_recovery"));
         contrastRecovery->setPlaceholderText(QStringLiteral("Auto or a value from 0 to 2"));
         addRendererAutoStatus(QStringLiteral("contrast_recovery"), contrastRecovery);
@@ -6222,6 +6230,13 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
         for (int section = 0; section < 3; ++section) {
             form = addCollapsibleSection(QString::fromUtf8(ids[section]), QString::fromUtf8(headings[section]),
                 QString::fromUtf8(descriptions[section]), false);
+            // The peak-detection mode sits with the settings it governs.
+            if (section == 2) {
+                peakDetection = addChoice(QStringLiteral("Peak detection"), QStringLiteral("peak_detection"), { QStringLiteral("AUTO"), QStringLiteral("high_quality"), QStringLiteral("on"), QStringLiteral("off") });
+                peakDetection->setItemText(peakDetection->findData(QStringLiteral("on")),
+                    QStringLiteral("Standard"));
+                addRendererAutoStatus(QStringLiteral("peak_detection"), peakDetection);
+            }
             for (int i = starts[section]; i < ends[section]; ++i) {
                 const auto& spec = ToneMappingTuning::Specs()[i];
                 auto* edit = addText(QString::fromUtf8(spec.label), QString::fromUtf8(spec.key));
