@@ -124,6 +124,10 @@ public:
         for (int set = 0; set < 2; ++set)
         {
             sceneRows_[set] = new QWidget;
+            // His theme draws a checked push button as an unchecked one; the
+            // selected scene takes his primary button's colours.
+            sceneRows_[set]->setStyleSheet(QStringLiteral(
+                "QPushButton:checked { color: #f8fcff; background: #1479c4; border-color: #248dd6; }"));
             auto* row = new QHBoxLayout(sceneRows_[set]);
             row->setContentsMargins(0, 0, 0, 0);
             row->setSpacing(6);
