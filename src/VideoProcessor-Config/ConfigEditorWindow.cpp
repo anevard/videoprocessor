@@ -6204,34 +6204,39 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
         auto* customToneMapping = addBoolean(QStringLiteral("Gamut overflow correction (Experimental)"), QStringLiteral("custom_tone_mapping"));
         customToneMapping->setToolTip(QStringLiteral("Off: original tone/gamut mapping. On: smoothly compresses colors near or beyond the target gamut or brightness limits after the selected gamut mapping during HDR tone mapping. May reduce brightness or saturation. Default: Off. Apply to compare."));
         // Each of them carries an amber Beta tag after its label, greyed or not.
-        const auto tagBeta = [](QLabel* label) {
+        // A slider's label has a fixed width, so it wraps to make room; a
+        // checkbox's label widens its column and stays on one line.
+        const auto tagBeta = [](QLabel* label, bool wrap) {
             if (!label) return;
-            label->setWordWrap(true);
+            label->setWordWrap(wrap);
             label->setText(label->text().toHtmlEscaped() + QStringLiteral(" <span style=\"color:#e8a93b\">Beta</span>"));
         };
-        tagBeta(qobject_cast<QLabel*>(form->labelForField(dynamicTarget)));
-        tagBeta(qobject_cast<QLabel*>(form->labelForField(customToneMapping)));
+        tagBeta(qobject_cast<QLabel*>(form->labelForField(dynamicTarget)), false);
+        tagBeta(qobject_cast<QLabel*>(form->labelForField(customToneMapping)), false);
         for (int i : { ToneMappingTuning::FilmStrength, ToneMappingTuning::MasteringClip })
             for (auto* label : toneControls[i]->findChildren<QLabel*>())
-                if (label->buddy() == toneControls[i]->editor()) tagBeta(label);
+                if (label->buddy() == toneControls[i]->editor()) tagBeta(label, true);
         QComboBox* peakDetection = nullptr; // heads the Peak Detection section below
         auto* contrastRecovery = addText(QStringLiteral("Contrast recovery (0 to 2)"), QStringLiteral("contrast_recovery"));
         contrastRecovery->setPlaceholderText(QStringLiteral("Auto or a value from 0 to 2"));
         addRendererAutoStatus(QStringLiteral("contrast_recovery"), contrastRecovery);
 
-        const char* ids[] = { "toneSpline", "toneOther", "tonePeak" };
-        const char* headings[] = { "Tone Mapping: Spline Curve", "Tone Mapping: Other Curves", "Tone Mapping: Peak Detection" };
+        // One section for every curve's settings: the chosen curve's show, the
+        // rest hide with a note.
+        const char* ids[] = { "toneCurves", "tonePeak" };
+        const char* headings[] = { "Tone Mapping: Curves", "Tone Mapping: Peak Detection" };
         const char* descriptions[] = {
-            "Knee controls also apply to ST2094-40. Inactive settings are retained.",
-            "Controls apply only to their named tone-mapping curve.",
+            "Shows the settings the chosen tone-mapping curve uses. Knee controls also apply to ST2094-40.",
             "Controls apply while peak detection is enabled. Defaults follow the selected peak-detection mode." };
-        const int starts[] = { 0, ToneMappingTuning::KneeOffset, ToneMappingTuning::Percentile };
-        const int ends[] = { ToneMappingTuning::KneeOffset, ToneMappingTuning::Percentile, ToneMappingTuning::FilmStrength };
-        for (int section = 0; section < 3; ++section) {
+        const int starts[] = { 0, ToneMappingTuning::Percentile };
+        const int ends[] = { ToneMappingTuning::Percentile, ToneMappingTuning::FilmStrength };
+        constexpr int toneSections = static_cast<int>(std::size(ids));
+        constexpr int peakSection = toneSections - 1;
+        for (int section = 0; section < toneSections; ++section) {
             form = addCollapsibleSection(QString::fromUtf8(ids[section]), QString::fromUtf8(headings[section]),
                 QString::fromUtf8(descriptions[section]), false);
             // The peak-detection mode sits with the settings it governs.
-            if (section == 2) {
+            if (section == peakSection) {
                 peakDetection = addChoice(QStringLiteral("Peak detection"), QStringLiteral("peak_detection"), { QStringLiteral("AUTO"), QStringLiteral("high_quality"), QStringLiteral("on"), QStringLiteral("off") });
                 peakDetection->setItemText(peakDetection->findData(QStringLiteral("on")),
                     QStringLiteral("Standard"));
@@ -6244,20 +6249,22 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
             }
             auto* restore = new QPushButton(QStringLiteral("Restore defaults"));
             restore->setObjectName(QStringLiteral("config.vprenderer.%1.restore_defaults").arg(QString::fromUtf8(ids[section])));
-            restore->setToolTip(QStringLiteral("Restore this section's built-in defaults for the selected profile."));
+            restore->setToolTip(QStringLiteral("Restore the built-in defaults of the settings shown in this section for the selected profile."));
             auto* restoreRow = new QHBoxLayout;
             restoreRow->addStretch();
             restoreRow->addWidget(restore);
             form->addRow(restoreRow);
+            // Hidden settings keep their values for when they show again.
             connect(restore, &QPushButton::clicked, this, [toneControls, start=starts[section], end=ends[section]] {
-                for (int i = start; i < end; ++i) toneControls[i]->restoreDefault();
+                for (int i = start; i < end; ++i)
+                    if (!toneControls[i]->isHidden()) toneControls[i]->restoreDefault();
             });
         }
         // Settings the chosen curve or peak detection cannot use are hidden,
         // with a note inside their section, and the charts sit in a third
         // column beside them.
-        std::array<QLabel*, 3> toneNotes{};
-        for (int section = 0; section < 3; ++section) {
+        std::array<QLabel*, toneSections> toneNotes{};
+        for (int section = 0; section < toneSections; ++section) {
             const QString id = QString::fromUtf8(ids[section]);
             toneNotes[section] = helpLabel(QString());
             toneNotes[section]->setObjectName(QStringLiteral("rendererSection.%1.hiddenNote").arg(id));
@@ -6401,13 +6408,13 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
             if (*peakNoteSection != state->section) peakNote->hide();
             // The curve or peak section a control sits in; -1 for General.
             const auto sectionOf = [&](int i) {
-                for (int section = 0; section < 3; ++section)
+                for (int section = 0; section < toneSections; ++section)
                     if (toneNotes[section]->parentWidget()->isAncestorOf(toneControls[i])) return section;
                 return -1;
             };
             // What this profile's own choices rule out is hidden; what the
             // renderer cannot run stays in view, greyed.
-            std::array<QStringList, 3> hidden;
+            std::array<QStringList, toneSections> hidden;
             for (int i = 0; i < ToneMappingTuning::Count; ++i) {
                 const bool shown = toneControls[i]->isEnabled() ||
                     betaRendererKeys.contains(QString::fromUtf8(ToneMappingTuning::Specs()[i].key));
@@ -6434,13 +6441,13 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
             const QString curveName = curve == "bt2390" ? QStringLiteral("BT.2390") :
                 curve == "st2094-40" ? QStringLiteral("ST2094-40") :
                 curve == "reinhard" ? QStringLiteral("Reinhard") : QStringLiteral("Spline");
-            for (int section = 0; section < 3; ++section) {
+            for (int section = 0; section < toneSections; ++section) {
                 QString text;
                 if (!hidden[section].isEmpty())
-                    text = QStringLiteral("Hidden: %1. %2 The profile keeps their values.").arg(
-                        hidden[section].join(QStringLiteral(", ")), section < 2 ?
-                        QStringLiteral("The %1 curve does not use them.").arg(curveName) :
-                        QStringLiteral("Peak detection is off."));
+                    text = section == peakSection ?
+                        QStringLiteral("Hidden: %1. Peak detection is off. The profile keeps their values.").arg(
+                            hidden[section].join(QStringLiteral(", "))) :
+                        QStringLiteral("Hidden: settings the %1 curve does not use. The profile keeps their values.").arg(curveName);
                 // A hidden setting still blocks Save and Apply when it breaks a rule.
                 if (failing >= 0 && sectionOf(failing) == section && !toneControls[failing]->isEnabled())
                     text += QStringLiteral(" Hidden setting %1 breaks a rule: show it by %2, or reset it.").arg(
