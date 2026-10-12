@@ -100,7 +100,7 @@ protected:
             };
             for (size_t i = 0; i < data_.sourcePq.size(); ++i)
             {
-                if (data_.sourcePq[i] > data_.result.inputMaxPq) break;
+                if (data_.sourcePq[i] > data_.result.scenePeakPq) break;
                 fit(data_.result.profilePq[i], i);
                 if (data_.showDefault) fit(data_.result.defaultPq[i], i);
                 for (const auto& compare : data_.compares)
@@ -195,14 +195,14 @@ protected:
         line([&](size_t i) { return plotted(data_.result.profilePq[i], i); }, profilePen);
         painter.restore();
 
-        // The scene peak libplacebo uses.
-        const double peakX = sx(data_.result.inputMaxPq);
+        // The scene peak, or the mastering peak without peak detection.
+        const double peakX = sx(data_.result.scenePeakPq);
         painter.setPen(QPen(ink, 1.0, Qt::DashLine));
         painter.drawLine(QPointF(peakX, plot.top()), QPointF(peakX, plot.bottom()));
         if (tone && data_.pqToNits)
         {
             const QString peak = (data_.sceneAverage ? QStringLiteral("scene peak ") :
-                QStringLiteral("mastering peak ")) + Nits(data_.pqToNits(data_.result.inputMaxPq));
+                QStringLiteral("mastering peak ")) + Nits(data_.pqToNits(data_.result.scenePeakPq));
             painter.setPen(ink);
             painter.drawText(QPointF(peakX - 4 - metrics.horizontalAdvance(peak), plot.top() + 12), peak);
         }

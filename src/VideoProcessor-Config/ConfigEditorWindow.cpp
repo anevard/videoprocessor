@@ -6361,6 +6361,10 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                 raw = get(name).toStdString();
                 return !raw.empty();
             }, request.toneTuning);
+            const QString dynamicTarget = get("dynamic_target");
+            RendererProfileConfig::ParseBoolean((dynamicTarget.isEmpty() ?
+                RenderingBuiltInDefault(QStringLiteral("dynamic_target")) : dynamicTarget).toStdString(),
+                request.dynamicTarget);
             double white = 0.0, black = HdrTargetLuminance::DefaultBlack;
             request.targetNits = HdrTargetLuminance::ParseWhite(get("sdr_target_nits").toStdString(), white) ?
                 white : 203.0;
@@ -6369,12 +6373,15 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
             request.blackNits = black;
             return request;
         };
-        const auto toneRequest = [inheritedTone, toneDrag, plannedTone, plan = renderingFreezePlan, requestFrom] {
+        const auto toneRequest = [this, inheritedTone, toneDrag, plannedTone, plan = renderingFreezePlan, requestFrom] {
             *plannedTone = plan ? plan() : std::vector<RenderingFreezeWrite>{};
-            return requestFrom([&](const char* name) {
+            auto request = requestFrom([&](const char* name) {
                 return !toneDrag->first.empty() && toneDrag->first == name ?
                     toneDrag->second.trimmed() : inheritedTone(name);
             });
+            request.betaRenderer = rendererChoice_ && effectiveChoiceValue(rendererChoice_).compare(
+                QStringLiteral("VP Renderer (Beta)"), Qt::CaseInsensitive) == 0;
+            return request;
         };
         // Compared profiles come from this page: its profiles, or an exported
         // profile file, through the same request as the edited one.
@@ -6478,6 +6485,11 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
         // Target white and black move every curve, so they redraw the charts too.
         for (auto* edit : { sdrTargetWhiteLevel, sdrBlackLevel })
             connect(edit, &QLineEdit::textChanged, this, [updateToneControls] { updateToneControls(); });
+        // So do Dynamic target and the renderer (the charts draw the Beta only).
+        connect(dynamicTarget, &QCheckBox::toggled, this, [updateToneControls] { updateToneControls(); });
+        if (rendererChoice_)
+            connect(rendererChoice_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [updateToneControls] { updateToneControls(); });
         // Peak-detection mode and percentile are one setting: libplacebo's high
         // quality differs from standard only by percentile 99.995. Changing the
         // mode clears the profile's percentile; a percentile that names a mode

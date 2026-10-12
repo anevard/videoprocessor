@@ -11,7 +11,6 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QToolButton>
-#include <QSlider>
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QVBoxLayout>
@@ -23,7 +22,7 @@
 #include <vector>
 
 // The tone charts column on the Rendering page. Tabs hold the charts (only
-// Brightness for now); the scene sliders under the tab bar, above the charts,
+// Brightness for now); the scene buttons under the tab bar, above the charts,
 // tell every tab what scene to imagine and are not VP settings. The profile comes from the page.
 class ToneChartPanel : public QWidget
 {
@@ -41,7 +40,7 @@ public:
         unavailable_->hide();
         layout->addWidget(unavailable_);
 
-        // The tab bar, then what every tab shares (the scene sliders), then the
+        // The tab bar, then what every tab shares (the scenes), then the
         // tab pages. His theme styles no tab page, so Windows would paint the
         // pages (white in light mode); they get his card colours on every PC.
         tabs_ = new QWidget;
@@ -120,18 +119,33 @@ public:
         compareRow->addStretch(1);
         shared_->addLayout(compareRow);
 
-        peak_ = sceneSlider(peakLabel_, shared_);
-        peak_->setObjectName(QStringLiteral("toneCharts.scenePeak"));
-        average_ = sceneSlider(averageLabel_, shared_);
-        average_->setObjectName(QStringLiteral("toneCharts.sceneAverage"));
-        peak_->setValue(Position(600.0, kPeakLow, kPeakHigh));
-        average_->setValue(Position(15.0, kAverageLow, kAverageHigh));
+        // The scenes: one row for peak detection on, one for off; only the row
+        // the edited profile's peak detection allows is shown.
+        for (int set = 0; set < 2; ++set)
+        {
+            sceneRows_[set] = new QWidget;
+            auto* row = new QHBoxLayout(sceneRows_[set]);
+            row->setContentsMargins(0, 0, 0, 0);
+            row->setSpacing(6);
+            row->addWidget(new QLabel(QStringLiteral("Scene:")));
+            const auto& scenes = Scenes(set == 0);
+            for (size_t i = 0; i < scenes.size(); ++i)
+            {
+                auto* button = new QPushButton(QString::fromLatin1(scenes[i].name));
+                button->setObjectName(QStringLiteral("toneCharts.scene.%1").arg(QString::fromLatin1(scenes[i].name)));
+                button->setCheckable(true);
+                button->setChecked(i == sceneIndex_[set]);
+                connect(button, &QPushButton::clicked, this, [this, set, i] { sceneIndex_[set] = i; redraw(); });
+                sceneButtons_[set].push_back(button);
+                row->addWidget(button);
+            }
+            row->addStretch(1);
+            shared_->addWidget(sceneRows_[set]);
+        }
         sceneNote_ = new QLabel;
         sceneNote_->setProperty("toneHint", true);
         sceneNote_->setWordWrap(true);
         shared_->addWidget(sceneNote_);
-        connect(peak_, &QSlider::valueChanged, this, [this] { redraw(); });
-        connect(average_, &QSlider::valueChanged, this, [this] { redraw(); });
     }
 
     // The profile as VP would run it; the panel adds the scene.
@@ -328,20 +342,21 @@ private:
         }
         if (changed) rebuildChips();
     }
-    static constexpr double kPeakLow = 100.0, kPeakHigh = 10000.0;
-    static constexpr double kAverageLow = 0.1, kAverageHigh = 1000.0;
     static constexpr int kSamples = 360;
 
-    // The scene sliders move in log steps of nits.
-    static int Position(double nits, double low, double high)
+    // A scene the charts imagine, in nits. Measured scenes are what peak
+    // detection reports (peak, average) for a source mastered at `mastering`;
+    // static scenes have only the InfoFrame mastering peak (0: none, read as
+    // 10000).
+    struct Scene { const char* name; double peak; double average; double mastering; };
+    static const std::vector<Scene>& Scenes(bool measured)
     {
-        return static_cast<int>(std::lround(1000.0 * std::log(nits / low) / std::log(high / low)));
-    }
-    static double Value(int position, double low, double high)
-    {
-        const double nits = low * std::pow(high / low, position / 1000.0);
-        const double scale = std::pow(10.0, std::floor(std::log10(nits)) - 1.0);
-        return std::round(nits / scale) * scale; // two significant figures
+        static const std::vector<Scene> withDetection = {
+            { "Dark", 200, 2, 1000 }, { "Mid", 600, 15, 1000 }, { "Bright", 1000, 60, 1000 },
+            { "Very bright", 1000, 150, 1000 }, { "Hot master", 1300, 60, 1000 } };
+        static const std::vector<Scene> withoutDetection = {
+            { "1000 nits", 1000, 0, 1000 }, { "4000 nits", 4000, 0, 4000 }, { "No metadata", 10000, 0, 0 } };
+        return measured ? withDetection : withoutDetection;
     }
 
     static QLabel* heading(const QString& text)
@@ -353,30 +368,11 @@ private:
         return label;
     }
 
-    QSlider* sceneSlider(QLabel*& label, QVBoxLayout* layout)
-    {
-        auto* row = new QHBoxLayout;
-        label = new QLabel;
-        label->setMinimumWidth(170);
-        auto* slider = new QSlider(Qt::Horizontal);
-        slider->setRange(0, 1000);
-        slider->setSingleStep(5);
-        slider->setPageStep(50);
-        row->addWidget(label);
-        row->addWidget(slider, 1);
-        layout->addLayout(row);
-        return slider;
-    }
-
     void showUnavailable(const QString& text)
     {
         unavailable_->setText(text);
         unavailable_->show();
         tabs_->hide();
-        for (QWidget* widget : { static_cast<QWidget*>(peak_), static_cast<QWidget*>(average_),
-            static_cast<QWidget*>(peakLabel_), static_cast<QWidget*>(averageLabel_),
-            static_cast<QWidget*>(sceneNote_) })
-            widget->hide();
     }
 
     void redraw()
@@ -388,10 +384,21 @@ private:
             showUnavailable(QStringLiteral("Charts need VP Renderer's files."));
             return;
         }
+        if (!request_.betaRenderer)
+        {
+            showUnavailable(QStringLiteral("The charts show VP Renderer (Beta) only. Select it under Renderer to see them."));
+            return;
+        }
         ToneCurveProvider::Request request = request_;
-        request.scenePeakNits = Value(peak_->value(), kPeakLow, kPeakHigh);
-        request.sceneAverageNits = std::min(Value(average_->value(), kAverageLow, kAverageHigh),
-            request.scenePeakNits);
+        const int set = request.sceneAverageKnown ? 0 : 1;
+        sceneRows_[set]->show();
+        sceneRows_[1 - set]->hide();
+        for (size_t i = 0; i < sceneButtons_[set].size(); ++i)
+            sceneButtons_[set][i]->setChecked(i == sceneIndex_[set]);
+        const Scene& scene = Scenes(set == 0)[sceneIndex_[set]];
+        request.scenePeakNits = scene.peak;
+        request.sceneAverageNits = scene.average;
+        request.masteringPeakNits = scene.mastering;
         request.sourcePq.resize(kSamples + 1);
         for (int i = 0; i <= kSamples; ++i) request.sourcePq[i] = static_cast<double>(i) / kSamples;
 
@@ -405,10 +412,6 @@ private:
         }
         unavailable_->hide();
         tabs_->show();
-        for (QWidget* widget : { static_cast<QWidget*>(peak_), static_cast<QWidget*>(average_),
-            static_cast<QWidget*>(peakLabel_), static_cast<QWidget*>(averageLabel_),
-            static_cast<QWidget*>(sceneNote_) })
-            widget->show();
 
         chart.sourcePq = request.sourcePq;
         chart.targetPq = functions.nitsToPq(request.targetNits);
@@ -448,6 +451,7 @@ private:
                     sources_.valuesRequest(compared.values) : sources_.profileRequest(compared.section);
                 other.scenePeakNits = request.scenePeakNits;
                 other.sceneAverageNits = request.sceneAverageNits;
+                other.masteringPeakNits = request.masteringPeakNits;
                 other.sourcePq = request.sourcePq;
                 ToneCurveProvider::Result result;
                 std::wstring ignored;
@@ -459,15 +463,25 @@ private:
         tone_->setData(chart);
         tracking_->setData(chart);
 
-        peakLabel_->setText((request.sceneAverageKnown ? QStringLiteral("Scene peak: %1 nits") :
-            QStringLiteral("Mastering peak: %1 nits")).arg(ToneCurveChart::Nits(request.scenePeakNits)));
-        averageLabel_->setText(request.sceneAverageKnown ?
-            QStringLiteral("Scene average: %1 nits").arg(ToneCurveChart::Nits(request.sceneAverageNits)) :
-            QStringLiteral("Scene average: none"));
-        average_->setEnabled(request.sceneAverageKnown);
-        sceneNote_->setText(request.sceneAverageKnown ?
-            QStringLiteral("The scene the charts imagine; not saved, not a VP setting.") :
-            QStringLiteral("Peak detection is off, so there is no scene average and the fallback knee sets the knee."));
+        // What the scene is, then what libplacebo does to it beyond the curve.
+        QStringList note;
+        note << (request.sceneAverageKnown ?
+            QStringLiteral("Measured peak %1, average %2, mastered at %3 nits.")
+                .arg(ToneCurveChart::Nits(scene.peak), ToneCurveChart::Nits(scene.average), ToneCurveChart::Nits(scene.mastering)) :
+            scene.mastering > 0 ?
+            QStringLiteral("Peak detection is off: only the mastering peak, %1 nits; no scene average, so the fallback knee sets the knee.")
+                .arg(ToneCurveChart::Nits(scene.mastering)) :
+            QStringLiteral("Peak detection is off and there is no metadata: libplacebo assumes 10000 nits; no scene average, so the fallback knee sets the knee."));
+        const auto& result = chart.result;
+        if (result.virtualTargetNits > 0)
+            note << QStringLiteral("Dynamic target: tone mapped to a virtual %1 nits, then the whole picture ×%2.")
+                .arg(ToneCurveChart::Nits(result.virtualTargetNits)).arg(result.exposure, 0, 'f', 2);
+        if (result.masteringClip > 1e-3)
+            note << QStringLiteral("Mastering soft clip at strength %1, from %2 nits.")
+                .arg(result.masteringClip, 0, 'f', 2).arg(ToneCurveChart::Nits(0.95 * scene.mastering));
+        note << QStringLiteral("Film strength and gamut overflow correction change colour, not this grey curve. "
+            "The scene is not saved and is not a VP setting; VP smooths the measurement over time.");
+        sceneNote_->setText(note.join(QLatin1Char(' ')));
     }
 
     QLabel* unavailable_ = nullptr;
@@ -484,10 +498,9 @@ private:
     QStackedWidget* pages_ = nullptr;
     ToneCurveChart* tone_ = nullptr;
     ToneCurveChart* tracking_ = nullptr;
-    QSlider* peak_ = nullptr;
-    QSlider* average_ = nullptr;
-    QLabel* peakLabel_ = nullptr;
-    QLabel* averageLabel_ = nullptr;
+    QWidget* sceneRows_[2] = {}; // measured, static
+    std::vector<QPushButton*> sceneButtons_[2];
+    size_t sceneIndex_[2] = { 1, 0 }; // Mid; 1000 nits
     QLabel* sceneNote_ = nullptr;
     ToneCurveProvider::Request request_;
     bool haveRequest_ = false;
