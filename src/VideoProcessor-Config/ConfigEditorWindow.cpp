@@ -6123,16 +6123,7 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                     savedDefault = &settings;
             }
             const auto inheritedValue = [&](const QString& key) {
-                QString inherited = savedDefault ? settingOf(*savedDefault, key) : QString();
-                if (inherited.isEmpty() && savedDefault && key == QStringLiteral("deband_strength"))
-                {
-                    // His legacy deband key, read as his profile loader reads it.
-                    const QString legacy = settingOf(*savedDefault, QStringLiteral("deband")).toLower();
-                    if (legacy == QStringLiteral("on") || legacy == QStringLiteral("true")) inherited = QStringLiteral("default");
-                    else if (legacy == QStringLiteral("off") || legacy == QStringLiteral("false")) inherited = QStringLiteral("off");
-                    else if (legacy == QStringLiteral("auto")) inherited = QStringLiteral("AUTO");
-                }
-                return inherited;
+                return savedDefault ? settingOf(*savedDefault, key) : QString();
             };
             const QStringList profiles = profileSections(QStringLiteral("vprenderer"));
             for (int index = 0; index < profiles.size(); ++index)
@@ -6145,9 +6136,7 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                         field.key == QStringLiteral("diagnostic_disable_shader_cache") ||
                         field.widget->property("requiresExplicitValue").toBool() ||
                         field.widget->property("derivedSetting").toBool() ||
-                        !value(section, field.key).trimmed().isEmpty() ||
-                        (field.key == QStringLiteral("deband_strength") &&
-                            !value(section, QStringLiteral("deband")).trimmed().isEmpty()))
+                        !value(section, field.key).trimmed().isEmpty())
                         continue;
                     // Inherited at the last save: keep what it runs now.
                     const QString frozen = saved && saved != savedDefault &&
@@ -6217,10 +6206,8 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                     continue;
                 const QString raw = value(state->section, field.key).trimmed();
                 const QString unset = unsetValue(field);
-                const bool grey = raw.isEmpty() ?
-                    !(field.key == QStringLiteral("deband_strength") &&
-                        !value(state->section, QStringLiteral("deband")).trimmed().isEmpty()) :
-                    !unset.isEmpty() && raw.compare(unset, Qt::CaseInsensitive) == 0;
+                const bool grey = raw.isEmpty() ||
+                    (!unset.isEmpty() && raw.compare(unset, Qt::CaseInsensitive) == 0);
                 if (field.widget->property("inherited").toBool() == grey) continue;
                 field.widget->setProperty("inherited", grey);
                 field.widget->style()->unpolish(field.widget);
