@@ -15,7 +15,7 @@
 //
 // ColorMap() copies the tone part of LibplaceboRenderParameters::Build()
 // (src/VideoProcessor-Lib/vprenderer/LibplaceboRenderParameters.cpp): the
-// quality preset's colour-map parameters, the chosen curve, its
+// high-quality colour-map parameters (tone mapping ignores Quality), the chosen curve, its
 // VP_LIBPLACEBO_BETA block, and the tone-key loop with its knee_default clamp.
 // That file cannot be compiled here, because it imports libplacebo data
 // directly. If its mapping changes, change this copy.
@@ -60,14 +60,7 @@ namespace
         return value;
     }
 
-    // As QualityPreset() and ToneMapping() in LibplaceboRenderParameters.cpp.
-    const char* QualityPreset(const std::string& quality)
-    {
-        if (quality == "fast") return "pl_render_fast_params";
-        if (quality == "balanced") return "pl_render_default_params";
-        return "pl_render_high_quality_params";
-    }
-
+    // As ToneMapping() in LibplaceboRenderParameters.cpp.
     const char* ToneMapping(const std::string& toneMapping)
     {
         if (toneMapping == "bt2390") return "pl_tone_map_bt2390";
@@ -79,16 +72,11 @@ namespace
     bool ColorMap(const ToneCurveProvider::Request& request, bool useTuning,
         pl_color_map_params& map, std::wstring& error)
     {
-        const pl_render_params* preset = Data<pl_render_params>(QualityPreset(request.quality), error);
-        if (!preset) return false;
-        if (preset->color_map_params)
-            map = *preset->color_map_params;
-        else
-        {
-            const pl_color_map_params* defaults = Data<pl_color_map_params>("pl_color_map_default_params", error);
-            if (!defaults) return false;
-            map = *defaults;
-        }
+        // Quality is a Scaling setting: tone mapping always starts from
+        // libplacebo's high-quality colour map, as Build() does.
+        const pl_color_map_params* defaults = Data<pl_color_map_params>("pl_color_map_high_quality_params", error);
+        if (!defaults) return false;
+        map = *defaults;
         if (request.toneMapping != "auto")
         {
             const pl_tone_map_function* function = Data<pl_tone_map_function>(ToneMapping(request.toneMapping), error);
@@ -244,7 +232,6 @@ namespace
         // curve and constants, peak detection on, High quality. It is drawn on
         // the profile's display (Target nits and black) and the chosen scene.
         ToneCurveProvider::Request fixed = request;
-        fixed.quality = "high";
         fixed.toneMapping = "auto";
         fixed.peakDetection = "auto";
         fixed.toneTuning = {};
