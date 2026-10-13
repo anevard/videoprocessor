@@ -353,8 +353,8 @@ private:
         }
         if (changed) rebuildChips();
     }
-    // The Colour tab: the display it imagines, the map's source brightness,
-    // the map, then the chosen patch's saturation against brightness. None of
+    // The Colour tab: the display it imagines, the map's source level, the
+    // map, then the chosen patch's saturation against level. None of
     // these is saved or is a VP setting.
     void addColourTab()
     {
@@ -389,12 +389,12 @@ private:
         // 1 to 1000 nits on a log scale.
         auto* brightnessRow = new QHBoxLayout;
         brightnessRow->setSpacing(6);
-        brightnessRow->addWidget(new QLabel(QStringLiteral("Map brightness:")));
+        brightnessRow->addWidget(new QLabel(QStringLiteral("Map level:")));
         auto* slider = new QSlider(Qt::Horizontal);
         slider->setObjectName(QStringLiteral("toneCharts.mapBrightness"));
         slider->setRange(0, 1000);
         slider->setValue(static_cast<int>(std::lround(std::log10(mapNits_) / 3.0 * 1000.0)));
-        slider->setToolTip(QStringLiteral("The source brightness every patch on the map is drawn at."));
+        slider->setToolTip(QStringLiteral("Every patch is drawn with its strongest channel at this level, so dim colours such as blue are compared fairly."));
         brightnessRow->addWidget(slider, 1);
         mapNitsLabel_ = new QLabel(QStringLiteral("%1 nits").arg(ToneCurveChart::Nits(mapNits_)));
         mapNitsLabel_->setMinimumWidth(70);
@@ -426,7 +426,7 @@ private:
 
         auto* sweepHead = new QHBoxLayout;
         sweepHead->setSpacing(6);
-        sweepHead->addWidget(heading(QStringLiteral("Saturation against brightness")));
+        sweepHead->addWidget(heading(QStringLiteral("Saturation against level")));
         sweepHead->addStretch(1);
         auto* patch = new QComboBox;
         patch->setObjectName(QStringLiteral("toneCharts.sweepPatch"));
@@ -451,9 +451,9 @@ private:
         pair->addLayout(sweepColumn, 1);
         charts->addLayout(pair, 1);
         auto* note = new QLabel(QStringLiteral(
-            "The source is P3-mastered in a BT.2020 container. A dim ring is a colour this scene "
-            "cannot hold at that brightness. Not shown: contrast recovery, and the interpolation "
-            "of VP Renderer's tone and gamut tables."));
+            "The source is P3-mastered in a BT.2020 container. Level: a colour's strongest channel, "
+            "in nits. A dim ring is a colour this scene cannot hold at that level. Not shown: "
+            "contrast recovery, and the interpolation of VP Renderer's tone and gamut tables."));
         note->setProperty("toneHint", true);
         note->setWordWrap(true);
         charts->addWidget(note);
@@ -706,7 +706,7 @@ private:
     std::vector<QPushButton*> displayButtons_;
     int display_ = 1;          // P3-D65
     double mapNits_ = 50.0;
-    size_t patch_ = 10;        // Light skin
+    size_t patch_ = 13;        // Light skin
     QLabel* mapNitsLabel_ = nullptr;
     ToneCurveProvider::Request request_;
     bool haveRequest_ = false;

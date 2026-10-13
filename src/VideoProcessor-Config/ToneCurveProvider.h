@@ -78,6 +78,9 @@ namespace ToneCurveProvider
             { "P3 red", Gamut::P3D65, false, 1, 0, 0 },
             { "P3 green", Gamut::P3D65, false, 0, 1, 0 },
             { "P3 blue", Gamut::P3D65, false, 0, 0, 1 },
+            { "P3 cyan", Gamut::P3D65, false, 0, 1, 1 },
+            { "P3 magenta", Gamut::P3D65, false, 1, 0, 1 },
+            { "P3 yellow", Gamut::P3D65, false, 1, 1, 0 },
             { "709 red", Gamut::Rec709, false, 1, 0, 0 },
             { "709 green", Gamut::Rec709, false, 0, 1, 0 },
             { "709 blue", Gamut::Rec709, false, 0, 0, 1 },
@@ -105,7 +108,8 @@ namespace ToneCurveProvider
         return patches;
     }
 
-    // One patch at one source brightness, through the colour path.
+    // One patch at one source level (its strongest channel in the mastering
+    // space, in nits), through the colour path.
     struct ColourSample { size_t patch = 0; double sourceNits = 0.0; };
     struct ColourPoint
     {

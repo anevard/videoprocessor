@@ -581,7 +581,13 @@ namespace
             colour.apply(&patchXyz, xyz);
             const float sum = xyz[0] + xyz[1] + xyz[2];
             const float x = xyz[0] / sum, y = xyz[1] / sum;
-            const float luminance = static_cast<float>(sample.sourceNits) / white;
+            // The sample's level is the patch's strongest channel in the
+            // mastering space, so every colour is compared at the same drive
+            // and a dim colour such as blue is not pushed past the scene.
+            float unit[3] = { x / y, 1.0f, (1.0f - x - y) / y };
+            colour.apply(&toMastering, unit);
+            const float strongest = (std::max)((std::max)(unit[0], (std::max)(unit[1], unit[2])), 1e-9f);
+            const float luminance = static_cast<float>(sample.sourceNits) / white / strongest;
             const float source[3] = { x / y * luminance, luminance, (1.0f - x - y) / y * luminance };
             UvOf(source, point.sourceU, point.sourceV);
 
