@@ -10,6 +10,9 @@
 // functions registered and shows the charts as unavailable.
 namespace ToneCurveProvider
 {
+    // One part of a scene: a share of the picture at one brightness.
+    struct ScenePart { double share; double nits; };
+
     struct Request
     {
         // Values as the profile resolves them: lower case, "auto" when unset.
@@ -25,10 +28,11 @@ namespace ToneCurveProvider
         bool betaRenderer = false;
         double targetNits = 203.0;
         double blackNits = 0.0;
-        // The scene the charts imagine; not VP settings. Without peak detection
-        // the peak is the metadata peak and there is no scene average.
+        // The scene the charts imagine; not VP settings. With peak detection it
+        // is a mix of brightnesses whose brightest part is the peak; without,
+        // the peak is the metadata peak and there is no mix.
         double scenePeakNits = 600.0;
-        double sceneAverageNits = 15.0;
+        std::vector<ScenePart> sceneMix{ { 0.97, 13.0 }, { 0.03, 600.0 } };
         bool sceneAverageKnown = true;
         // The source's mastering peak (InfoFrame); 0 when it has none.
         double masteringPeakNits = 0.0;
@@ -48,6 +52,9 @@ namespace ToneCurveProvider
         double virtualTargetNits = 0.0; // the dynamic target's virtual peak; 0 when inactive
         double exposure = 1.0;          // the dynamic target's gain on the whole picture
         double masteringClip = 0.0;     // the mastering soft clip's strength as applied
+        // What peak detection would measure on the mix; 0 without detection.
+        double scenePqAverageNits = 0.0;     // the PQ average, which sets the knee
+        double sceneLinearAverageNits = 0.0; // the linear average, which drives the dynamic target
     };
 
     // The Colour tab. The display is a chart choice, not VP's target primaries

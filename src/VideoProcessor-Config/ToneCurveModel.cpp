@@ -25,20 +25,21 @@
 //
 // Map() then repeats what pl_shader_color_map_ex() in his fork's
 // src/shaders/colorspace.c (codex/vp-master-beta 8bccd657) computes and does
-// not export, in its order, citing its lines: infer, round near-equal peaks,
-// the signal black, the input peak, the dynamic target and the mastering soft
-// clip. On grey, film strength changes nothing (both ends of its blend are the
-// same, lines 2341-2379) and gamut overflow correction acts on colour only.
+// not export, in its order, citing its lines: the source's metadata with what
+// peak detection reports, its nominal luminance, infer, round near-equal
+// peaks, the signal black, the input peak, the dynamic target and the
+// mastering soft clip. On grey, film strength changes nothing (both ends of
+// its blend are the same, lines 2341-2379) and gamut overflow correction acts
+// on colour only.
 namespace
 {
-    // The source minimum the explorer assumes.
-    constexpr float kSourceMinimumNits = 1e-6f;
-
     struct Library
     {
         void (*infer)(pl_tone_map_params*) = nullptr;
         float (*sample)(float, const pl_tone_map_params*) = nullptr;
         float (*rescale)(pl_hdr_scaling, pl_hdr_scaling, float) = nullptr;
+        void (*inferSpace)(pl_color_space*) = nullptr;
+        void (*nominalLuma)(const pl_nominal_luma_params*) = nullptr;
     };
 
     bool Resolve(Library& library, std::wstring& error)
@@ -48,7 +49,9 @@ namespace
         library.infer = reinterpret_cast<decltype(library.infer)>(ToneCurveRuntime::Find("pl_tone_map_params_infer"));
         library.sample = reinterpret_cast<decltype(library.sample)>(ToneCurveRuntime::Find("pl_tone_map_sample"));
         library.rescale = reinterpret_cast<decltype(library.rescale)>(ToneCurveRuntime::Find("pl_hdr_rescale"));
-        if (library.infer && library.sample && library.rescale)
+        library.inferSpace = reinterpret_cast<decltype(library.inferSpace)>(ToneCurveRuntime::Find("pl_color_space_infer"));
+        library.nominalLuma = reinterpret_cast<decltype(library.nominalLuma)>(ToneCurveRuntime::Find("pl_color_space_nominal_luma_ex"));
+        if (library.infer && library.sample && library.rescale && library.inferSpace && library.nominalLuma)
             return true;
         error = L"libplacebo-377.dll is missing a tone-mapping function";
         return false;
@@ -115,6 +118,61 @@ namespace
         float masterNits = 0.0f;
     };
 
+    // What peak detection reports for the scene's mix
+    // (pl_get_detected_hdr_metadata, 1579-1604), its two averages formed as
+    // the detector forms them (1242-1251): the mean of the PQ values
+    // (avg_pq_y, the knee's) and the mean of linear light (scene_avg, the
+    // dynamic target's). On grey, max Y and max RGB are both the peak.
+    bool Detected(const Library& library, const ToneCurveProvider::Request& request,
+        pl_hdr_metadata& detected)
+    {
+        if (!request.sceneAverageKnown || request.sceneMix.empty())
+            return false;
+        double share = 0.0, sumPq = 0.0, sumLinear = 0.0;
+        for (const auto& part : request.sceneMix)
+        {
+            share += part.share;
+            sumPq += part.share * library.rescale(PL_HDR_NITS, PL_HDR_PQ, static_cast<float>(part.nits));
+            sumLinear += part.share * part.nits;
+        }
+        if (!(share > 0.0))
+            return false;
+        detected = pl_hdr_metadata{};
+        const float peak = static_cast<float>(request.scenePeakNits);
+        detected.max_pq_y = library.rescale(PL_HDR_NITS, PL_HDR_PQ, peak);
+        detected.avg_pq_y = static_cast<float>(sumPq / share);
+        detected.scene_avg = library.rescale(PL_HDR_PQ, PL_HDR_NITS,
+            library.rescale(PL_HDR_NITS, PL_HDR_PQ, static_cast<float>(sumLinear / share)));
+        for (float& channel : detected.scene_max)
+            channel = peak;
+        return true;
+    }
+
+    // The source as the shader sees it: a PQ source whose static metadata is
+    // the mastering peak, with what peak detection reports filling in what
+    // the source does not author (1905-1917), then inferred as
+    // pl_color_space_infer_map does to an HDR source (997-1036).
+    pl_color_space Source(const Library& library, const ToneCurveProvider::Request& request)
+    {
+        pl_color_space src{};
+        src.primaries = PL_COLOR_PRIM_BT_2020;
+        src.transfer = PL_COLOR_TRC_PQ;
+        src.hdr.max_luma = static_cast<float>(request.masteringPeakNits);
+        pl_hdr_metadata detected{};
+        if (Detected(library, request, detected))
+        {
+            // PL_DEF, src/common.h 135 (not exported).
+            const auto def = [](float x, float d) { return x ? x : d; };
+            src.hdr.max_pq_y  = def(src.hdr.max_pq_y,  detected.max_pq_y);
+            src.hdr.avg_pq_y  = def(src.hdr.avg_pq_y,  detected.avg_pq_y);
+            src.hdr.scene_avg = def(src.hdr.scene_avg, detected.scene_avg);
+            for (int i = 0; i < 3; i++)
+                src.hdr.scene_max[i] = def(src.hdr.scene_max[i], detected.scene_max[i]);
+        }
+        library.inferSpace(&src);
+        return src;
+    }
+
     Mapping Map(const Library& library, const pl_color_map_params& map,
         const ToneCurveProvider::Request& request)
     {
@@ -124,7 +182,8 @@ namespace
         const auto nits = [&](float value) { return library.rescale(PL_HDR_PQ, PL_HDR_NITS, value); };
         // Peak detection measures the scene; without it, or on a scene with
         // only metadata, there is only metadata.
-        const bool measured = request.sceneAverageKnown && request.sceneAverageNits > 0;
+        const pl_color_space src = Source(library, request);
+        const bool measured = src.hdr.avg_pq_y > 0;
         Mapping mapping;
         pl_tone_map_params& tone = mapping.tone;
         // A null function becomes pl_tone_map_clip inside infer, as in the
@@ -134,9 +193,17 @@ namespace
         tone.input_scaling = PL_HDR_PQ;
         tone.output_scaling = PL_HDR_PQ;
         tone.lut_size = map.lut_size;
-        tone.input_min = pq(kSourceMinimumNits);
-        tone.input_max = pq(request.scenePeakNits);
-        tone.input_avg = measured ? pq(request.sceneAverageNits) : 0.0f;
+        tone.hdr = src.hdr;
+        // 1947-1954: the source's peak, floor and average, as libplacebo picks them.
+        pl_nominal_luma_params luma{};
+        luma.color = &src;
+        luma.metadata = map.metadata;
+        luma.scaling = tone.input_scaling;
+        luma.out_min = &tone.input_min;
+        luma.out_max = &tone.input_max;
+        luma.out_avg = &tone.input_avg;
+        library.nominalLuma(&luma);
+        // The display as VP sets it (ApplyTargetLuminance): its black and peak.
         tone.output_min = pq(LibplaceboRenderParameters::ResolveTargetBlack(
             static_cast<float>(request.blackNits)));
         tone.output_max = pq(request.targetNits);
@@ -155,13 +222,18 @@ namespace
         if (!map.inverse_tone_mapping)
         {
             tone.input_max = (std::max)(tone.input_max, tone.output_max);
-            if (measured && request.scenePeakNits > 0)
-                tone.input_max = (std::max)(tone.input_max, pq(request.scenePeakNits));
+            const float sceneMax = (std::max)(src.hdr.scene_max[0],
+                (std::max)(src.hdr.scene_max[1], src.hdr.scene_max[2]));
+            if (sceneMax > 0)
+                tone.input_max = (std::max)(tone.input_max, pq(sceneMax));
         }
 
-        // 1999-2050, the dynamic target.
+        // 1999-2050, the dynamic target. It takes the linear average, or the
+        // PQ average when there is none (2003-2005).
         const float outMinPhys = tone.output_min;
-        const float sceneAverage = measured ? static_cast<float>(request.sceneAverageNits) : 0.0f;
+        float sceneAverage = src.hdr.scene_avg;
+        if (!(sceneAverage > 0) && src.hdr.avg_pq_y > 0)
+            sceneAverage = nits(src.hdr.avg_pq_y);
         if (map.dynamic_target && sceneAverage > 0 && !map.inverse_tone_mapping &&
             tone.input_max > tone.output_max + 1e-4f)
         {
@@ -260,6 +332,12 @@ namespace
         result.virtualTargetNits = profileMap.virtualTargetNits;
         result.exposure = profileMap.exposure;
         result.masteringClip = profileMap.clip;
+        pl_hdr_metadata detected{};
+        if (Detected(library, request, detected))
+        {
+            result.scenePqAverageNits = library.rescale(PL_HDR_PQ, PL_HDR_NITS, detected.avg_pq_y);
+            result.sceneLinearAverageNits = detected.scene_avg;
+        }
         return true;
     }
 
