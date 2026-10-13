@@ -266,7 +266,10 @@ private:
     {
         const QRectF plot = QRectF(rect()).adjusted(48, 8, -10, -22);
         if (plot.width() < 40 || plot.height() < 40 || data_.sweepNits.size() < 2) return;
-        const double x0 = std::log10(data_.sweepNits.front()), x1 = std::log10(data_.sweepNits.back());
+        // Source level on a PQ scale, as the Brightness charts.
+        const auto toPq = ToneCurveProvider::Registered().nitsToPq;
+        const auto scale = [&](double nits) { return toPq ? toPq(nits) : std::log10(nits); };
+        const double x0 = scale(data_.sweepNits.front()), x1 = scale(data_.sweepNits.back());
         // Saturation axis: fitted to the drawn values, always showing 1.00.
         double low = 0.8, high = 1.1;
         for (const Series& series : data_.series)
@@ -279,7 +282,7 @@ private:
         const double pad = (high - low) * 0.08;
         low -= pad;
         high += pad;
-        const auto sx = [&](double nits) { return plot.left() + (std::log10(nits) - x0) / (x1 - x0) * plot.width(); };
+        const auto sx = [&](double nits) { return plot.left() + (scale(nits) - x0) / (x1 - x0) * plot.width(); };
         const auto sy = [&](double s) { return plot.bottom() - (s - low) / (high - low) * plot.height(); };
 
         const QColor grid(QString::fromLatin1(kGrid)), axis(QString::fromLatin1(kAxis)), ink(QString::fromLatin1(kInk));
@@ -358,10 +361,9 @@ private:
 
         if (hover_.x() >= plot.left() && hover_.x() <= plot.right() && hover_.y() >= plot.top() && hover_.y() <= plot.bottom())
         {
-            const double nits = std::pow(10.0, x0 + (hover_.x() - plot.left()) / plot.width() * (x1 - x0));
             size_t index = 0;
             for (size_t i = 1; i < data_.sweepNits.size(); ++i)
-                if (std::abs(std::log(data_.sweepNits[i] / nits)) < std::abs(std::log(data_.sweepNits[index] / nits))) index = i;
+                if (std::abs(sx(data_.sweepNits[i]) - hover_.x()) < std::abs(sx(data_.sweepNits[index]) - hover_.x())) index = i;
             QStringList lines;
             lines << QStringLiteral("%1, strongest channel at %2 nits").arg(QString::fromLatin1(ToneCurveProvider::Patches()[data_.patch].name),
                 ToneCurveChart::Nits(data_.sweepNits[index]));
@@ -385,16 +387,11 @@ private:
         const auto& patches = ToneCurveProvider::Patches();
         const QRectF plot = QRectF(rect()).adjusted(40, 10, -10, -26);
         if (plot.width() < 60 || plot.height() < 40 || patches.empty()) return;
-        double reach = 5.0;
-        for (const Series& series : data_.series)
-            for (const auto& point : series.points)
-                if (point.valid) reach = std::max(reach, std::abs(point.hue));
-        const double raw = reach / 2.0, magnitude = std::pow(10.0, std::floor(std::log10(raw)));
-        double step = magnitude * 10.0;
-        for (double factor : { 1.0, 2.0, 2.5, 5.0, 10.0 })
-            if (factor * magnitude >= raw) { step = factor * magnitude; break; }
-        const double top = std::ceil(reach / step) * step;
-        const auto sy = [&](double degrees) { return plot.center().y() - degrees / top * plot.height() / 2.0; };
+        // A fixed scale, so turns compare across scenes, zones and profiles;
+        // a turn beyond it is drawn to the edge (the hover gives the number).
+        constexpr double top = 10.0, step = 5.0;
+        const auto sy = [&](double degrees) {
+            return plot.center().y() - std::clamp(degrees, -top, top) / top * plot.height() / 2.0; };
         const double column = plot.width() / patches.size();
         const auto cx = [&](size_t i) { return plot.left() + column * (i + 0.5); };
 

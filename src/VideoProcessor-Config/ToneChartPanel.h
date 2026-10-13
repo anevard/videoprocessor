@@ -506,12 +506,13 @@ private:
         std::vector<ToneCurveProvider::ColourSample> mapSamples, sweepSamples;
         for (size_t i = 0; i < ToneCurveProvider::Patches().size(); ++i)
             mapSamples.push_back({ i, zoneNits });
-        // From 0.1 nits to the scene peak (or the mastering peak without detection).
-        const double bottom = 0.1, top = (std::max)(request.scenePeakNits, 10.0);
+        // From 0.1 nits to the scene peak (or the mastering peak without
+        // detection), evenly in PQ, the sweep's scale.
+        const double bottomPq = functions.nitsToPq(0.1), topPq = functions.nitsToPq((std::max)(request.scenePeakNits, 10.0));
         constexpr int kSweep = 96;
         for (int i = 0; i <= kSweep; ++i)
         {
-            const double nits = bottom * std::pow(top / bottom, static_cast<double>(i) / kSweep);
+            const double nits = functions.pqToNits(bottomPq + (topPq - bottomPq) * i / kSweep);
             sweep.sweepNits.push_back(nits);
             sweepSamples.push_back({ patch_, nits });
         }
