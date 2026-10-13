@@ -12,7 +12,7 @@
 #include <vector>
 
 // One Colour chart: where the patches land on the display (u'v'), or the
-// chosen patch's saturation against its source brightness. Every number drawn
+// chosen patch's saturation against its source level. Every number drawn
 // comes from the colour model, through libplacebo; the source colour, the
 // ring, is the reference, as PQ is for grey.
 class ColourChart : public QWidget
@@ -21,7 +21,7 @@ public:
     enum class Kind { Map, Sweep };
     // A line or set of markers: the edited profile (bold), libplacebo's
     // default (dashed), or a compared profile. On the map, one point per
-    // patch; on the sweep, one per source brightness.
+    // patch; on the sweep, one per source level.
     struct Series
     {
         QString name;
@@ -34,9 +34,9 @@ public:
     {
         ToneCurveProvider::GamutCorners display, rec709, bt2020;
         QString displayName;
-        double mapNits = 50.0;          // the map's source brightness
+        double mapNits = 50.0;          // the map's source level
         size_t patch = 0;               // the sweep's patch
-        std::vector<double> sweepNits;  // the sweep's source brightnesses
+        std::vector<double> sweepNits;  // the sweep's source levels
         std::vector<Series> series;
     };
 
@@ -162,7 +162,7 @@ private:
 
         // Each patch: its source ring in its own colour, a line to the edited
         // profile's point, and a point per line (hollow: clipped). A patch the
-        // scene cannot hold at this brightness is a dim ring only.
+        // scene cannot hold at this level is a dim ring only.
         const auto& patches = ToneCurveProvider::Patches();
         const Series& edited = data_.series.front();
         for (size_t i = 0; i < patches.size() && i < edited.points.size(); ++i)
@@ -246,11 +246,11 @@ private:
             }
         if (nearest >= patches.size()) return;
         QStringList lines;
-        lines << QStringLiteral("%1, %2 nits in").arg(QString::fromLatin1(patches[nearest].name),
+        lines << QStringLiteral("%1, level %2 nits in").arg(QString::fromLatin1(patches[nearest].name),
             ToneCurveChart::Nits(data_.mapNits));
         const auto& source = data_.series.front().points[nearest];
         if (!source.valid)
-            lines << QStringLiteral("This scene cannot hold it at this brightness.");
+            lines << QStringLiteral("This scene cannot hold it at this level.");
         else
             for (const Series& series : data_.series)
                 if (nearest < series.points.size())
@@ -307,7 +307,7 @@ private:
         painter.setPen(axis);
         painter.drawLine(plot.bottomLeft(), plot.bottomRight());
         painter.setPen(ink);
-        const QString xLabel = QStringLiteral("source nits");
+        const QString xLabel = QStringLiteral("source level, nits");
         painter.drawText(QPointF(plot.right() - metrics.horizontalAdvance(xLabel), height() - 2.0), xLabel);
 
         painter.save();
@@ -337,7 +337,7 @@ private:
         }
         painter.restore();
 
-        // The map's brightness.
+        // The map's level.
         const double mapX = sx(std::clamp(data_.mapNits, data_.sweepNits.front(), data_.sweepNits.back()));
         painter.setPen(QPen(ink, 1.0, Qt::DashLine));
         painter.drawLine(QPointF(mapX, plot.top()), QPointF(mapX, plot.bottom()));
@@ -359,11 +359,11 @@ private:
             for (size_t i = 1; i < data_.sweepNits.size(); ++i)
                 if (std::abs(std::log(data_.sweepNits[i] / nits)) < std::abs(std::log(data_.sweepNits[index] / nits))) index = i;
             QStringList lines;
-            lines << QStringLiteral("%1, %2 nits in").arg(QString::fromLatin1(ToneCurveProvider::Patches()[data_.patch].name),
+            lines << QStringLiteral("%1, level %2 nits in").arg(QString::fromLatin1(ToneCurveProvider::Patches()[data_.patch].name),
                 ToneCurveChart::Nits(data_.sweepNits[index]));
             const auto& first = data_.series.front().points;
             if (index < first.size() && !first[index].valid)
-                lines << QStringLiteral("This scene cannot hold it at this brightness.");
+                lines << QStringLiteral("This scene cannot hold it at this level.");
             else
                 for (const Series& series : data_.series)
                     if (index < series.points.size())
