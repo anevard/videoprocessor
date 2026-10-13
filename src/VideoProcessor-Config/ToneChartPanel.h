@@ -416,16 +416,6 @@ private:
         mapColumn->addWidget(heading(QStringLiteral("Where colours land on the display (u′v′)")));
         map_ = new ColourChart(ColourChart::Kind::Map);
         mapColumn->addWidget(map_, 1);
-        mapColumn->addWidget(heading(QStringLiteral("How far each colour's hue turns")));
-        auto* hueHelp = new QLabel(QStringLiteral(
-            "Degrees round white on the map, in the zone shown. Plus turns red towards yellow, green "
-            "towards cyan, blue towards magenta; minus the other way. Bars: the edited profile; "
-            "ticks: the other lines. A faded swatch is a colour this scene cannot hold."));
-        hueHelp->setProperty("toneHint", true);
-        hueHelp->setWordWrap(true);
-        mapColumn->addWidget(hueHelp);
-        hue_ = new ColourChart(ColourChart::Kind::Hue);
-        mapColumn->addWidget(hue_);
         pair->addLayout(mapColumn, 1);
         auto* divider = new QWidget;
         divider->setObjectName(QStringLiteral("toneChartsDivider"));
@@ -459,6 +449,16 @@ private:
         sweepColumn->addWidget(sweepHelp);
         sweep_ = new ColourChart(ColourChart::Kind::Sweep);
         sweepColumn->addWidget(sweep_, 1);
+        sweepColumn->addWidget(heading(QStringLiteral("How far each colour's hue turns")));
+        auto* hueHelp = new QLabel(QStringLiteral(
+            "Degrees round white on the map, in the zone shown. Plus turns red towards yellow, green "
+            "towards cyan, blue towards magenta; minus the other way. Bars: the edited profile; "
+            "ticks: the other lines. A faded swatch is a colour this scene cannot hold."));
+        hueHelp->setProperty("toneHint", true);
+        hueHelp->setWordWrap(true);
+        sweepColumn->addWidget(hueHelp);
+        hue_ = new ColourChart(ColourChart::Kind::Hue);
+        sweepColumn->addWidget(hue_);
         pair->addLayout(sweepColumn, 1);
         charts->addLayout(pair, 1);
         auto* note = new QLabel(QStringLiteral(
