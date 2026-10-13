@@ -116,6 +116,8 @@ namespace
         float virtualTargetNits = 0.0f;
         float clip = 0.0f;         // mclip
         float masterNits = 0.0f;
+        bool measured = false;     // peak detection reported the scene
+        pl_hdr_metadata detected{}; // what it reported
     };
 
     // What peak detection reports for the scene's mix
@@ -152,22 +154,22 @@ namespace
     // the mastering peak, with what peak detection reports filling in what
     // the source does not author (1905-1917), then inferred as
     // pl_color_space_infer_map does to an HDR source (997-1036).
-    pl_color_space Source(const Library& library, const ToneCurveProvider::Request& request)
+    pl_color_space Source(const Library& library, const ToneCurveProvider::Request& request,
+        const pl_hdr_metadata* detected)
     {
         pl_color_space src{};
         src.primaries = PL_COLOR_PRIM_BT_2020;
         src.transfer = PL_COLOR_TRC_PQ;
         src.hdr.max_luma = static_cast<float>(request.masteringPeakNits);
-        pl_hdr_metadata detected{};
-        if (Detected(library, request, detected))
+        if (detected)
         {
             // PL_DEF, src/common.h 135 (not exported).
             const auto def = [](float x, float d) { return x ? x : d; };
-            src.hdr.max_pq_y  = def(src.hdr.max_pq_y,  detected.max_pq_y);
-            src.hdr.avg_pq_y  = def(src.hdr.avg_pq_y,  detected.avg_pq_y);
-            src.hdr.scene_avg = def(src.hdr.scene_avg, detected.scene_avg);
+            src.hdr.max_pq_y  = def(src.hdr.max_pq_y,  detected->max_pq_y);
+            src.hdr.avg_pq_y  = def(src.hdr.avg_pq_y,  detected->avg_pq_y);
+            src.hdr.scene_avg = def(src.hdr.scene_avg, detected->scene_avg);
             for (int i = 0; i < 3; i++)
-                src.hdr.scene_max[i] = def(src.hdr.scene_max[i], detected.scene_max[i]);
+                src.hdr.scene_max[i] = def(src.hdr.scene_max[i], detected->scene_max[i]);
         }
         library.inferSpace(&src);
         return src;
@@ -182,9 +184,9 @@ namespace
         const auto nits = [&](float value) { return library.rescale(PL_HDR_PQ, PL_HDR_NITS, value); };
         // Peak detection measures the scene; without it, or on a scene with
         // only metadata, there is only metadata.
-        const pl_color_space src = Source(library, request);
-        const bool measured = src.hdr.avg_pq_y > 0;
         Mapping mapping;
+        mapping.measured = Detected(library, request, mapping.detected);
+        const pl_color_space src = Source(library, request, mapping.measured ? &mapping.detected : nullptr);
         pl_tone_map_params& tone = mapping.tone;
         // A null function becomes pl_tone_map_clip inside infer, as in the
         // shader. The deprecated `param` stays 0: VP never sets it.
@@ -260,10 +262,10 @@ namespace
         mapping.masterNits = static_cast<float>(request.masteringPeakNits);
         float clip = (std::clamp)(map.mastering_clip, 0.0f, 1.0f);
         if (clip > 0.0f && mapping.masterNits > 0.0f && mapping.masterNits < 9999.0f &&
-            measured && request.scenePeakNits > 0)
+            mapping.measured && mapping.detected.max_pq_y > 0.0f)
         {
             // pl_smoothstep, src/common.h 140.
-            float x = (static_cast<float>(request.scenePeakNits) / mapping.masterNits - 1.1f) / (1.4f - 1.1f);
+            float x = (nits(mapping.detected.max_pq_y) / mapping.masterNits - 1.1f) / (1.4f - 1.1f);
             x = (std::clamp)(x, 0.0f, 1.0f);
             clip *= 1.0f - x * x * (3.0f - 2.0f * x);
         }
@@ -332,11 +334,10 @@ namespace
         result.virtualTargetNits = profileMap.virtualTargetNits;
         result.exposure = profileMap.exposure;
         result.masteringClip = profileMap.clip;
-        pl_hdr_metadata detected{};
-        if (Detected(library, request, detected))
+        if (profileMap.measured)
         {
-            result.scenePqAverageNits = library.rescale(PL_HDR_PQ, PL_HDR_NITS, detected.avg_pq_y);
-            result.sceneLinearAverageNits = detected.scene_avg;
+            result.scenePqAverageNits = library.rescale(PL_HDR_PQ, PL_HDR_NITS, profileMap.detected.avg_pq_y);
+            result.sceneLinearAverageNits = profileMap.detected.scene_avg;
         }
         return true;
     }
