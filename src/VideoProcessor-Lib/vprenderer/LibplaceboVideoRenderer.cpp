@@ -3852,6 +3852,11 @@ struct LibplaceboVideoRenderer::Impl
 	// infer a render budget from DXGI frame-statistics counters alone: drivers
 	// can silently switch those counters to another output.
 	std::atomic<double> renderLoadDisplayRefreshHz{ 0.0 };
+	// Stats OSD copy of libplacebo's peak-detection result; written by the
+	// render thread at most every 250 ms, read by the host's OSD timer.
+	mutable std::mutex measuredHdrMutex;
+	RendererMeasuredHdr measuredHdr;
+	uint64_t measuredHdrNextTick = 0;
 	ActivePictureTransitionModel nlsTransition;
 	ConfiguredShaderRule nlsRule;
 	std::string requestedShaderSelector;
@@ -5410,6 +5415,38 @@ struct LibplaceboVideoRenderer::Impl
 				decision.reason);
 		}
 		return decision;
+	}
+
+	// Render thread only: pl_renderer_get_hdr_metadata polls the peak buffer.
+	void PublishMeasuredHdr(bool rendered)
+	{
+		if (!rendered)
+			return;
+		const uint64_t now = GetTickCount64();
+		if (now < measuredHdrNextTick)
+			return;
+		measuredHdrNextTick = now + 250;
+
+		RendererMeasuredHdr next;
+		next.peakDetectionEnabled = renderParams.peak_detect_params != nullptr;
+		pl_hdr_metadata metadata{};
+		if (next.peakDetectionEnabled &&
+			pl_renderer_get_hdr_metadata(renderer, &metadata))
+		{
+			next.valid = true;
+			next.maxNits = pl_hdr_rescale(
+				PL_HDR_PQ, PL_HDR_NITS, metadata.max_pq_y);
+			next.avgNits = pl_hdr_rescale(
+				PL_HDR_PQ, PL_HDR_NITS, metadata.avg_pq_y);
+		}
+		std::lock_guard<std::mutex> lock(measuredHdrMutex);
+		measuredHdr = next;
+	}
+
+	RendererMeasuredHdr MeasuredHdrSnapshot() const
+	{
+		std::lock_guard<std::mutex> lock(measuredHdrMutex);
+		return measuredHdr;
 	}
 
 	void LogHdrPeakAnalysisMetrics(
@@ -14800,6 +14837,7 @@ struct LibplaceboVideoRenderer::Impl
 		preparing.Complete();
 		LogHdrPeakAnalysisMetrics(
 			hdrPeakAnalysisDecision, sourceSequence, rendered);
+		PublishMeasuredHdr(rendered);
 		const double renderMs = std::chrono::duration<double, std::milli>(
 			SteadyClock::now() - renderStart).count();
         if (!rendered && targetLutApplied)
@@ -17405,6 +17443,16 @@ bool LibplaceboVideoRenderer::GetRenderLoad(RendererRenderLoad& load) const
 	// reads `settling` and `gpuValid` to decide what to print; whether a
 	// sample happens to be in the window is not the caller's question.
 	return load.supported;
+}
+
+
+bool LibplaceboVideoRenderer::GetMeasuredHdr(RendererMeasuredHdr& measured) const
+{
+	measured = {};
+	if (!m_impl)
+		return false;
+	measured = m_impl->MeasuredHdrSnapshot();
+	return true;
 }
 
 

@@ -121,6 +121,7 @@ public:
 		double& captureToTargetMs) const override;
 	bool GetPresentationTimingStatus(CString& status) const override;
 	bool GetRenderLoad(RendererRenderLoad& load) const override;
+	bool GetMeasuredHdr(RendererMeasuredHdr& measured) const override;
 	void SetRenderLoadDisplayRefreshRate(double refreshRateHz) override;
 	bool SupportsNativeStatsOverlay() const override { return true; }
 	bool SetNativeStatsOverlay(const uint8_t* pixels, size_t byteCount,
