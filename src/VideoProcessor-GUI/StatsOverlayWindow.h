@@ -28,8 +28,9 @@ struct StatsData
 	CString eotf;              // e.g., "PQ"
 	CString colorspace;        // e.g., "BT.2020"
 	CString dtmProfile;        // active Rendering / DTM profile, e.g., "Rich"
-	CString hdr10;             // static metadata VP hands the renderer
-	CString measuredHdr;       // libplacebo peak detection, e.g., "peak 612 / avg 38 nits"
+	CString hdr10;             // static metadata of the rendered frame, or "DV | M min-max"
+	CString measuredHdr;       // libplacebo peak detection, e.g., "peak 612 / avg 38 nits",
+	                           // then any scene values the frame carries ("| L1 900 / 120")
 	CString pixelFormat;       // e.g., "P010"
 	CString viewport;          // e.g., "cinema (2.35:1)"
 	CString rendererName;      // selected presentation backend

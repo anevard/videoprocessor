@@ -517,9 +517,9 @@ bool LibplaceboPluginVideoRenderer::GetRenderLoad(RendererRenderLoad& load) cons
 }
 
 
-bool LibplaceboPluginVideoRenderer::GetMeasuredHdr(RendererMeasuredHdr& measured) const
+bool LibplaceboPluginVideoRenderer::GetHdrStatus(RendererHdrStatus& status) const
 {
-	return m_renderer->GetMeasuredHdr(measured);
+	return m_renderer->GetHdrStatus(status);
 }
 
 

@@ -47,15 +47,28 @@ enum RendererState
 const TCHAR* ToString(const RendererState rendererState);
 
 
-// libplacebo's own peak-detection result for the picture being tone mapped,
-// as returned by pl_renderer_get_hdr_metadata and converted to nits with
-// pl_hdr_rescale. Not the source's static HDR10 metadata.
-struct RendererMeasuredHdr
+// HDR luminance for the picture being tone mapped, for the stats OSD, in nits.
+// The static and scene values are what the frame handed to pl_render_image
+// carries, so they follow any LLDV substitution or Dolby Vision metadata
+// without knowing about either. The detected values are libplacebo's own peak
+// detection (pl_renderer_get_hdr_metadata). When the frame carries its own
+// scene peak/average, libplacebo tone maps from those; the stable renderer's
+// libplacebo then stops measuring, the beta renderer's keeps measuring.
+struct RendererHdrStatus
 {
+	bool hdr = false;            // the frame's transfer is HDR
+	bool dolbyVision = false;    // the frame carries Dolby Vision metadata
+	double maxCll = 0.0;
+	double maxFall = 0.0;
+	double masteringMin = 0.0;
+	double masteringMax = 0.0;
+	bool sceneValid = false;     // the frame carries its own scene peak/average
+	double scenePeakNits = 0.0;
+	double sceneAvgNits = 0.0;
 	bool peakDetectionEnabled = false;
-	bool valid = false;
-	double maxNits = 0.0;
-	double avgNits = 0.0;
+	bool detectedValid = false;
+	double detectedPeakNits = 0.0;
+	double detectedAvgNits = 0.0;
 };
 
 
@@ -434,11 +447,11 @@ public:
 		return false;
 	}
 
-	// Measured HDR luminance for the stats OSD. Renderers without libplacebo
-	// peak detection return false so the OSD does not imply a measurement.
-	virtual bool GetMeasuredHdr(RendererMeasuredHdr& measured) const
+	// HDR luminance for the stats OSD. Renderers that do not tone map with
+	// libplacebo, or have not rendered a frame yet, return false.
+	virtual bool GetHdrStatus(RendererHdrStatus& status) const
 	{
-		measured = {};
+		status = {};
 		return false;
 	}
 
