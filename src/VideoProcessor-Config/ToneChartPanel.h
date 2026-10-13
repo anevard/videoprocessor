@@ -416,6 +416,16 @@ private:
         mapColumn->addWidget(heading(QStringLiteral("Where colours land on the display (u′v′)")));
         map_ = new ColourChart(ColourChart::Kind::Map);
         mapColumn->addWidget(map_, 1);
+        mapColumn->addWidget(heading(QStringLiteral("How far each colour's hue turns")));
+        auto* hueHelp = new QLabel(QStringLiteral(
+            "Degrees round white on the map, in the zone shown. Plus turns red towards yellow, green "
+            "towards cyan, blue towards magenta; minus the other way. Bars: the edited profile; "
+            "ticks: the other lines. A faded swatch is a colour this scene cannot hold."));
+        hueHelp->setProperty("toneHint", true);
+        hueHelp->setWordWrap(true);
+        mapColumn->addWidget(hueHelp);
+        hue_ = new ColourChart(ColourChart::Kind::Hue);
+        mapColumn->addWidget(hue_);
         pair->addLayout(mapColumn, 1);
         auto* divider = new QWidget;
         divider->setObjectName(QStringLiteral("toneChartsDivider"));
@@ -482,13 +492,13 @@ private:
             kneePq + (peakPq - kneePq) / 3.0, kneePq + (peakPq - kneePq) * 2.0 / 3.0 };
         const double zoneNits = zone_ == kZoneCount - 1 ? request.scenePeakNits : functions.pqToNits(zonePq[zone_]);
         zoneNote_->setText(QStringLiteral("strongest channel at %1 nits").arg(ToneCurveChart::Nits(zoneNits)));
-        if (!functions.colour || !functions.corners) { map_->clear(); sweep_->clear(); return; }
+        if (!functions.colour || !functions.corners) { map_->clear(); sweep_->clear(); hue_->clear(); return; }
         const auto display = static_cast<ToneCurveProvider::Gamut>(display_);
         ColourChart::Data map, sweep;
         if (!functions.corners(display, map.display) ||
             !functions.corners(ToneCurveProvider::Gamut::Rec709, map.rec709) ||
             !functions.corners(ToneCurveProvider::Gamut::Bt2020, map.bt2020))
-        { map_->clear(); sweep_->clear(); return; }
+        { map_->clear(); sweep_->clear(); hue_->clear(); return; }
         map.displayName = QString::fromLatin1(kDisplayNames[display_]);
         map.mapNits = sweep.mapNits = zoneNits;
         map.mapLabel = sweep.mapLabel = QString::fromLatin1(kZoneNames[zone_]);
@@ -517,12 +527,13 @@ private:
             return true;
         };
         // The edited profile first: the map links its points to the rings.
-        if (!add(editedName, editedColor, true, false, request, false)) { map_->clear(); sweep_->clear(); return; }
+        if (!add(editedName, editedColor, true, false, request, false)) { map_->clear(); sweep_->clear(); hue_->clear(); return; }
         if (defaultChip_->isChecked())
             add(QStringLiteral("Default"), QColor(QStringLiteral("#e8a93b")), false, true, request, true);
         for (const auto& [name, color, other] : others)
             add(name, color, false, false, other, false);
         map.sweepNits = sweep.sweepNits;
+        hue_->setData(map);
         map_->setData(std::move(map));
         sweep_->setData(std::move(sweep));
     }
@@ -718,6 +729,7 @@ private:
     QLabel* sceneNote_ = nullptr;
     ColourChart* map_ = nullptr;
     ColourChart* sweep_ = nullptr;
+    ColourChart* hue_ = nullptr;
     std::vector<QPushButton*> displayButtons_;
     int display_ = 1;          // P3-D65
     static constexpr int kZoneCount = 5;
