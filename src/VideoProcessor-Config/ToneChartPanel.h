@@ -523,20 +523,29 @@ private:
     struct Scene
     {
         const char* name;
-        double peak;
         std::vector<ToneCurveProvider::ScenePart> mix;
         double mastering;
+
+        double peak() const
+        {
+            if (mix.empty())
+                return mastering > 0 ? mastering : 10000.0;
+            double brightest = 0.0;
+            for (const auto& part : mix)
+                brightest = (std::max)(brightest, part.nits);
+            return brightest;
+        }
     };
     static const std::vector<Scene>& Scenes(bool measured)
     {
         static const std::vector<Scene> withDetection = {
-            { "Dark", 200, { { 0.98, 1.7 }, { 0.02, 200 } }, 1000 },
-            { "Mid", 600, { { 0.97, 13 }, { 0.03, 600 } }, 1000 },
-            { "Bright", 1000, { { 0.95, 51 }, { 0.05, 1000 } }, 1000 },
-            { "Very bright", 1000, { { 0.90, 120 }, { 0.10, 1000 } }, 1000 },
-            { "Hot master", 1300, { { 0.95, 50 }, { 0.05, 1300 } }, 1000 } };
+            { "Dark", { { 0.98, 1.7 }, { 0.02, 200 } }, 1000 },
+            { "Mid", { { 0.97, 13 }, { 0.03, 600 } }, 1000 },
+            { "Bright", { { 0.95, 51 }, { 0.05, 1000 } }, 1000 },
+            { "Very bright", { { 0.90, 120 }, { 0.10, 1000 } }, 1000 },
+            { "Hot master", { { 0.95, 50 }, { 0.05, 1300 } }, 1000 } };
         static const std::vector<Scene> withoutDetection = {
-            { "1000 nits", 1000, {}, 1000 }, { "4000 nits", 4000, {}, 4000 }, { "No metadata", 10000, {}, 0 } };
+            { "1000 nits", {}, 1000 }, { "4000 nits", {}, 4000 }, { "No metadata", {}, 0 } };
         return measured ? withDetection : withoutDetection;
     }
 
@@ -577,7 +586,7 @@ private:
         for (size_t i = 0; i < sceneButtons_[set].size(); ++i)
             sceneButtons_[set][i]->setChecked(i == sceneIndex_[set]);
         const Scene& scene = Scenes(set == 0)[sceneIndex_[set]];
-        request.scenePeakNits = scene.peak;
+        request.scenePeakNits = scene.peak();
         request.sceneMix = scene.mix;
         request.masteringPeakNits = scene.mastering;
         request.sourcePq.resize(kSamples + 1);
