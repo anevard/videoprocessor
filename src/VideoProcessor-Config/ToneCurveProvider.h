@@ -48,6 +48,8 @@ namespace ToneCurveProvider
         double scenePeakPq = 0.0;       // the scene (or mastering) peak
         double outputMaxPq = 0.0;       // the display peak libplacebo uses
         double outputMinPq = 0.0;
+        double inputMinPq = 0.0;        // the bottom of libplacebo's input range
+        double kneePq = 0.0;            // the knee the film blend measures against
         std::string curve;              // the libplacebo curve in use
         double virtualTargetNits = 0.0; // the dynamic target's virtual peak; 0 when inactive
         double exposure = 1.0;          // the dynamic target's gain on the whole picture

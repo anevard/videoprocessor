@@ -298,6 +298,18 @@ namespace
         return value;
     }
 
+    // The knee the film blend measures against, in PQ, 2307-2324: the scene's
+    // average, else the fallback knee, within the knee limits.
+    float KneePq(const pl_tone_map_params& tone)
+    {
+        const pl_tone_map_constants& tc = tone.constants;
+        const auto mix = [](float a, float b, float x) { return a + (b - a) * x; }; // PL_MIX
+        float knee = tone.input_avg ? tone.input_avg : mix(tone.input_min, tone.input_max, tc.knee_default);
+        knee = (std::clamp)(knee, mix(tone.input_min, tone.input_max, tc.knee_minimum),
+            mix(tone.input_min, tone.input_max, tc.knee_maximum));
+        return knee;
+    }
+
     bool Sample(const ToneCurveProvider::Request& request,
         ToneCurveProvider::Result& result, std::wstring& error)
     {
@@ -330,6 +342,8 @@ namespace
         result.scenePeakPq = library.rescale(PL_HDR_NITS, PL_HDR_PQ, static_cast<float>(request.scenePeakNits));
         result.outputMaxPq = library.rescale(PL_HDR_NITS, PL_HDR_PQ, static_cast<float>(request.targetNits));
         result.outputMinPq = tone.output_min;
+        result.inputMinPq = tone.input_min;
+        result.kneePq = KneePq(tone);
         result.curve = tone.function && tone.function->name ? tone.function->name : "clip";
         result.virtualTargetNits = profileMap.virtualTargetNits;
         result.exposure = profileMap.exposure;
@@ -553,11 +567,8 @@ namespace
         // The knee the film blend measures against, 2307-2324.
         const float flareFrac = library.rescale(PL_HDR_PQ, PL_HDR_NITS, tone.output_min) / 10000.0f;
         const float filmStrength = (std::clamp)(map.film_strength, 0.0f, 2.0f);
-        const pl_tone_map_constants& tc = tone.constants;
         const auto mix = [](float a, float b, float x) { return a + (b - a) * x; }; // PL_MIX
-        float knee = tone.input_avg ? tone.input_avg : mix(tone.input_min, tone.input_max, tc.knee_default);
-        knee = (std::clamp)(knee, mix(tone.input_min, tone.input_max, tc.knee_minimum),
-            mix(tone.input_min, tone.input_max, tc.knee_maximum));
+        const float knee = KneePq(tone);
         const float kneeIn = library.rescale(PL_HDR_PQ, PL_HDR_NITS, knee) / 10000.0f;
         const float kneeOut = library.rescale(PL_HDR_PQ, PL_HDR_NITS, library.sample(knee, &tone)) / 10000.0f;
         const float kneeGain = (std::max)(kneeOut - flareFrac, 1e-9f) / (std::max)(kneeIn, 1e-9f);
