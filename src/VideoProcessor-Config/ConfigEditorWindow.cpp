@@ -6424,6 +6424,11 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
             RendererProfileConfig::ParseBoolean((dynamicTarget.isEmpty() ?
                 RenderingBuiltInDefault(QStringLiteral("dynamic_target")) : dynamicTarget).toStdString(),
                 request.dynamicTarget);
+            request.gamutMapping = choice("gamut_mapping", "auto");
+            const QString overflow = get("custom_tone_mapping");
+            RendererProfileConfig::ParseBoolean((overflow.isEmpty() ?
+                RenderingBuiltInDefault(QStringLiteral("custom_tone_mapping")) : overflow).toStdString(),
+                request.gamutOverflowCorrection);
             double white = 0.0, black = HdrTargetLuminance::DefaultBlack;
             request.targetNits = HdrTargetLuminance::ParseWhite(get("sdr_target_nits").toStdString(), white) ?
                 white : 203.0;
@@ -6546,6 +6551,10 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
             connect(edit, &QLineEdit::textChanged, this, [updateToneControls] { updateToneControls(); });
         // So do Dynamic target and the renderer (the charts draw the Beta only).
         connect(dynamicTarget, &QCheckBox::toggled, this, [updateToneControls] { updateToneControls(); });
+        // Gamut mapping and Gamut overflow correction move the Colour charts.
+        connect(gamutMapping, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [updateToneControls] { updateToneControls(); });
+        connect(customToneMapping, &QCheckBox::toggled, this, [updateToneControls] { updateToneControls(); });
         if (rendererChoice_)
             connect(rendererChoice_, qOverload<int>(&QComboBox::currentIndexChanged), this,
                 [updateToneControls] { updateToneControls(); });
