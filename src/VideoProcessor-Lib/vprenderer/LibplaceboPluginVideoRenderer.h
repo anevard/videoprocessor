@@ -83,7 +83,7 @@ public:
 	double ExitLatencyMs() const override;
 	uint64_t DroppedFrameCount() const override;
 	bool GetRenderLoad(RendererRenderLoad& load) const override;
-	bool GetMeasuredHdr(RendererMeasuredHdr& measured) const override;
+	bool GetHdrStatus(RendererHdrStatus& status) const override;
 	void SetRenderLoadDisplayRefreshRate(double refreshRateHz) override;
 	bool GetOutputModeInfo(CString& details) const override;
 	bool GetOutputContractStatus(
