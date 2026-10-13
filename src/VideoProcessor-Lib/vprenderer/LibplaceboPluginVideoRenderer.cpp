@@ -517,6 +517,12 @@ bool LibplaceboPluginVideoRenderer::GetRenderLoad(RendererRenderLoad& load) cons
 }
 
 
+bool LibplaceboPluginVideoRenderer::GetMeasuredHdr(RendererMeasuredHdr& measured) const
+{
+	return m_renderer->GetMeasuredHdr(measured);
+}
+
+
 void LibplaceboPluginVideoRenderer::SetRenderLoadDisplayRefreshRate(
 	double refreshRateHz)
 {

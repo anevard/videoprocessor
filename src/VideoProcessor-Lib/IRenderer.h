@@ -47,6 +47,18 @@ enum RendererState
 const TCHAR* ToString(const RendererState rendererState);
 
 
+// libplacebo's own peak-detection result for the picture being tone mapped,
+// as returned by pl_renderer_get_hdr_metadata and converted to nits with
+// pl_hdr_rescale. Not the source's static HDR10 metadata.
+struct RendererMeasuredHdr
+{
+	bool peakDetectionEnabled = false;
+	bool valid = false;
+	double maxNits = 0.0;
+	double avgNits = 0.0;
+};
+
+
 /**
  * Renderer callback
  */
@@ -419,6 +431,14 @@ public:
 	virtual bool GetRenderLoad(RendererRenderLoad& load) const
 	{
 		load = {};
+		return false;
+	}
+
+	// Measured HDR luminance for the stats OSD. Renderers without libplacebo
+	// peak detection return false so the OSD does not imply a measurement.
+	virtual bool GetMeasuredHdr(RendererMeasuredHdr& measured) const
+	{
+		measured = {};
 		return false;
 	}
 

@@ -16275,8 +16275,48 @@ void CVideoProcessorDlg::UpdateStatsOverlay()
 		// Colorspace
 		stats.colorspace = ToString(m_captureDeviceVideoState->colorspace);
 
+		// Static HDR10 metadata as handed to the renderer (after any LLDV
+		// substitution), in the main window's HDR box format without a
+		// trailing ".0".
+		if (m_builtVideoState && m_builtVideoState->valid &&
+			m_builtVideoState->hdrData)
+		{
+			const auto nits = [](double value)
+			{
+				CString text = FormatHdrLuminance(value);
+				if (text.Right(2) == _T(".0"))
+					text.Truncate(text.GetLength() - 2);
+				return text;
+			};
+			const HDRData& hdr = *m_builtVideoState->hdrData;
+			stats.hdr10.Format(_T("CLL %s FALL %s | M %s-%s"),
+				nits(hdr.maxCll).GetString(),
+				nits(hdr.maxFall).GetString(),
+				nits(hdr.masteringDisplayMinLuminance).GetString(),
+				nits(hdr.masteringDisplayMaxLuminance).GetString());
+		}
+
 		// Pixel Format
 		stats.pixelFormat = ToString(m_captureDeviceVideoState->videoFrameEncoding);
+	}
+
+	// Active Rendering / DTM profile ("display" group, [vprenderer.<name>]),
+	// shown by its configured label when it has one, as the profile overlay does.
+	if (const auto snapshot = m_profileRuntime.GetSnapshot())
+	{
+		const auto display = snapshot->effectiveSelections.find("display");
+		if (display != snapshot->effectiveSelections.end() &&
+			!display->second.empty())
+		{
+			std::string name = RendererProfileConfig::FormatSelection(display->second);
+			std::string label;
+			if (snapshot->configuration &&
+				snapshot->configuration->TryGetString(
+					"vprenderer." + name, "label", label) &&
+				!ConfigFile::Trim(label).empty())
+				name = ConfigFile::Trim(label);
+			stats.dtmProfile = CString(name.c_str());
+		}
 	}
 
 	// Renderer settings and capture metrics
@@ -16393,6 +16433,15 @@ void CVideoProcessorDlg::UpdateStatsOverlay()
 					stats.captureToPresentationTargetMs);
 			m_videoRenderer->GetPresentationTimingStatus(
 				stats.presentationTimingStatus);
+		}
+		RendererMeasuredHdr measuredHdr;
+		if (m_videoRenderer->GetMeasuredHdr(measuredHdr))
+		{
+			if (!measuredHdr.peakDetectionEnabled)
+				stats.measuredHdr = _T("off");
+			else if (measuredHdr.valid)
+				stats.measuredHdr.Format(_T("peak %.0f / avg %.0f nits"),
+					measuredHdr.maxNits, measuredHdr.avgNits);
 		}
 		RendererRenderLoad renderLoad;
 		if (m_videoRenderer->GetRenderLoad(renderLoad))
