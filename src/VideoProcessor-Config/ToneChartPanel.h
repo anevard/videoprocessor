@@ -515,18 +515,28 @@ private:
     static constexpr const char* kDisplayNames[3] = { "Rec.709", "P3-D65", "BT.2020" };
     static constexpr int kSamples = 360;
 
-    // A scene the charts imagine, in nits. Measured scenes are what peak
-    // detection reports (peak, average) for a source mastered at `mastering`;
-    // static scenes have only the InfoFrame mastering peak (0: none, read as
-    // 10000).
-    struct Scene { const char* name; double peak; double average; double mastering; };
+    // A scene the charts imagine, in nits. Measured scenes are a mix of
+    // brightnesses, its brightest part the peak, for a source mastered at
+    // `mastering`; peak detection measures both of its averages from the mix.
+    // The shares are a stand-in until real scenes are measured. Static scenes
+    // have only the InfoFrame mastering peak (0: none, read as 10000).
+    struct Scene
+    {
+        const char* name;
+        double peak;
+        std::vector<ToneCurveProvider::ScenePart> mix;
+        double mastering;
+    };
     static const std::vector<Scene>& Scenes(bool measured)
     {
         static const std::vector<Scene> withDetection = {
-            { "Dark", 200, 2, 1000 }, { "Mid", 600, 15, 1000 }, { "Bright", 1000, 60, 1000 },
-            { "Very bright", 1000, 150, 1000 }, { "Hot master", 1300, 60, 1000 } };
+            { "Dark", 200, { { 0.98, 1.7 }, { 0.02, 200 } }, 1000 },
+            { "Mid", 600, { { 0.97, 13 }, { 0.03, 600 } }, 1000 },
+            { "Bright", 1000, { { 0.95, 51 }, { 0.05, 1000 } }, 1000 },
+            { "Very bright", 1000, { { 0.90, 120 }, { 0.10, 1000 } }, 1000 },
+            { "Hot master", 1300, { { 0.95, 50 }, { 0.05, 1300 } }, 1000 } };
         static const std::vector<Scene> withoutDetection = {
-            { "1000 nits", 1000, 0, 1000 }, { "4000 nits", 4000, 0, 4000 }, { "No metadata", 10000, 0, 0 } };
+            { "1000 nits", 1000, {}, 1000 }, { "4000 nits", 4000, {}, 4000 }, { "No metadata", 10000, {}, 0 } };
         return measured ? withDetection : withoutDetection;
     }
 
@@ -568,7 +578,7 @@ private:
             sceneButtons_[set][i]->setChecked(i == sceneIndex_[set]);
         const Scene& scene = Scenes(set == 0)[sceneIndex_[set]];
         request.scenePeakNits = scene.peak;
-        request.sceneAverageNits = scene.average;
+        request.sceneMix = scene.mix;
         request.masteringPeakNits = scene.mastering;
         request.sourcePq.resize(kSamples + 1);
         for (int i = 0; i <= kSamples; ++i) request.sourcePq[i] = static_cast<double>(i) / kSamples;
@@ -622,7 +632,7 @@ private:
                 ToneCurveProvider::Request other = compared.fromFile ?
                     sources_.valuesRequest(compared.values) : sources_.profileRequest(compared.section);
                 other.scenePeakNits = request.scenePeakNits;
-                other.sceneAverageNits = request.sceneAverageNits;
+                other.sceneMix = request.sceneMix;
                 other.masteringPeakNits = request.masteringPeakNits;
                 other.sourcePq = request.sourcePq;
                 others.emplace_back(compared.name, compared.color, other);
@@ -641,14 +651,18 @@ private:
 
         // What the scene is, then what libplacebo does to it beyond the curve.
         QStringList note;
+        const auto& result = chart.result;
+        QStringList parts;
+        for (const auto& part : scene.mix)
+            parts << QStringLiteral("%1% at %2 nits").arg(part.share * 100.0, 0, 'f', 0).arg(part.nits);
         note << (request.sceneAverageKnown ?
-            QStringLiteral("Measured peak %1, average %2, mastered at %3 nits.")
-                .arg(ToneCurveChart::Nits(scene.peak), ToneCurveChart::Nits(scene.average), ToneCurveChart::Nits(scene.mastering)) :
+            QStringLiteral("The scene: %1, mastered at %2 nits. Peak detection measures an average of %3 nits for the knee and %4 nits for the dynamic target.")
+                .arg(parts.join(QStringLiteral(", ")), ToneCurveChart::Nits(scene.mastering),
+                    ToneCurveChart::Nits(result.scenePqAverageNits), ToneCurveChart::Nits(result.sceneLinearAverageNits)) :
             scene.mastering > 0 ?
             QStringLiteral("Peak detection is off: only the mastering peak, %1 nits; no scene average, so the fallback knee sets the knee.")
                 .arg(ToneCurveChart::Nits(scene.mastering)) :
             QStringLiteral("Peak detection is off and there is no metadata: libplacebo assumes 10000 nits; no scene average, so the fallback knee sets the knee."));
-        const auto& result = chart.result;
         if (result.virtualTargetNits > 0)
             note << QStringLiteral("Dynamic target: tone mapped to a virtual %1 nits, then the whole picture ×%2.")
                 .arg(ToneCurveChart::Nits(result.virtualTargetNits)).arg(result.exposure, 0, 'f', 2);
