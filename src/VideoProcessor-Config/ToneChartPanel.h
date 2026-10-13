@@ -9,7 +9,6 @@
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QSlider>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
@@ -353,8 +352,8 @@ private:
         }
         if (changed) rebuildChips();
     }
-    // The Colour tab: the display it imagines, the map's source level, the
-    // map, then the chosen patch's saturation against level. None of
+    // The Colour tab: the display it imagines, the picture zone the map shows,
+    // the map, then the chosen patch's saturation against strength. None of
     // these is saved or is a VP setting.
     void addColourTab()
     {
@@ -386,26 +385,28 @@ private:
         displays->addStretch(1);
         charts->addWidget(displayRow);
 
-        // 1 to 1000 nits on a log scale.
-        auto* brightnessRow = new QHBoxLayout;
-        brightnessRow->setSpacing(6);
-        brightnessRow->addWidget(new QLabel(QStringLiteral("Map level:")));
-        auto* slider = new QSlider(Qt::Horizontal);
-        slider->setObjectName(QStringLiteral("toneCharts.mapBrightness"));
-        slider->setRange(0, 1000);
-        slider->setValue(static_cast<int>(std::lround(std::log10(mapNits_) / 3.0 * 1000.0)));
-        slider->setToolTip(QStringLiteral("Every patch is drawn with its strongest channel at this level, so dim colours such as blue are compared fairly."));
-        brightnessRow->addWidget(slider, 1);
-        mapNitsLabel_ = new QLabel(QStringLiteral("%1 nits").arg(ToneCurveChart::Nits(mapNits_)));
-        mapNitsLabel_->setMinimumWidth(70);
-        brightnessRow->addWidget(mapNitsLabel_);
-        connect(slider, &QSlider::valueChanged, this, [this](int value) {
-            const double nits = std::pow(10.0, value / 1000.0 * 3.0);
-            mapNits_ = nits < 10 ? std::round(nits * 10.0) / 10.0 : std::round(nits);
-            mapNitsLabel_->setText(QStringLiteral("%1 nits").arg(ToneCurveChart::Nits(mapNits_)));
-            redraw();
-        });
-        charts->addLayout(brightnessRow);
+        // The part of the picture the map shows, placed by the scene: Mid-tones
+        // at the curve's knee, Peak at the scene peak (see redrawColour).
+        auto* zoneRow = new QWidget;
+        zoneRow->setStyleSheet(displayRow->styleSheet());
+        auto* zones = new QHBoxLayout(zoneRow);
+        zones->setContentsMargins(0, 0, 0, 0);
+        zones->setSpacing(6);
+        zones->addWidget(new QLabel(QStringLiteral("Show colours in:")));
+        for (int i = 0; i < kZoneCount; ++i)
+        {
+            auto* button = new QPushButton(QString::fromLatin1(kZoneNames[i]));
+            button->setObjectName(QStringLiteral("toneCharts.zone.%1").arg(QString::fromLatin1(kZoneNames[i])));
+            button->setCheckable(true);
+            button->setChecked(i == zone_);
+            connect(button, &QPushButton::clicked, this, [this, i] { zone_ = i; redraw(); });
+            zoneButtons_.push_back(button);
+            zones->addWidget(button);
+        }
+        zoneNote_ = new QLabel;
+        zoneNote_->setProperty("toneHint", true);
+        zones->addWidget(zoneNote_, 1);
+        charts->addWidget(zoneRow);
 
         // The map and the sweep side by side, each with the full height.
         auto* pair = new QHBoxLayout;
@@ -426,7 +427,7 @@ private:
 
         auto* sweepHead = new QHBoxLayout;
         sweepHead->setSpacing(6);
-        sweepHead->addWidget(heading(QStringLiteral("Saturation against level")));
+        sweepHead->addWidget(heading(QStringLiteral("Saturation as the colour gets stronger")));
         sweepHead->addStretch(1);
         auto* patch = new QComboBox;
         patch->setObjectName(QStringLiteral("toneCharts.sweepPatch"));
@@ -451,9 +452,11 @@ private:
         pair->addLayout(sweepColumn, 1);
         charts->addLayout(pair, 1);
         auto* note = new QLabel(QStringLiteral(
-            "The source is P3-mastered in a BT.2020 container. Level: a colour's strongest channel, "
-            "in nits. A dim ring is a colour this scene cannot hold at that level. Not shown: "
-            "contrast recovery, and the interpolation of VP Renderer's tone and gamut tables."));
+            "The source is P3-mastered in a BT.2020 container. Every colour in a zone is driven "
+            "equally hard: its strongest channel at the zone's nits, so a blue looks dimmer than a "
+            "green. Mid-tones sit at the curve's knee, Peak at the scene's peak, the others evenly "
+            "between in PQ. A dim ring is a colour this scene cannot hold. Not shown: contrast "
+            "recovery, and the interpolation of VP Renderer's tone and gamut tables."));
         note->setProperty("toneHint", true);
         note->setWordWrap(true);
         charts->addWidget(note);
@@ -462,12 +465,23 @@ private:
         tabBar_->addTab(QStringLiteral("Colour"));
     }
 
-    void redrawColour(const ToneCurveProvider::Request& request, const QString& editedName, const QColor& editedColor,
+    void redrawColour(const ToneCurveProvider::Request& request, const ToneCurveProvider::Result& result,
+        const QString& editedName, const QColor& editedColor,
         const std::vector<std::tuple<QString, QColor, ToneCurveProvider::Request>>& others)
     {
         const auto& functions = ToneCurveProvider::Registered();
         for (size_t i = 0; i < displayButtons_.size(); ++i)
             displayButtons_[i]->setChecked(static_cast<int>(i) == display_);
+        for (size_t i = 0; i < zoneButtons_.size(); ++i)
+            zoneButtons_[i]->setChecked(static_cast<int>(i) == zone_);
+        // The zone, from the edited profile's scene: Shadows halfway in PQ from
+        // the scene's floor to the knee, Mid-tones the knee, Bright and
+        // Highlights a third and two thirds of the way on to the peak.
+        const double kneePq = result.kneePq, peakPq = (std::max)(result.scenePeakPq, kneePq);
+        const double zonePq[kZoneCount - 1] = { (result.inputMinPq + kneePq) / 2.0, kneePq,
+            kneePq + (peakPq - kneePq) / 3.0, kneePq + (peakPq - kneePq) * 2.0 / 3.0 };
+        const double zoneNits = zone_ == kZoneCount - 1 ? request.scenePeakNits : functions.pqToNits(zonePq[zone_]);
+        zoneNote_->setText(QStringLiteral("strongest channel at %1 nits").arg(ToneCurveChart::Nits(zoneNits)));
         if (!functions.colour || !functions.corners) { map_->clear(); sweep_->clear(); return; }
         const auto display = static_cast<ToneCurveProvider::Gamut>(display_);
         ColourChart::Data map, sweep;
@@ -476,17 +490,18 @@ private:
             !functions.corners(ToneCurveProvider::Gamut::Bt2020, map.bt2020))
         { map_->clear(); sweep_->clear(); return; }
         map.displayName = QString::fromLatin1(kDisplayNames[display_]);
-        map.mapNits = sweep.mapNits = mapNits_;
+        map.mapNits = sweep.mapNits = zoneNits;
+        map.mapLabel = sweep.mapLabel = QString::fromLatin1(kZoneNames[zone_]);
         sweep.patch = patch_;
         std::vector<ToneCurveProvider::ColourSample> mapSamples, sweepSamples;
         for (size_t i = 0; i < ToneCurveProvider::Patches().size(); ++i)
-            mapSamples.push_back({ i, mapNits_ });
-        // From 1 nit to the scene peak (or the mastering peak without detection).
-        const double top = (std::max)(request.scenePeakNits, 10.0);
+            mapSamples.push_back({ i, zoneNits });
+        // From 0.1 nits to the scene peak (or the mastering peak without detection).
+        const double bottom = 0.1, top = (std::max)(request.scenePeakNits, 10.0);
         constexpr int kSweep = 96;
         for (int i = 0; i <= kSweep; ++i)
         {
-            const double nits = std::pow(10.0, std::log10(top) * i / kSweep);
+            const double nits = bottom * std::pow(top / bottom, static_cast<double>(i) / kSweep);
             sweep.sweepNits.push_back(nits);
             sweepSamples.push_back({ patch_, nits });
         }
@@ -655,7 +670,7 @@ private:
         tone_->setData(chart);
         tracking_->setData(chart);
         if (tabBar_->currentIndex() == 1)
-            redrawColour(request, chart.profileName.isEmpty() ? QStringLiteral("Profile") :
+            redrawColour(request, chart.result, chart.profileName.isEmpty() ? QStringLiteral("Profile") :
                 chart.profileName + QStringLiteral(" (editing)"), chart.profileColor, others);
 
         // What the scene is, then what libplacebo does to it beyond the curve.
@@ -705,9 +720,12 @@ private:
     ColourChart* sweep_ = nullptr;
     std::vector<QPushButton*> displayButtons_;
     int display_ = 1;          // P3-D65
-    double mapNits_ = 50.0;
+    static constexpr int kZoneCount = 5;
+    static constexpr const char* kZoneNames[kZoneCount] = { "Shadows", "Mid-tones", "Bright", "Highlights", "Peak" };
+    int zone_ = 1;             // Mid-tones
+    std::vector<QPushButton*> zoneButtons_;
+    QLabel* zoneNote_ = nullptr;
     size_t patch_ = 13;        // Light skin
-    QLabel* mapNitsLabel_ = nullptr;
     ToneCurveProvider::Request request_;
     bool haveRequest_ = false;
 };

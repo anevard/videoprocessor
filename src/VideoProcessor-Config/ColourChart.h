@@ -35,6 +35,7 @@ public:
         ToneCurveProvider::GamutCorners display, rec709, bt2020;
         QString displayName;
         double mapNits = 50.0;          // the map's source level
+        QString mapLabel;               // the picture zone the map shows
         size_t patch = 0;               // the sweep's patch
         std::vector<double> sweepNits;  // the sweep's source levels
         std::vector<Series> series;
@@ -162,7 +163,7 @@ private:
 
         // Each patch: its source ring in its own colour, a line to the edited
         // profile's point, and a point per line (hollow: clipped). A patch the
-        // scene cannot hold at this level is a dim ring only.
+        // scene cannot hold this strong is a dim ring only.
         const auto& patches = ToneCurveProvider::Patches();
         const Series& edited = data_.series.front();
         for (size_t i = 0; i < patches.size() && i < edited.points.size(); ++i)
@@ -246,11 +247,11 @@ private:
             }
         if (nearest >= patches.size()) return;
         QStringList lines;
-        lines << QStringLiteral("%1, level %2 nits in").arg(QString::fromLatin1(patches[nearest].name),
-            ToneCurveChart::Nits(data_.mapNits));
+        lines << QStringLiteral("%1 in %2: strongest channel at %3 nits").arg(QString::fromLatin1(patches[nearest].name),
+            data_.mapLabel, ToneCurveChart::Nits(data_.mapNits));
         const auto& source = data_.series.front().points[nearest];
         if (!source.valid)
-            lines << QStringLiteral("This scene cannot hold it at this level.");
+            lines << QStringLiteral("This scene cannot hold it this strong.");
         else
             for (const Series& series : data_.series)
                 if (nearest < series.points.size())
@@ -280,7 +281,7 @@ private:
 
         const QColor grid(QString::fromLatin1(kGrid)), axis(QString::fromLatin1(kAxis)), ink(QString::fromLatin1(kInk));
         double lastLabel = -1e9;
-        for (double nits : { 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0, 10000.0 })
+        for (double nits : { 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0, 10000.0 })
         {
             if (nits < data_.sweepNits.front() * 0.999 || nits > data_.sweepNits.back() * 1.001) continue;
             painter.setPen(grid);
@@ -307,7 +308,7 @@ private:
         painter.setPen(axis);
         painter.drawLine(plot.bottomLeft(), plot.bottomRight());
         painter.setPen(ink);
-        const QString xLabel = QStringLiteral("source level, nits");
+        const QString xLabel = QStringLiteral("strongest channel, nits");
         painter.drawText(QPointF(plot.right() - metrics.horizontalAdvance(xLabel), height() - 2.0), xLabel);
 
         painter.save();
@@ -337,12 +338,12 @@ private:
         }
         painter.restore();
 
-        // The map's level.
+        // The map's zone.
         const double mapX = sx(std::clamp(data_.mapNits, data_.sweepNits.front(), data_.sweepNits.back()));
         painter.setPen(QPen(ink, 1.0, Qt::DashLine));
         painter.drawLine(QPointF(mapX, plot.top()), QPointF(mapX, plot.bottom()));
         painter.setPen(ink);
-        const QString mapLabel = QStringLiteral("map");
+        const QString mapLabel = data_.mapLabel;
         painter.drawText(QPointF(mapX + 4, plot.top() + 12), mapLabel);
 
         // Key: only the reference; the compare chips name every other line.
@@ -359,11 +360,11 @@ private:
             for (size_t i = 1; i < data_.sweepNits.size(); ++i)
                 if (std::abs(std::log(data_.sweepNits[i] / nits)) < std::abs(std::log(data_.sweepNits[index] / nits))) index = i;
             QStringList lines;
-            lines << QStringLiteral("%1, level %2 nits in").arg(QString::fromLatin1(ToneCurveProvider::Patches()[data_.patch].name),
+            lines << QStringLiteral("%1, strongest channel at %2 nits").arg(QString::fromLatin1(ToneCurveProvider::Patches()[data_.patch].name),
                 ToneCurveChart::Nits(data_.sweepNits[index]));
             const auto& first = data_.series.front().points;
             if (index < first.size() && !first[index].valid)
-                lines << QStringLiteral("This scene cannot hold it at this level.");
+                lines << QStringLiteral("This scene cannot hold it this strong.");
             else
                 for (const Series& series : data_.series)
                     if (index < series.points.size())
