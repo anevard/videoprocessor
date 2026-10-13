@@ -407,16 +407,22 @@ private:
         });
         charts->addLayout(brightnessRow);
 
-        charts->addWidget(heading(QStringLiteral("Where colours land on the display (u′v′)")));
+        // The map and the sweep side by side, each with the full height.
+        auto* pair = new QHBoxLayout;
+        pair->setSpacing(6);
+        auto* mapColumn = new QVBoxLayout;
+        mapColumn->setSpacing(4);
+        mapColumn->addWidget(heading(QStringLiteral("Where colours land on the display (u′v′)")));
         map_ = new ColourChart(ColourChart::Kind::Map);
-        charts->addWidget(map_, 1);
+        mapColumn->addWidget(map_, 1);
+        pair->addLayout(mapColumn, 1);
         auto* divider = new QWidget;
         divider->setObjectName(QStringLiteral("toneChartsDivider"));
         divider->setAttribute(Qt::WA_StyledBackground, true);
-        divider->setFixedHeight(1);
-        charts->addSpacing(2);
-        charts->addWidget(divider);
-        charts->addSpacing(2);
+        divider->setFixedWidth(1);
+        pair->addWidget(divider);
+        auto* sweepColumn = new QVBoxLayout;
+        sweepColumn->setSpacing(4);
 
         auto* sweepHead = new QHBoxLayout;
         sweepHead->setSpacing(6);
@@ -433,15 +439,17 @@ private:
             redraw();
         });
         sweepHead->addWidget(patch);
-        charts->addLayout(sweepHead);
+        sweepColumn->addLayout(sweepHead);
         auto* sweepHelp = new QLabel(QStringLiteral(
             "Distance from white on screen over distance in the source: 1.00 keeps all its colour. "
             "Hollow points are clipped: the display could not reach that colour."));
         sweepHelp->setProperty("toneHint", true);
         sweepHelp->setWordWrap(true);
-        charts->addWidget(sweepHelp);
+        sweepColumn->addWidget(sweepHelp);
         sweep_ = new ColourChart(ColourChart::Kind::Sweep);
-        charts->addWidget(sweep_, 1);
+        sweepColumn->addWidget(sweep_, 1);
+        pair->addLayout(sweepColumn, 1);
+        charts->addLayout(pair, 1);
         auto* note = new QLabel(QStringLiteral(
             "The source is P3-mastered in a BT.2020 container. A dim ring is a colour this scene "
             "cannot hold at that brightness. Not shown: contrast recovery, and the interpolation "

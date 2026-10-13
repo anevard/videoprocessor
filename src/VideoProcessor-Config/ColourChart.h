@@ -60,11 +60,11 @@ public:
     }
 
 protected:
-    // The map is square at most; the sweep at most half as tall as wide.
+    // Side by side, each at most as tall as it is wide.
     void resizeEvent(QResizeEvent* event) override
     {
         QWidget::resizeEvent(event);
-        const int cap = std::max(minimumHeight(), kind_ == Kind::Map ? width() : width() / 2);
+        const int cap = std::max(minimumHeight(), width());
         if (maximumHeight() != cap) setMaximumHeight(cap);
     }
     void mouseMoveEvent(QMouseEvent* event) override { hover_ = event->position(); update(); }
@@ -93,27 +93,46 @@ private:
     {
         const QRectF area = QRectF(rect()).adjusted(40, 8, -10, -22);
         if (area.width() < 60 || area.height() < 60) return;
-        // Equal scales on both axes, centred in the space there is.
-        const double u0 = 0.0, u1 = 0.62, v0 = 0.02, v1 = 0.62;
+        // Fitted to the three gamuts and every patch drawn, with equal scales
+        // on both axes, filling the space there is.
+        double u0 = 1.0, u1 = 0.0, v0 = 1.0, v1 = 0.0;
+        const auto include = [&](double u, double v) {
+            u0 = std::min(u0, u); u1 = std::max(u1, u);
+            v0 = std::min(v0, v); v1 = std::max(v1, v);
+        };
+        for (const auto* corners : { &data_.display, &data_.rec709, &data_.bt2020 })
+            for (int i = 0; i < 3; ++i) include(corners->u[i], corners->v[i]);
+        for (const Series& series : data_.series)
+            for (const auto& point : series.points)
+            {
+                include(point.sourceU, point.sourceV);
+                if (point.valid) include(point.u, point.v);
+            }
+        const double pad = 0.015;
+        u0 -= pad; u1 += pad; v0 -= pad; v1 += pad;
         const double scale = std::min(area.width() / (u1 - u0), area.height() / (v1 - v0));
-        const QRectF plot(area.left(), area.top(), (u1 - u0) * scale, (v1 - v0) * scale);
+        // Centre the shorter axis's range in the space.
+        const double uMid = (u0 + u1) / 2, vMid = (v0 + v1) / 2;
+        u0 = uMid - area.width() / scale / 2; u1 = uMid + area.width() / scale / 2;
+        v0 = vMid - area.height() / scale / 2; v1 = vMid + area.height() / scale / 2;
+        const QRectF plot = area;
         const auto sx = [&](double u) { return plot.left() + (u - u0) * scale; };
         const auto sy = [&](double v) { return plot.bottom() - (v - v0) * scale; };
 
         const QColor grid(QString::fromLatin1(kGrid)), ink(QString::fromLatin1(kInk));
-        for (double u = 0.0; u <= u1 + 1e-9; u += 0.1)
+        for (double u = std::ceil(u0 * 10.0 - 1e-9) / 10.0; u <= u1 + 1e-9; u += 0.1)
         {
             painter.setPen(grid);
             painter.drawLine(QPointF(sx(u), plot.top()), QPointF(sx(u), plot.bottom()));
-            const QString label = QString::number(u, 'f', 1);
+            const QString label = QString::number(std::abs(u) < 1e-9 ? 0.0 : u, 'f', 1);
             painter.setPen(ink);
             painter.drawText(QPointF(sx(u) - metrics.horizontalAdvance(label) / 2.0, plot.bottom() + 14), label);
         }
-        for (double v = 0.1; v <= v1 + 1e-9; v += 0.1)
+        for (double v = std::ceil(v0 * 10.0 - 1e-9) / 10.0; v <= v1 + 1e-9; v += 0.1)
         {
             painter.setPen(grid);
             painter.drawLine(QPointF(plot.left(), sy(v)), QPointF(plot.right(), sy(v)));
-            const QString label = QString::number(v, 'f', 1);
+            const QString label = QString::number(std::abs(v) < 1e-9 ? 0.0 : v, 'f', 1);
             painter.setPen(ink);
             painter.drawText(QPointF(plot.left() - 6 - metrics.horizontalAdvance(label), sy(v) + 4), label);
         }
