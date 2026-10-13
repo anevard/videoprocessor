@@ -18,7 +18,7 @@
 class ColourChart : public QWidget
 {
 public:
-    enum class Kind { Map, Sweep };
+    enum class Kind { Map, Sweep, Hue };
     // A line or set of markers: the edited profile (bold), libplacebo's
     // default (dashed), or a compared profile. On the map, one point per
     // patch; on the sweep, one per source level.
@@ -43,11 +43,12 @@ public:
 
     explicit ColourChart(Kind kind, QWidget* parent = nullptr) : QWidget(parent), kind_(kind)
     {
-        setMinimumHeight(kind == Kind::Map ? 220 : 150);
+        setMinimumHeight(kind == Kind::Map ? 220 : kind == Kind::Hue ? 170 : 150);
+        if (kind == Kind::Hue) setMaximumHeight(210);
         setMouseTracking(true);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         setAccessibleName(kind == Kind::Map ? QStringLiteral("Colour map chart") :
-            QStringLiteral("Saturation sweep chart"));
+            kind == Kind::Hue ? QStringLiteral("Hue shift chart") : QStringLiteral("Saturation sweep chart"));
     }
     void setData(Data chart) { data_ = std::move(chart); valid_ = true; update(); }
     void clear() { valid_ = false; update(); }
@@ -65,6 +66,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override
     {
         QWidget::resizeEvent(event);
+        if (kind_ == Kind::Hue) return;
         const int cap = std::max(minimumHeight(), width());
         if (maximumHeight() != cap) setMaximumHeight(cap);
     }
@@ -82,6 +84,7 @@ protected:
         const QFontMetrics metrics(chartFont);
         if (!valid_ || data_.series.empty()) return;
         if (kind_ == Kind::Map) paintMap(painter, metrics);
+        else if (kind_ == Kind::Hue) paintHue(painter, metrics);
         else paintSweep(painter, metrics);
     }
 
@@ -373,6 +376,76 @@ private:
             painter.drawLine(QPointF(sx(data_.sweepNits[index]), plot.top()), QPointF(sx(data_.sweepNits[index]), plot.bottom()));
             hoverBox(painter, metrics, plot, QPointF(sx(data_.sweepNits[index]), plot.top() + 8), lines);
         }
+    }
+
+    // One column per patch at the map's zone: the edited profile's hue turn
+    // as a bar in the patch's colour, every other line as a tick in its own.
+    void paintHue(QPainter& painter, const QFontMetrics& metrics)
+    {
+        const auto& patches = ToneCurveProvider::Patches();
+        const QRectF plot = QRectF(rect()).adjusted(40, 10, -10, -26);
+        if (plot.width() < 60 || plot.height() < 40 || patches.empty()) return;
+        double reach = 5.0;
+        for (const Series& series : data_.series)
+            for (const auto& point : series.points)
+                if (point.valid) reach = std::max(reach, std::abs(point.hue));
+        const double raw = reach / 2.0, magnitude = std::pow(10.0, std::floor(std::log10(raw)));
+        double step = magnitude * 10.0;
+        for (double factor : { 1.0, 2.0, 2.5, 5.0, 10.0 })
+            if (factor * magnitude >= raw) { step = factor * magnitude; break; }
+        const double top = std::ceil(reach / step) * step;
+        const auto sy = [&](double degrees) { return plot.center().y() - degrees / top * plot.height() / 2.0; };
+        const double column = plot.width() / patches.size();
+        const auto cx = [&](size_t i) { return plot.left() + column * (i + 0.5); };
+
+        const QColor grid(QString::fromLatin1(kGrid)), axis(QString::fromLatin1(kAxis)), ink(QString::fromLatin1(kInk));
+        for (double d = -top; d <= top + 1e-9; d += step)
+        {
+            painter.setPen(std::abs(d) < 1e-9 ? axis : grid);
+            painter.drawLine(QPointF(plot.left(), sy(d)), QPointF(plot.right(), sy(d)));
+            const QString label = (d > 1e-9 ? QStringLiteral("+") : QString()) + QString::number(d, 'g', 3) + QStringLiteral("°");
+            painter.setPen(ink);
+            painter.drawText(QPointF(plot.left() - 6 - metrics.horizontalAdvance(label), sy(d) + 4), label);
+        }
+        const auto& edited = data_.series.front().points;
+        for (size_t i = 0; i < patches.size(); ++i)
+        {
+            const bool held = i < edited.size() && edited[i].valid;
+            QColor swatch = Swatch(patches[i]);
+            if (!held) swatch.setAlpha(60);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(swatch);
+            const double side = std::min(column - 2.0, 12.0);
+            painter.drawRect(QRectF(cx(i) - side / 2, plot.bottom() + 6, side, side));
+            if (!held) continue;
+            const double barWidth = std::max(column * 0.6, 2.0);
+            painter.setBrush(Swatch(patches[i]));
+            painter.setPen(QPen(QColor(QStringLiteral("#c9d6e2")), 0.8));
+            painter.drawRect(QRectF(QPointF(cx(i) - barWidth / 2, sy(0.0)), QPointF(cx(i) + barWidth / 2, sy(edited[i].hue))).normalized());
+        }
+        for (size_t s = 1; s < data_.series.size(); ++s)
+        {
+            const Series& series = data_.series[s];
+            painter.setPen(QPen(series.color, 2.0, series.dashed ? Qt::DashLine : Qt::SolidLine));
+            for (size_t i = 0; i < patches.size() && i < series.points.size(); ++i)
+                if (series.points[i].valid)
+                    painter.drawLine(QPointF(cx(i) - column * 0.45, sy(series.points[i].hue)),
+                        QPointF(cx(i) + column * 0.45, sy(series.points[i].hue)));
+        }
+
+        if (!plot.adjusted(0, 0, 0, 20).contains(hover_)) return;
+        const size_t index = std::min(patches.size() - 1, static_cast<size_t>((hover_.x() - plot.left()) / column));
+        QStringList lines;
+        lines << QStringLiteral("%1 in %2").arg(QString::fromLatin1(patches[index].name), data_.mapLabel);
+        if (index >= edited.size() || !edited[index].valid)
+            lines << QStringLiteral("This scene cannot hold it this strong.");
+        else
+            for (const Series& series : data_.series)
+                if (index < series.points.size())
+                    lines << Describe(series.name, series.points[index]);
+        painter.setPen(QPen(QColor(QStringLiteral("#6f8597")), 1.0));
+        painter.drawLine(QPointF(cx(index), plot.top()), QPointF(cx(index), plot.bottom()));
+        hoverBox(painter, metrics, plot, QPointF(cx(index), plot.top() + 8), lines);
     }
 
     static QString Describe(const QString& name, const ToneCurveProvider::ColourPoint& point)
