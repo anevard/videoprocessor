@@ -3346,6 +3346,46 @@ namespace
 		width = std::max<LONG>(1, client.right - client.left);
 		height = std::max<LONG>(1, client.bottom - client.top);
 
+		// Diagnostic: every input the rule below tests, logged whenever one
+		// changes, to find which test stops it firing after the first 1080p drop.
+		{
+			RECT probeWindow{};
+			MONITORINFOEXW probeMonitor{};
+			probeMonitor.cbSize = sizeof(probeMonitor);
+			DEVMODEW probeMode{};
+			probeMode.dmSize = sizeof(probeMode);
+			const BOOL haveWindow = GetWindowRect(hwnd, &probeWindow);
+			const BOOL haveMonitor = GetMonitorInfoW(
+				MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &probeMonitor);
+			const BOOL haveMode = haveMonitor &&
+				EnumDisplaySettingsW(probeMonitor.szDevice, ENUM_CURRENT_SETTINGS, &probeMode);
+			using DpiForWindow = UINT(WINAPI*)(HWND);
+			using DpiForSystem = UINT(WINAPI*)();
+			const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+			const auto dpiForWindow = user32 ? reinterpret_cast<DpiForWindow>(
+				GetProcAddress(user32, "GetDpiForWindow")) : nullptr;
+			const auto dpiForSystem = user32 ? reinterpret_cast<DpiForSystem>(
+				GetProcAddress(user32, "GetDpiForSystem")) : nullptr;
+			char probe[512];
+			sprintf_s(probe,
+				"client=%ldx%ld window=%ld,%ld-%ld,%ld(%d) monitor=%ld,%ld-%ld,%ld(%d) "
+				"mode=%lux%lu(%d) dpi_window=%u dpi_system=%u",
+				width, height,
+				probeWindow.left, probeWindow.top, probeWindow.right, probeWindow.bottom, haveWindow ? 1 : 0,
+				probeMonitor.rcMonitor.left, probeMonitor.rcMonitor.top,
+				probeMonitor.rcMonitor.right, probeMonitor.rcMonitor.bottom, haveMonitor ? 1 : 0,
+				probeMode.dmPelsWidth, probeMode.dmPelsHeight, haveMode ? 1 : 0,
+				dpiForWindow ? dpiForWindow(hwnd) : 0u, dpiForSystem ? dpiForSystem() : 0u);
+			static std::mutex probeMutex;
+			static std::string lastProbe;
+			std::lock_guard<std::mutex> probeLock(probeMutex);
+			if (lastProbe != probe)
+			{
+				lastProbe = probe;
+				DebugLog::Log("libplacebo presentation size probe: %s", probe);
+			}
+		}
+
 		RECT window{};
 		MONITORINFOEXW monitorInfo{};
 		monitorInfo.cbSize = sizeof(monitorInfo);
