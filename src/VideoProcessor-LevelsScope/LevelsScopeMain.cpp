@@ -5,6 +5,8 @@
 #include "LevelsScopePanel.h"
 #include <VpTheme.h>
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QSettings>
 #include <windows.h>
 #include <ConfigEditorCore.h>
 #include <ToneProfileRequest.h>
@@ -182,21 +184,86 @@ int RunCsv(int argc, char** argv)
     return 0;
 }
 
+// --snapshot <out> --config <cfg> --profile <section> <vp.log>...: the whole
+// window drawn off screen to <out>-inout.png, <out>-input.png and
+// <out>-inout-10min.png, with how long each chart took to draw. For checking
+// the page without a screen capture; its settings are kept apart and cleared.
+int RunSnapshot(int argc, char** argv)
+{
+    QString out, config, profile;
+    QStringList logs;
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::string arg = argv[i];
+        if ((arg == "--snapshot" || arg == "--config" || arg == "--profile") && i + 1 < argc)
+            (arg == "--snapshot" ? out : arg == "--config" ? config : profile) = QString::fromLocal8Bit(argv[++i]);
+        else if (!arg.empty() && arg[0] != '-')
+            logs << QString::fromLocal8Bit(argv[i]);
+        else
+            return Usage();
+    }
+    if (out.isEmpty() || config.isEmpty() || profile.isEmpty() || logs.isEmpty())
+        return Usage();
+    int result = 0;
+    {
+        LevelsScopePanel::Panel panel(nullptr, QStringLiteral("Levels Scope Snapshot"), false);
+        panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+        panel.resize(1400, 900);
+        panel.show();
+        QElapsedTimer timer;
+        timer.start();
+        panel.open(config, logs);
+        const double loadMs = timer.nsecsElapsed() / 1e6;
+        if (!panel.selectProfile(profile))
+        {
+            std::cerr << "no DTM profile " << profile.toStdString() << " in " << config.toStdString() << "
+";
+            result = 1;
+        }
+        std::cerr << "read and placed: " << loadMs << " ms; " << panel.status().toStdString() << "
+";
+        const auto shot = [&](int view, const QString& name, double window) {
+            panel.showView(view);
+            panel.chart()->setWindow(window);
+            QCoreApplication::processEvents();
+            QElapsedTimer t;
+            t.start();
+            const QPixmap image = panel.grab();
+            const double ms = t.nsecsElapsed() / 1e6;
+            image.save(out + name);
+            std::cerr << (out + name).toStdString() << ": chart drawn in " << panel.chart()->lastDrawMs()
+                      << " ms, window in " << ms << " ms
+";
+        };
+        shot(1, QStringLiteral("-inout.png"), 0);
+        shot(0, QStringLiteral("-input.png"), 0);
+        shot(1, QStringLiteral("-inout-10min.png"), 600);
+    }
+    QSettings(QStringLiteral("VideoProcessor"), QStringLiteral("Levels Scope Snapshot")).clear();
+    return result;
+}
+
 int main(int argc, char** argv)
 {
+    bool snapshot = false;
     for (int i = 1; i < argc; ++i)
+    {
         if (std::strcmp(argv[i], "--csv") == 0)
             return RunCsv(argc, argv);
+        snapshot = snapshot || std::strcmp(argv[i], "--snapshot") == 0;
+    }
     // A window: drop the console Windows gave a program started from Explorer,
     // keep the terminal's when started from one.
     DWORD processes[2] = {};
-    if (GetConsoleProcessList(processes, 2) == 1)
+    if (!snapshot && GetConsoleProcessList(processes, 2) == 1)
         FreeConsole();
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("VP Levels Scope"));
     QApplication::setOrganizationName(QStringLiteral("VideoProcessor"));
     QApplication::setStyle(VpTheme::CreateStyle());
     app.setStyleSheet(VpTheme::StyleSheet());
+    if (snapshot)
+        return RunSnapshot(argc, argv);
     LevelsScopePanel::Panel panel;
     panel.setWindowTitle(QStringLiteral("VP Levels Scope"));
     panel.resize(1400, 900);

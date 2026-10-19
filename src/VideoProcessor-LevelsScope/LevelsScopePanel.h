@@ -36,9 +36,21 @@ namespace LevelsScopePanel
     class Panel : public QWidget
     {
     public:
-        explicit Panel(QWidget* parent = nullptr)
-            : QWidget(parent), settings_(QStringLiteral("VideoProcessor"), QStringLiteral("Levels Scope"))
+        // `settingsName` keeps a snapshot run's choices apart from the window's.
+        explicit Panel(QWidget* parent = nullptr, const QString& settingsName = QStringLiteral("Levels Scope"),
+            bool restore = true)
+            : QWidget(parent), settings_(QStringLiteral("VideoProcessor"), settingsName)
         {
+            // His theme paints only #root, QMainWindow and his own widgets dark;
+            // the rest comes from the colours his Config page and charts use.
+            setObjectName(QStringLiteral("root"));
+            setAttribute(Qt::WA_StyledBackground, true);
+            setStyleSheet(QStringLiteral(
+                "QTreeWidget { color: #e8f1f8; background: #0b1520; border: 1px solid #3a5269; border-radius: 4px; outline: 0; }"
+                " QTreeWidget::item { padding: 3px 6px; }"
+                " QTreeWidget::item:hover { background: #152536; }"
+                " QTreeWidget::item:selected { background: #173b58; color: #f0f8ff; }"
+                " QPushButton:checked { color: #f8fcff; background: #1479c4; border-color: #248dd6; }"));
             auto* layout = new QVBoxLayout(this);
             layout->setContentsMargins(12, 12, 12, 12);
             layout->setSpacing(8);
@@ -62,6 +74,7 @@ namespace LevelsScopePanel
             layout->addLayout(sources);
             status_ = new QLabel;
             status_->setWordWrap(true);
+            status_->setProperty("help", true);
             layout->addWidget(status_);
 
             // Sections: tick to show, double-click a name to rename.
@@ -80,6 +93,7 @@ namespace LevelsScopePanel
             controls->setSpacing(4);
             const auto group = [&](const QStringList& names, int checked, auto onPick) {
                 auto* buttons = new QButtonGroup(this);
+                if (!viewButtons_) viewButtons_ = buttons;
                 for (int i = 0; i < names.size(); ++i)
                 {
                     auto* b = new QPushButton(names[i]);
@@ -128,11 +142,13 @@ namespace LevelsScopePanel
             layout->addWidget(scroll_);
             readout_ = new QLabel;
             readout_->setTextFormat(Qt::RichText);
-            readout_->setMinimumHeight(22);
+            // Fixed size: a long readout is cut off rather than resizing the window.
+            readout_->setFixedHeight(24);
+            readout_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
             layout->addWidget(readout_);
             note_ = new QLabel;
             note_->setWordWrap(true);
-            note_->setStyleSheet(QStringLiteral("color: #7d8a97;"));
+            note_->setProperty("help", true);
             layout->addWidget(note_);
 
             connect(openLogs, &QPushButton::clicked, this, [this] {
@@ -182,6 +198,12 @@ namespace LevelsScopePanel
             chart_->onHover = [this](const QString& text) { readout_->setText(text); };
 
             loadSections();
+            if (!restore)
+            {
+                rebuildLegend();
+                updateNote();
+                return;
+            }
             QString config = settings_.value(QStringLiteral("config")).toString();
             if (config.isEmpty() || !QFileInfo::exists(config))
             {
@@ -195,6 +217,24 @@ namespace LevelsScopePanel
             if (!logs.isEmpty()) loadLogs(logs);
             else updateNote();
         }
+
+        // For a snapshot run: open these, pick that profile and view.
+        void open(const QString& config, const QStringList& logs)
+        {
+            loadConfig(config);
+            loadLogs(logs);
+        }
+        bool selectProfile(const QString& section)
+        {
+            const int i = profiles_->findData(section, Qt::UserRole, Qt::MatchFixedString);
+            if (i < 0) return false;
+            profiles_->setCurrentIndex(i);
+            place();
+            return true;
+        }
+        void showView(int id) { viewButtons_->button(id)->click(); }
+        LevelsScopeView::Chart* chart() const { return chart_; }
+        QString status() const { return status_->text(); }
 
     private:
         // Rendering profiles that set any tone or target key: the DTM profiles.
@@ -261,6 +301,7 @@ namespace LevelsScopePanel
                 placed_ = LevelsScopeData::Place(library_, request_, error);
                 if (!placed_) placeError_ = QString::fromStdWString(error);
                 chart_->setScreen(request_.targetNits, request_.blackNits);
+                chart_->refresh();
             }
             fillSections();
             updateNote();
@@ -324,20 +365,17 @@ namespace LevelsScopePanel
             const bool input = settings_.value(QStringLiteral("view"), 1).toInt() == 0;
             for (const auto& t : input ? LevelsScopeView::InputTraces() : LevelsScopeView::InOutTraces())
             {
+                // The chips of the Config page's charts (ToneChartPanel): the
+                // trace's colour when on, his muted grey when off.
+                QColor c = t.color;
+                c.setAlpha(255);
                 auto* b = new QToolButton;
-                b->setText(t.name);
+                b->setText(QStringLiteral("● ") + t.name);
                 b->setCheckable(true);
                 b->setChecked(chart_->shown(t.key));
-                b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-                QPixmap swatch(12, 12);
-                swatch.fill(Qt::transparent);
-                {
-                    QPainter p(&swatch);
-                    QColor c = t.color;
-                    c.setAlpha(255);
-                    p.fillRect(QRect(1, 4, 10, 4), c);
-                }
-                b->setIcon(QIcon(swatch));
+                b->setStyleSheet(QStringLiteral(
+                    "QToolButton { color: %1; background: #101d2a; border: 1px solid %1; border-radius: 10px; padding: 1px 8px; }"
+                    " QToolButton:!checked { color: #63798c; border-color: #2c4659; }").arg(c.name()));
                 const std::string key = t.key;
                 connect(b, &QToolButton::toggled, this, [this, key](bool on) {
                     chart_->setShown(key, on);
@@ -414,5 +452,6 @@ namespace LevelsScopePanel
         QHBoxLayout* legend_ = nullptr;
         LevelsScopeView::Chart* chart_ = nullptr;
         QScrollBar* scroll_ = nullptr;
+        QButtonGroup* viewButtons_ = nullptr;
     };
 }
