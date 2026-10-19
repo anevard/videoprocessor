@@ -2,6 +2,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include "LevelsScopeEngine.h"
 #include "LevelsScopeLog.h"
+#include "LevelsScopePanel.h"
+#include <VpTheme.h>
+#include <QApplication>
+#include <windows.h>
 #include <ConfigEditorCore.h>
 #include <ToneProfileRequest.h>
 #include <cstdio>
@@ -11,7 +15,8 @@
 #include <string>
 #include <vector>
 
-// The VP Levels Scope helper, step one: no window yet. It reads vp.log files
+// The VP Levels Scope helper. With no arguments it opens the scope window
+// (LevelsScopePanel, in his Config theme). With --csv it reads vp.log files
 // and one Rendering / DTM profile of a saved VideoProcessor.cfg, and writes a
 // CSV row per logged sample: what VP logged, what libplacebo received, and
 // where the probe levels landed under the profile and under libplacebo's
@@ -56,7 +61,7 @@ namespace
     }
 }
 
-int main(int argc, char** argv)
+int RunCsv(int argc, char** argv)
 {
     std::string config, profile, csv;
     std::vector<std::string> logs;
@@ -175,4 +180,26 @@ int main(int argc, char** argv)
     std::fclose(out);
     std::cerr << written << " rows -> " << csv << "\n";
     return 0;
+}
+
+int main(int argc, char** argv)
+{
+    for (int i = 1; i < argc; ++i)
+        if (std::strcmp(argv[i], "--csv") == 0)
+            return RunCsv(argc, argv);
+    // A window: drop the console Windows gave a program started from Explorer,
+    // keep the terminal's when started from one.
+    DWORD processes[2] = {};
+    if (GetConsoleProcessList(processes, 2) == 1)
+        FreeConsole();
+    QApplication app(argc, argv);
+    QApplication::setApplicationName(QStringLiteral("VP Levels Scope"));
+    QApplication::setOrganizationName(QStringLiteral("VideoProcessor"));
+    QApplication::setStyle(VpTheme::CreateStyle());
+    app.setStyleSheet(VpTheme::StyleSheet());
+    LevelsScopePanel::Panel panel;
+    panel.setWindowTitle(QStringLiteral("VP Levels Scope"));
+    panel.resize(1400, 900);
+    panel.show();
+    return app.exec();
 }
