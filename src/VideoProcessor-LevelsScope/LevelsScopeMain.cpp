@@ -4,7 +4,11 @@
 #include "LevelsScopeLog.h"
 #include "LevelsScopePanel.h"
 #include <VpTheme.h>
+#include <QAbstractButton>
 #include <QApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QElapsedTimer>
 #include <QSettings>
 #include <windows.h>
@@ -241,6 +245,46 @@ int RunSnapshot(int argc, char** argv)
     return result;
 }
 
+// The window's own timing: every event that takes over 30 ms to handle is
+// written to %TEMP%\vp-levels-scope-timing.log with what it was, so a slow
+// click or zoom on the operator's PC can be read rather than guessed.
+class TimedApplication : public QApplication
+{
+public:
+    TimedApplication(int& argc, char** argv) : QApplication(argc, argv)
+    {
+        log_.setFileName(QDir::temp().absoluteFilePath(QStringLiteral("vp-levels-scope-timing.log")));
+        if (log_.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+            log_.write(QStringLiteral("%1 started\n").arg(QDateTime::currentDateTime().toString(Qt::ISODate)).toUtf8());
+    }
+    bool notify(QObject* receiver, QEvent* event) override
+    {
+        QElapsedTimer timer;
+        timer.start();
+        ++depth_;
+        const QEvent::Type type = event->type();
+        const bool result = QApplication::notify(receiver, event);
+        --depth_;
+        const double ms = timer.nsecsElapsed() / 1e6;
+        if (ms > 30.0 && log_.isOpen())
+        {
+            QString what = QString::fromLatin1(receiver->metaObject()->className());
+            if (!receiver->objectName().isEmpty()) what += QStringLiteral(" ") + receiver->objectName();
+            if (auto* button = qobject_cast<QAbstractButton*>(receiver)) what += QStringLiteral(" \"") + button->text() + u'"';
+            log_.write(QStringLiteral("%1 %2%3 ms  event %4  %5\n")
+                .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz")))
+                .arg(QString(depth_ * 2, u' '))
+                .arg(ms, 8, 'f', 1).arg(static_cast<int>(type)).arg(what).toUtf8());
+            log_.flush();
+        }
+        return result;
+    }
+
+private:
+    QFile log_;
+    int depth_ = 0;
+};
+
 int main(int argc, char** argv)
 {
     bool snapshot = false;
@@ -255,7 +299,7 @@ int main(int argc, char** argv)
     DWORD processes[2] = {};
     if (!snapshot && GetConsoleProcessList(processes, 2) == 1)
         FreeConsole();
-    QApplication app(argc, argv);
+    TimedApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("VP Levels Scope"));
     QApplication::setOrganizationName(QStringLiteral("VideoProcessor"));
     QApplication::setStyle(VpTheme::CreateStyle());
