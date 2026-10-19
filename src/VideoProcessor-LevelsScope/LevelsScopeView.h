@@ -89,6 +89,7 @@ namespace LevelsScopeView
         explicit Chart(QWidget* parent = nullptr) : QWidget(parent)
         {
             setMouseTracking(true);
+            setObjectName(QStringLiteral("levelsScopeChart"));
             setMinimumHeight(360);
             setMaximumHeight(760);
             for (const auto* list : { &InputTraces(), &InOutTraces() })
@@ -222,6 +223,31 @@ namespace LevelsScopeView
         static QColor Fg() { return QColor(QStringLiteral("#e8eaec")); }
         static QColor Fg2() { return QColor(QStringLiteral("#b4b9bf")); }
         static QColor Card() { return QColor(QStringLiteral("#101b27")); }
+
+        // A dot drawn once per colour and size and then stamped: anti-aliased
+        // circles drawn one by one cost far more than the rest of the chart.
+        const QPixmap& Dot(const QColor& color, double r)
+        {
+            const qreal dpr = devicePixelRatioF();
+            const QString key = QStringLiteral("%1/%2/%3").arg(color.rgba()).arg(r).arg(dpr);
+            auto found = dots_.find(key);
+            if (found != dots_.end()) return found->second;
+            const int side = static_cast<int>(std::ceil(2 * r + 2));
+            QPixmap dot(QSize(side, side) * dpr);
+            dot.setDevicePixelRatio(dpr);
+            dot.fill(Qt::transparent);
+            QPainter p(&dot);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            p.drawEllipse(QPointF(side / 2.0, side / 2.0), r, r);
+            return dots_.emplace(key, dot).first->second;
+        }
+        void Stamp(QPainter& p, const QPixmap& dot, double x, double y)
+        {
+            const double half = dot.width() / dot.devicePixelRatio() / 2.0;
+            p.drawPixmap(QPointF(x - half, y - half), dot);
+        }
 
         static Axis AxisFor(Range r)
         {
@@ -387,13 +413,12 @@ namespace LevelsScopeView
                         QColor c = tr.color;
                         c.setAlphaF(0.75f);
                         p.setPen(Qt::NoPen);
-                        p.setBrush(c);
+                        const QPixmap& dot = Dot(c, r);
                         for (const Column& col : columns)
                         {
-                            p.drawEllipse(QPointF(col.x, Y(col.hi)), r, r);
-                            if (Y(col.lo) - Y(col.hi) > 2 * r) p.drawEllipse(QPointF(col.x, Y(col.lo)), r, r);
+                            Stamp(p, dot, col.x, Y(col.hi));
+                            if (Y(col.lo) - Y(col.hi) > 2 * r) Stamp(p, dot, col.x, Y(col.lo));
                         }
-                        p.setBrush(Qt::NoBrush);
                         continue;
                     }
                     QPen pen(tr.color, tr.width);
@@ -455,12 +480,14 @@ namespace LevelsScopeView
                 const auto blacks = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.s.masteringBlackNits : 0.0; });
                 const auto outPeaks = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.outPeak : 0.0; });
                 p.setPen(Qt::NoPen);
+                p.setRenderHint(QPainter::Antialiasing, false);
                 if (shown("inband"))
                     for (size_t i = 0; i < peaks.size() && i < blacks.size(); ++i)
                         p.fillRect(QRectF(peaks[i].x - bw / 2, Y(peaks[i].hi), bw, Y(blacks[i].lo) - Y(peaks[i].hi)), traces[0].color);
                 if (shown("outband"))
                     for (const Column& col : outPeaks)
                         p.fillRect(QRectF(col.x - bw / 2, Y(col.hi), bw, Y(screenBlack_) - Y(col.hi)), traces[1].color);
+                p.setRenderHint(QPainter::Antialiasing, true);
                 if (shown("inband"))
                     avgLine(bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.inAverage : 0.0; }), QColor(255, 255, 255));
                 if (shown("outband"))
@@ -490,9 +517,8 @@ namespace LevelsScopeView
                     for (const Column& col : columns)
                         if (Y(col.lo) - Y(col.hi) > 1.5) p.drawLine(QPointF(col.x, Y(col.hi)), QPointF(col.x, Y(col.lo)));
                     p.setPen(Qt::NoPen);
-                    p.setBrush(tr.color);
-                    for (const Column& col : columns) p.drawEllipse(QPointF(col.x, Y(col.sum / col.n)), r, r);
-                    p.setBrush(Qt::NoBrush);
+                    const QPixmap& dot = Dot(tr.color, r);
+                    for (const Column& col : columns) Stamp(p, dot, col.x, Y(col.sum / col.n));
                 }
             }
         }
@@ -586,5 +612,6 @@ namespace LevelsScopeView
         bool dragging_ = false, dirty_ = true;
         double dragX_ = 0.0, dragStart_ = 0.0, lastDrawMs_ = 0.0;
         QPixmap layer_;
+        std::map<QString, QPixmap> dots_;
     };
 }
