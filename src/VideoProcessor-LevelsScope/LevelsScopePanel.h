@@ -62,8 +62,11 @@ namespace LevelsScopePanel
             auto* openConfig = new QPushButton(QStringLiteral("Config…"));
             profiles_ = new QComboBox;
             profiles_->setMinimumWidth(180);
+            // Ignored width: a long path is cut short (whole path on hover)
+            // rather than widening the window past the screen.
             configLabel_ = new QLabel;
-            configLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            configLabel_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+            configLabel_->setProperty("help", true);
             sources->addWidget(openLogs);
             sources->addWidget(openFolder);
             sources->addSpacing(16);
@@ -124,11 +127,16 @@ namespace LevelsScopePanel
                 chart_->setRange(static_cast<LevelsScopeView::Range>(id));
                 settings_.setValue(QStringLiteral("range"), id);
             });
-            legend_ = new QHBoxLayout;
-            legend_->setSpacing(4);
-            controls->addLayout(legend_);
             controls->addStretch(1);
             layout->addLayout(controls);
+            // The view's traces on a row of their own, so seven chips never
+            // set the window's minimum width.
+            legend_ = new QHBoxLayout;
+            legend_->setSpacing(4);
+            auto* legendRow = new QHBoxLayout;
+            legendRow->addLayout(legend_);
+            legendRow->addStretch(1);
+            layout->addLayout(legendRow);
 
             chart_->setView(view == 0 ? LevelsScopeView::View::Input : LevelsScopeView::View::InOut);
             chart_->setRange(static_cast<LevelsScopeView::Range>(range));
@@ -258,6 +266,7 @@ namespace LevelsScopePanel
             configPath_ = path;
             settings_.setValue(QStringLiteral("config"), path);
             configLabel_->setText(QDir::toNativeSeparators(path));
+            configLabel_->setToolTip(QDir::toNativeSeparators(path));
             const QString wanted = settings_.value(QStringLiteral("profile")).toString();
             const QSignalBlocker block(profiles_);
             profiles_->clear();
@@ -390,7 +399,9 @@ namespace LevelsScopePanel
         {
             syncing_ = true;
             const int position = chart_->position();
+            // Everything shown: no handle at all, not a stray one at the left.
             scroll_->setEnabled(position >= 0);
+            scroll_->setRange(0, position >= 0 ? 1000 : 0);
             scroll_->setValue((std::max)(position, 0));
             syncing_ = false;
         }
@@ -402,11 +413,15 @@ namespace LevelsScopePanel
                 note = QStringLiteral("Open a VideoProcessor.cfg to choose a DTM profile.");
             else if (!placeError_.isEmpty())
                 note = QStringLiteral("In vs out needs VP Renderer (Beta)'s libplacebo beside this program's folder: %1").arg(placeError_);
+            else if (settings_.value(QStringLiteral("view"), 1).toInt() == 0)
+                note = QStringLiteral("Input scope: what VP logged. Measured values are libplacebo's peak detection; "
+                                      "L1 and the mastering range are what the stream declared. Screen lines: the profile's target %1 / %2.")
+                    .arg(LevelsScopeView::Short(request_.targetNits), LevelsScopeView::Short(request_.blackNits));
             else
                 note = QStringLiteral("In vs out: the profile's curve computed by libplacebo's own functions (VP Renderer (Beta)'s "
                                       "libplacebo-377.dll), through the Config page's tone engine, from what VP logged. "
                                       "Contrast recovery (a detail pass) is not part of the curve. Screen lines: the profile's target %1 / %2.")
-                    .arg(LevelsScopeView::Nits(request_.targetNits), LevelsScopeView::Nits(request_.blackNits));
+                    .arg(LevelsScopeView::Short(request_.targetNits), LevelsScopeView::Short(request_.blackNits));
             note_->setText(note);
         }
 
