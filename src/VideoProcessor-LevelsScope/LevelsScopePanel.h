@@ -298,7 +298,7 @@ namespace LevelsScopePanel
                     return QString::fromLocal8Bit(document_.Get(section.c_str(), key).c_str()).trimmed();
                 });
                 std::wstring error;
-                placed_ = LevelsScopeData::Place(library_, request_, error);
+                placed_ = LevelsScopeData::Place(library_, [this](const QString&) -> const ToneCurveProvider::Request& { return request_; }, error);
                 if (!placed_) placeError_ = QString::fromStdWString(error);
                 chart_->setScreen(request_.targetNits, request_.blackNits);
                 chart_->refresh();
@@ -336,8 +336,8 @@ namespace LevelsScopePanel
                 item->setData(0, Qt::UserRole + 1, s.kind);
                 item->setText(0, found != names_.end() ? found->second : s.kind);
                 item->setCheckState(0, isPicked(s) ? Qt::Checked : Qt::Unchecked);
-                item->setText(1, QDateTime::fromSecsSinceEpoch(s.a).toString(QStringLiteral("d MMM HH:mm")));
-                item->setText(2, QStringLiteral("%1 min").arg((s.b - s.a + 30) / 60));
+                item->setText(1, QDateTime::fromMSecsSinceEpoch(std::llround(s.a * 1000.0)).toString(QStringLiteral("d MMM HH:mm")));
+                item->setText(2, QStringLiteral("%1 min").arg(std::lround((s.b - s.a) / 60.0)));
                 item->setText(3, s.rangeKnown ? QStringLiteral("%1%2 – %3").arg(s.dolbyVision ? QStringLiteral("DV ") : QString(),
                     LevelsScopeView::Nits(s.black), LevelsScopeView::Nits(s.peak)) : QStringLiteral("not declared"));
                 item->setText(4, s.build.isEmpty() ? QStringLiteral("not identified") : s.build);
