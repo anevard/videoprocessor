@@ -36,6 +36,29 @@ namespace ToneCurveProvider
         bool sceneAverageKnown = true;
         // The source's mastering peak (InfoFrame); 0 when it has none.
         double masteringPeakNits = 0.0;
+        // The rest of the source's own metadata, as VP hands it to libplacebo
+        // (TranslateColorSpace for HDR10, DolbyVisionLuminancePolicy for the
+        // Dolby Vision tunnel); 0 when the source has none. The charts leave
+        // these at 0. Dolby Vision fills the authored scene values from L1.
+        double masteringBlackNits = 0.0;
+        double maxCllNits = 0.0;
+        double maxFallNits = 0.0;
+        double authoredPeakPq = 0.0;     // max_pq_y
+        double authoredAveragePq = 0.0;  // avg_pq_y
+        // What peak detection reported, in place of sceneMix: a logged
+        // sample (the Levels Scope), not an imagined scene. Unused when
+        // `present` is false, and like the mix only when sceneAverageKnown
+        // (peak detection on); a scene maximum of 0 was not reported and
+        // takes the peak, as on grey.
+        struct Measured
+        {
+            bool present = false;
+            double peakNits = 0.0;
+            double pqAverageNits = 0.0;     // avg_pq_y as nits
+            double linearAverageNits = 0.0; // scene_avg
+            double sceneMaxNits[3] = {};
+        };
+        Measured measured{};
         // Source points in PQ (0 to 1).
         std::vector<double> sourcePq;
     };
