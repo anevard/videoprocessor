@@ -216,12 +216,10 @@ int RunSnapshot(int argc, char** argv)
         const double loadMs = timer.nsecsElapsed() / 1e6;
         if (!panel.selectProfile(profile))
         {
-            std::cerr << "no DTM profile " << profile.toStdString() << " in " << config.toStdString() << "
-";
+            std::cerr << "no DTM profile " << profile.toStdString() << " in " << config.toStdString() << "\n";
             result = 1;
         }
-        std::cerr << "read and placed: " << loadMs << " ms; " << panel.status().toStdString() << "
-";
+        std::cerr << "read and placed: " << loadMs << " ms; " << panel.status().toStdString() << "\n";
         const auto shot = [&](int view, const QString& name, double window) {
             panel.showView(view);
             panel.chart()->setWindow(window);
@@ -232,8 +230,7 @@ int RunSnapshot(int argc, char** argv)
             const double ms = t.nsecsElapsed() / 1e6;
             image.save(out + name);
             std::cerr << (out + name).toStdString() << ": chart drawn in " << panel.chart()->lastDrawMs()
-                      << " ms, window in " << ms << " ms
-";
+                      << " ms, window in " << ms << " ms\n";
         };
         shot(1, QStringLiteral("-inout.png"), 0);
         shot(0, QStringLiteral("-input.png"), 0);
