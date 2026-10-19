@@ -103,8 +103,8 @@ namespace LevelsScopeView
             double off = 0.0;
             for (const auto* s : sections)
             {
-                segs_.push_back({ s, off, static_cast<double>(s->b - s->a) });
-                off += static_cast<double>(s->b - s->a);
+                segs_.push_back({ s, off, s->b - s->a });
+                off += s->b - s->a;
             }
             total_ = (std::max)(off, 1.0);
             clampStart();
@@ -216,13 +216,14 @@ namespace LevelsScopeView
         struct Seg { const LevelsScopeData::Section* s; double off, len; };
         struct Axis { double lo, hi; std::vector<double> ticks; };
         // One pixel column of one quantity.
-        struct Column { double x = 0, lo = 0, hi = 0, sum = 0, last = 0; int n = 0; qint64 t0 = 0, t1 = 0; };
+        struct Column { double x = 0, lo = 0, hi = 0, sum = 0, last = 0; int n = 0; double t0 = 0, t1 = 0; };
 
         static QColor Grid() { return QColor(QStringLiteral("#2d475f")); }
         static QColor Muted() { return QColor(QStringLiteral("#93a8bb")); }
         static QColor Fg() { return QColor(QStringLiteral("#e8eaec")); }
         static QColor Fg2() { return QColor(QStringLiteral("#b4b9bf")); }
         static QColor Card() { return QColor(QStringLiteral("#101b27")); }
+        static QDateTime When(double seconds) { return QDateTime::fromMSecsSinceEpoch(std::llround(seconds * 1000.0)); }
 
         // A dot drawn once per colour and size and then stamped: anti-aliased
         // circles drawn one by one cost far more than the rest of the chart.
@@ -419,7 +420,7 @@ namespace LevelsScopeView
                 p.drawLine(QPointF(xa, 4), QPointF(xa, h - PadB));
                 const double room = (std::min)(xb, xEnd) - (std::max)(xa, PadL) - 10;
                 const QString shortName = name_ ? name_(*g.s) : g.s->kind;
-                const QDateTime start = QDateTime::fromSecsSinceEpoch(g.s->a);
+                const QDateTime start = When(g.s->a);
                 QString label = shortName + QStringLiteral(" · ") + start.toString(QStringLiteral("d MMM HH:mm"));
                 if (fm.horizontalAdvance(label) > room) label = fm.elidedText(shortName, Qt::ElideRight, static_cast<int>(room));
                 if (room > 14)
@@ -433,7 +434,7 @@ namespace LevelsScopeView
                 {
                     const double x = X(g.off + t - g.s->a);
                     if (x - xa < 30 || xb - x < 20) continue;
-                    const QString clock = QDateTime::fromSecsSinceEpoch(static_cast<qint64>(t)).toString(QStringLiteral("HH:mm"));
+                    const QString clock = When(t).toString(QStringLiteral("HH:mm"));
                     p.drawText(QRectF(x - 30, h - PadB + 4, 60, 16), Qt::AlignHCenter | Qt::AlignTop, clock);
                 }
             }
@@ -591,7 +592,7 @@ namespace LevelsScopeView
             if (!g) return QString();
             const LevelsScopeData::Point* pt = nearest(*g, v);
             if (!pt) return QString();
-            const QString when = QDateTime::fromSecsSinceEpoch(pt->t).toString(QStringLiteral("HH:mm:ss · d MMM"));
+            const QString when = When(pt->t).toString(QStringLiteral("HH:mm:ss · d MMM"));
             const QString name = name_ ? name_(*g->s) : g->s->kind;
             const auto& s = pt->s;
             QStringList parts{ QStringLiteral("<b>%1</b> %2").arg(when, name.toHtmlEscaped()) };
