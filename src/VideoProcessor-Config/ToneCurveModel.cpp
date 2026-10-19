@@ -128,6 +128,22 @@ namespace
     bool Detected(const Library& library, const ToneCurveProvider::Request& request,
         pl_hdr_metadata& detected)
     {
+        // A logged sample is what the detector reported, as it reported it;
+        // a profile with peak detection off never sees it.
+        if (request.measured.present)
+        {
+            const auto& measured = request.measured;
+            if (!request.sceneAverageKnown || !(measured.peakNits > 0.0))
+                return false;
+            detected = pl_hdr_metadata{};
+            detected.max_pq_y = library.rescale(PL_HDR_NITS, PL_HDR_PQ, static_cast<float>(measured.peakNits));
+            detected.avg_pq_y = library.rescale(PL_HDR_NITS, PL_HDR_PQ, static_cast<float>(measured.pqAverageNits));
+            detected.scene_avg = static_cast<float>(measured.linearAverageNits);
+            for (int i = 0; i < 3; i++)
+                detected.scene_max[i] = static_cast<float>(measured.sceneMaxNits[i] > 0.0
+                    ? measured.sceneMaxNits[i] : measured.peakNits);
+            return true;
+        }
         if (!request.sceneAverageKnown || request.sceneMix.empty())
             return false;
         double share = 0.0, sumPq = 0.0, sumLinear = 0.0;
@@ -150,9 +166,9 @@ namespace
         return true;
     }
 
-    // The source as the shader sees it: a PQ source whose static metadata is
-    // the mastering peak, with what peak detection reports filling in what
-    // the source does not author (1905-1917), then inferred as
+    // The source as the shader sees it: a PQ source with the metadata VP hands
+    // it (the charts give only the mastering peak), with what peak detection
+    // reports filling in what the source does not author (1905-1917), then inferred as
     // pl_color_space_infer_map does to an HDR source (997-1036).
     pl_color_space Source(const Library& library, const ToneCurveProvider::Request& request,
         const pl_hdr_metadata* detected)
@@ -161,6 +177,11 @@ namespace
         src.primaries = PL_COLOR_PRIM_BT_2020;
         src.transfer = PL_COLOR_TRC_PQ;
         src.hdr.max_luma = static_cast<float>(request.masteringPeakNits);
+        src.hdr.min_luma = static_cast<float>(request.masteringBlackNits);
+        src.hdr.max_cll = static_cast<float>(request.maxCllNits);
+        src.hdr.max_fall = static_cast<float>(request.maxFallNits);
+        src.hdr.max_pq_y = static_cast<float>(request.authoredPeakPq);
+        src.hdr.avg_pq_y = static_cast<float>(request.authoredAveragePq);
         if (detected)
         {
             // PL_DEF, src/common.h 135 (not exported).
