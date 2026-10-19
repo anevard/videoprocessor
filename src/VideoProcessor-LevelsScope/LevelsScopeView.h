@@ -317,7 +317,7 @@ namespace LevelsScopeView
                     {
                         const double r = W < 1500 ? 2.6 : 1.6;
                         QColor c = tr.color;
-                        c.setAlphaF(0.75);
+                        c.setAlphaF(0.75f);
                         p.setPen(Qt::NoPen);
                         p.setBrush(c);
                         for (const auto& pt : g.s->points)
@@ -464,7 +464,7 @@ namespace LevelsScopeView
             for (const Label& l : labels)
             {
                 QColor line = l.c;
-                line.setAlphaF(0.6);
+                line.setAlphaF(0.6f);
                 p.setPen(QPen(line, 1.0));
                 p.drawLine(QPointF(xEnd, l.y), QPointF(xEnd + 6, l.ly - 4));
                 p.setPen(l.c);
