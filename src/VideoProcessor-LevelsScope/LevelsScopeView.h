@@ -83,6 +83,12 @@ namespace LevelsScopeView
         return QString::number(v, 'f', v >= 100 ? 0 : v >= 1 ? 1 : v >= 0.01 ? 3 : 4);
     }
 
+    // A setting as the operator typed it: 75, 0.006 (no padding zeros).
+    inline QString Short(double v)
+    {
+        return QString::number(v, 'g', 6);
+    }
+
     class Chart : public QWidget
     {
     public:
@@ -548,8 +554,8 @@ namespace LevelsScopeView
         {
             struct Label { double y, ly; QString a, b; QColor c; };
             std::vector<Label> labels;
-            if (inY(screenPeak_)) labels.push_back({ Y(screenPeak_), 0, QStringLiteral("screen"), Nits(screenPeak_), Fg2() });
-            if (inY(screenBlack_)) labels.push_back({ Y(screenBlack_), 0, QStringLiteral("screen"), Nits(screenBlack_), Fg2() });
+            if (inY(screenPeak_)) labels.push_back({ Y(screenPeak_), 0, QStringLiteral("screen"), Short(screenPeak_), Fg2() });
+            if (inY(screenBlack_)) labels.push_back({ Y(screenBlack_), 0, QStringLiteral("screen"), Short(screenBlack_), Fg2() });
             if (view_ == View::Input)
             {
                 const double vr = (std::min)(start_ + windowLength(), total_) - 1e-6;
