@@ -1,10 +1,12 @@
 #pragma once
 #include "LevelsScopeData.h"
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QFontMetrics>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QWheelEvent>
 #include <QWidget>
 #include <algorithm>
@@ -12,7 +14,6 @@
 #include <functional>
 #include <map>
 #include <string>
-#include <tuple>
 #include <vector>
 
 // The Levels Scope chart: brightness over time on a PQ nits axis, the picked
@@ -20,6 +21,11 @@
 // Input scope (what VP measured and what the stream declared) and In vs out
 // (the master's range against where the profile put it on screen). A QPainter
 // port of the web page's canvas, every operator ruling kept (GUI-PLAN item K).
+//
+// Drawn like a hardware scope: samples are binned into pixel columns (the
+// column's lowest, highest and mean value), so a redraw costs the chart's
+// width, not the log's length, and samples off screen are skipped. The data
+// layer is cached; hovering redraws only the crosshair.
 // No Q_OBJECT: callbacks are plain functions, as on his Config page.
 namespace LevelsScopeView
 {
@@ -89,7 +95,7 @@ namespace LevelsScopeView
                 for (const Trace& t : *list) shown_[t.key] = true;
         }
 
-        // The sections to draw, in time order; the screen's peak and black.
+        // The sections to draw, in time order.
         void setSections(std::vector<const LevelsScopeData::Section*> sections)
         {
             segs_.clear();
@@ -101,13 +107,15 @@ namespace LevelsScopeView
             }
             total_ = (std::max)(off, 1.0);
             clampStart();
-            update();
+            changed();
         }
-        void setScreen(double peakNits, double blackNits) { screenPeak_ = peakNits; screenBlack_ = blackNits; update(); }
-        void setNames(std::function<QString(const LevelsScopeData::Section&)> name) { name_ = std::move(name); update(); }
-        void setView(View v) { view_ = v; update(); }
-        void setRange(Range r) { range_ = r; update(); }
-        void setShown(const std::string& key, bool on) { shown_[key] = on; update(); }
+        // The data under the sections changed (a new profile placed them).
+        void refresh() { changed(); }
+        void setScreen(double peakNits, double blackNits) { screenPeak_ = peakNits; screenBlack_ = blackNits; changed(); }
+        void setNames(std::function<QString(const LevelsScopeData::Section&)> name) { name_ = std::move(name); changed(); }
+        void setView(View v) { view_ = v; changed(); }
+        void setRange(Range r) { range_ = r; changed(); }
+        void setShown(const std::string& key, bool on) { shown_[key] = on; changed(); }
         bool shown(const std::string& key) const { auto f = shown_.find(key); return f == shown_.end() || f->second; }
         // 0 shows everything.
         void setWindow(double seconds)
@@ -116,9 +124,8 @@ namespace LevelsScopeView
             window_ = seconds;
             start_ = mid - windowLength() / 2.0;
             clampStart();
-            update();
+            changed();
         }
-        double window() const { return window_; }
         // Scroll position, 0 to 1000; -1 when everything is shown.
         int position() const
         {
@@ -129,8 +136,10 @@ namespace LevelsScopeView
         {
             start_ = (total_ - windowLength()) * value / 1000.0;
             clampStart();
-            update();
+            changed();
         }
+        // How long the last data layer took to draw, in milliseconds.
+        double lastDrawMs() const { return lastDrawMs_; }
         // Called with a hover description, or empty when the pointer leaves.
         std::function<void(const QString&)> onHover;
         // Called when zoom or drag moves the view.
@@ -139,8 +148,146 @@ namespace LevelsScopeView
     protected:
         void paintEvent(QPaintEvent*) override
         {
+            const qreal dpr = devicePixelRatioF();
+            if (dirty_ || layer_.size() != size() * dpr)
+            {
+                QElapsedTimer timer;
+                timer.start();
+                layer_ = QPixmap(size() * dpr);
+                layer_.setDevicePixelRatio(dpr);
+                QPainter p(&layer_);
+                drawLayer(p);
+                dirty_ = false;
+                lastDrawMs_ = timer.nsecsElapsed() / 1e6;
+            }
             QPainter p(this);
-            p.fillRect(rect(), QColor(QStringLiteral("#101b27")));
+            p.drawPixmap(0, 0, layer_);
+            if (hover_ >= 0.0 && !segs_.empty())
+            {
+                const double x = PadL + (hover_ - start_) / windowLength() * plotWidth();
+                p.setPen(QPen(QColor(232, 234, 236, 128), 1.0));
+                p.drawLine(QPointF(x, PadT), QPointF(x, height() - PadB));
+            }
+        }
+
+        void mousePressEvent(QMouseEvent* e) override
+        {
+            dragging_ = true;
+            dragX_ = e->position().x();
+            dragStart_ = start_;
+            setCursor(Qt::ClosedHandCursor);
+        }
+        void mouseReleaseEvent(QMouseEvent*) override { dragging_ = false; unsetCursor(); }
+        void mouseMoveEvent(QMouseEvent* e) override
+        {
+            if (dragging_)
+            {
+                start_ = dragStart_ - (e->position().x() - dragX_) / plotWidth() * windowLength();
+                clampStart();
+                dirty_ = true;
+                if (onMoved) onMoved();
+            }
+            hover_ = valueAt(e->position().x());
+            update();
+            if (onHover) onHover(describe(hover_));
+        }
+        void leaveEvent(QEvent*) override
+        {
+            hover_ = -1.0;
+            update();
+            if (onHover) onHover(QString());
+        }
+        void wheelEvent(QWheelEvent* e) override
+        {
+            if (segs_.empty()) return;
+            const double at = valueAt(e->position().x()), W = windowLength();
+            const double next = (std::min)((std::max)(W * (e->angleDelta().y() < 0 ? 1.25 : 0.8), 120.0), total_);
+            window_ = next >= total_ ? 0.0 : next;
+            start_ = at - (at - start_) * next / W;
+            clampStart();
+            changed();
+            if (onMoved) onMoved();
+            e->accept();
+        }
+
+    private:
+        static constexpr double PadL = 64, PadR = 84, PadT = 26, PadB = 30;
+        struct Seg { const LevelsScopeData::Section* s; double off, len; };
+        struct Axis { double lo, hi; std::vector<double> ticks; };
+        // One pixel column of one quantity.
+        struct Column { double x = 0, lo = 0, hi = 0, sum = 0, last = 0; int n = 0; qint64 t0 = 0, t1 = 0; };
+
+        static QColor Grid() { return QColor(QStringLiteral("#2d475f")); }
+        static QColor Muted() { return QColor(QStringLiteral("#93a8bb")); }
+        static QColor Fg() { return QColor(QStringLiteral("#e8eaec")); }
+        static QColor Fg2() { return QColor(QStringLiteral("#b4b9bf")); }
+        static QColor Card() { return QColor(QStringLiteral("#101b27")); }
+
+        static Axis AxisFor(Range r)
+        {
+            if (r == Range::Shadows) return { 0.00005, 30, { 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1, 3, 10, 30 } };
+            if (r == Range::Highlights) return { 5, 4000, { 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 4000 } };
+            return { 0.0001, 4000, { 0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 4000 } };
+        }
+
+        void changed() { dirty_ = true; update(); }
+        double windowLength() const { return window_ > 0 ? (std::min)(window_, total_) : total_; }
+        double plotWidth() const { return (std::max)(1.0, width() - PadL - PadR); }
+        double valueAt(double x) const { return start_ + (x - PadL) / plotWidth() * windowLength(); }
+        void clampStart() { start_ = (std::min)((std::max)(start_, 0.0), (std::max)(total_ - windowLength(), 0.0)); }
+
+        const Seg* segAt(double v) const
+        {
+            for (const Seg& g : segs_) if (v >= g.off && v <= g.off + g.len) return &g;
+            return nullptr;
+        }
+        static const LevelsScopeData::Point* nearest(const Seg& g, double v)
+        {
+            const auto& pts = g.s->points;
+            if (pts.empty()) return nullptr;
+            const double t = g.s->a + (v - g.off);
+            auto it = std::lower_bound(pts.begin(), pts.end(), t,
+                [](const LevelsScopeData::Point& p, double value) { return p.t < value; });
+            if (it == pts.end()) return &pts.back();
+            if (it != pts.begin() && std::abs(std::prev(it)->t - t) < std::abs(it->t - t)) --it;
+            return &*it;
+        }
+
+        // The samples of `g` on screen, binned into pixel columns of `value`
+        // (values <= 0 are left out, as missing).
+        template<class FX, class FV>
+        std::vector<Column> bin(const Seg& g, const FX& X, double margin, FV value) const
+        {
+            std::vector<Column> columns;
+            const auto& pts = g.s->points;
+            const double t0 = g.s->a + (start_ - g.off) - margin, t1 = g.s->a + (start_ + windowLength() - g.off) + margin;
+            auto it = std::lower_bound(pts.begin(), pts.end(), t0,
+                [](const LevelsScopeData::Point& p, double v) { return p.t < v; });
+            for (; it != pts.end() && it->t <= t1; ++it)
+            {
+                const double v = value(*it);
+                if (!(v > 0)) continue;
+                const double x = std::floor(X(g.off + it->t - g.s->a)) + 0.5;
+                if (columns.empty() || columns.back().x != x || it->t - columns.back().t1 > 30)
+                {
+                    Column c;
+                    c.x = x; c.lo = c.hi = v; c.t0 = it->t;
+                    columns.push_back(c);
+                }
+                Column& c = columns.back();
+                c.lo = (std::min)(c.lo, v);
+                c.hi = (std::max)(c.hi, v);
+                c.sum += v;
+                c.last = v;
+                ++c.n;
+                c.t1 = it->t;
+            }
+            return columns;
+        }
+
+        void drawLayer(QPainter& p)
+        {
+            p.fillRect(rect(), Card());
             p.setRenderHint(QPainter::Antialiasing);
             QFont font(QStringLiteral("Consolas"));
             font.setPixelSize(12);
@@ -150,7 +297,7 @@ namespace LevelsScopeView
             if (segs_.empty())
             {
                 p.setPen(Muted());
-                p.drawText(rect(), Qt::AlignCenter, QStringLiteral("Open logs, then pick one or more sections above."));
+                p.drawText(rect(), Qt::AlignCenter, QStringLiteral("Open logs, then tick one or more sections above."));
                 return;
             }
             const double W = windowLength(), v0 = start_, xEnd = w - PadR;
@@ -201,7 +348,8 @@ namespace LevelsScopeView
                     p.drawText(QPointF((std::max)(xa, PadL) + 5, 16), label);
                 }
                 p.setPen(Muted());
-                for (double t = std::ceil((g.s->a + 1) / step) * step; t < g.s->b; t += step)
+                const double first = (std::max)(std::ceil((g.s->a + 1) / step), std::floor((g.s->a + v0 - g.off) / step)) * step;
+                for (double t = first; t < g.s->b && X(g.off + t - g.s->a) <= xEnd + 40; t += step)
                 {
                     const double x = X(g.off + t - g.s->a);
                     if (x - xa < 30 || xb - x < 20) continue;
@@ -211,88 +359,8 @@ namespace LevelsScopeView
             }
             if (view_ == View::InOut) drawInOut(p, X, Y, W, xEnd, inY);
             else drawInput(p, X, Y, W);
-            if (hover_ >= 0.0)
-            {
-                p.setPen(QPen(QColor(232, 234, 236, 128), 1.0));
-                p.drawLine(QPointF(X(hover_), PadT), QPointF(X(hover_), h - PadB));
-            }
             p.restore();
             drawMarginLabels(p, Y, inY, xEnd, h);
-        }
-
-        void mousePressEvent(QMouseEvent* e) override
-        {
-            dragging_ = true;
-            dragX_ = e->position().x();
-            dragStart_ = start_;
-            setCursor(Qt::ClosedHandCursor);
-        }
-        void mouseReleaseEvent(QMouseEvent*) override { dragging_ = false; unsetCursor(); }
-        void mouseMoveEvent(QMouseEvent* e) override
-        {
-            if (dragging_)
-            {
-                start_ = dragStart_ - (e->position().x() - dragX_) / plotWidth() * windowLength();
-                clampStart();
-                if (onMoved) onMoved();
-            }
-            hover_ = valueAt(e->position().x());
-            update();
-            if (onHover) onHover(describe(hover_));
-        }
-        void leaveEvent(QEvent*) override
-        {
-            hover_ = -1.0;
-            update();
-            if (onHover) onHover(QString());
-        }
-        void wheelEvent(QWheelEvent* e) override
-        {
-            if (segs_.empty()) return;
-            const double at = valueAt(e->position().x()), W = windowLength();
-            const double next = (std::min)((std::max)(W * (e->angleDelta().y() < 0 ? 1.25 : 0.8), 120.0), total_);
-            window_ = next >= total_ ? 0.0 : next;
-            start_ = at - (at - start_) * next / W;
-            clampStart();
-            update();
-            if (onMoved) onMoved();
-            e->accept();
-        }
-
-    private:
-        static constexpr double PadL = 64, PadR = 84, PadT = 26, PadB = 30;
-        struct Seg { const LevelsScopeData::Section* s; double off, len; };
-        struct Axis { double lo, hi; std::vector<double> ticks; };
-
-        static QColor Grid() { return QColor(QStringLiteral("#2d475f")); }
-        static QColor Muted() { return QColor(QStringLiteral("#7d8a97")); }
-        static QColor Fg() { return QColor(QStringLiteral("#e8eaec")); }
-        static QColor Fg2() { return QColor(QStringLiteral("#b4b9bf")); }
-
-        static Axis AxisFor(Range r)
-        {
-            if (r == Range::Shadows) return { 0.00005, 30, { 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1, 3, 10, 30 } };
-            if (r == Range::Highlights) return { 5, 4000, { 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 4000 } };
-            return { 0.0001, 4000, { 0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 4000 } };
-        }
-
-        double windowLength() const { return window_ > 0 ? (std::min)(window_, total_) : total_; }
-        double plotWidth() const { return (std::max)(1.0, width() - PadL - PadR); }
-        double valueAt(double x) const { return start_ + (x - PadL) / plotWidth() * windowLength(); }
-        void clampStart() { start_ = (std::min)((std::max)(start_, 0.0), (std::max)(total_ - windowLength(), 0.0)); }
-
-        const Seg* segAt(double v) const
-        {
-            for (const Seg& g : segs_) if (v >= g.off && v <= g.off + g.len) return &g;
-            return nullptr;
-        }
-        static const LevelsScopeData::Point* nearest(const Seg& g, double v)
-        {
-            const double t = g.s->a + (v - g.off);
-            const LevelsScopeData::Point* best = nullptr;
-            for (const auto& point : g.s->points)
-                if (!best || std::abs(point.t - t) < std::abs(best->t - t)) best = &point;
-            return best;
         }
 
         template<class FX, class FY>
@@ -308,22 +376,22 @@ namespace LevelsScopeView
                 return s.rangeKnown ? s.masteringPeakNits : 0.0;
             };
             for (const Seg& g : segs_)
-            {
-                const auto Xp = [&](const LevelsScopeData::Point& pt) { return X(g.off + pt.t - g.s->a); };
                 for (const Trace& tr : InputTraces())
                 {
                     if (!shown(tr.key)) continue;
+                    const auto columns = bin(g, X, 30, [&](const LevelsScopeData::Point& pt) { return value(pt.s, tr.key); });
                     if (tr.dots)
                     {
+                        // The column's highest and, when apart, its lowest.
                         const double r = W < 1500 ? 2.6 : 1.6;
                         QColor c = tr.color;
                         c.setAlphaF(0.75f);
                         p.setPen(Qt::NoPen);
                         p.setBrush(c);
-                        for (const auto& pt : g.s->points)
+                        for (const Column& col : columns)
                         {
-                            const double v = value(pt.s, tr.key);
-                            if (v > 0) p.drawEllipse(QPointF(Xp(pt), Y(v)), r, r);
+                            p.drawEllipse(QPointF(col.x, Y(col.hi)), r, r);
+                            if (Y(col.lo) - Y(col.hi) > 2 * r) p.drawEllipse(QPointF(col.x, Y(col.lo)), r, r);
                         }
                         p.setBrush(Qt::NoBrush);
                         continue;
@@ -331,28 +399,29 @@ namespace LevelsScopeView
                     QPen pen(tr.color, tr.width);
                     if (tr.dashed) pen.setDashPattern(tr.step ? QVector<qreal>{ 6 / tr.width, 5 / tr.width } : QVector<qreal>{ 7 / tr.width, 4 / tr.width });
                     p.setPen(pen);
+                    // A line through the column means (steps through the last
+                    // value), and the column's spread where it is wider than a pixel.
                     QPainterPath path;
-                    bool open = false;
-                    qint64 prevT = 0;
-                    double prevY = 0;
-                    for (const auto& pt : g.s->points)
+                    const Column* prev = nullptr;
+                    for (const Column& col : columns)
                     {
-                        const double v = value(pt.s, tr.key);
-                        if (!(v > 0)) { open = false; continue; }
-                        const double x = Xp(pt), y = Y(v);
-                        if (open && pt.t - prevT <= 30)
+                        const double y = Y(tr.step ? col.last : col.sum / col.n);
+                        if (prev && col.t0 - prev->t1 <= 30)
                         {
-                            if (tr.step) path.lineTo(x, prevY);
-                            path.lineTo(x, y);
+                            if (tr.step) path.lineTo(col.x, Y(prev->last));
+                            path.lineTo(col.x, y);
                         }
-                        else path.moveTo(x, y);
-                        open = true;
-                        prevT = pt.t;
-                        prevY = y;
+                        else path.moveTo(col.x, y);
+                        prev = &col;
                     }
                     p.drawPath(path);
+                    if (!tr.step)
+                    {
+                        p.setPen(QPen(tr.color, 1.0));
+                        for (const Column& col : columns)
+                            if (Y(col.lo) - Y(col.hi) > 1.5) p.drawLine(QPointF(col.x, Y(col.hi)), QPointF(col.x, Y(col.lo)));
+                    }
                 }
-            }
         }
 
         template<class FX, class FY, class FIn>
@@ -360,45 +429,43 @@ namespace LevelsScopeView
         {
             const double bw = (std::max)(1.0, 5.0 / W * (xEnd - PadL));
             const auto& traces = InOutTraces();
-            const auto avgLine = [&](const std::vector<std::tuple<qint64, double, double>>& pts, const QColor& color) {
-                for (const auto& [c, width] : { std::pair<QColor, double>{ QColor(QStringLiteral("#101b27")), 4.5 }, { color, 2.0 } })
+            const auto placed = [](const LevelsScopeData::Point& pt) {
+                return pt.computed && pt.s.rangeKnown && pt.s.masteringBlackNits > 0;
+            };
+            const auto avgLine = [&](const std::vector<Column>& columns, const QColor& color) {
+                for (const auto& [c, width] : { std::pair<QColor, double>{ Card(), 4.5 }, { color, 2.0 } })
                 {
                     QPen pen(c, width);
                     pen.setJoinStyle(Qt::RoundJoin);
                     p.setPen(pen);
                     QPainterPath path;
-                    bool open = false;
-                    qint64 prev = 0;
-                    for (const auto& [t, x, y] : pts)
+                    const Column* prev = nullptr;
+                    for (const Column& col : columns)
                     {
-                        if (open && t - prev <= 30) path.lineTo(x, y); else path.moveTo(x, y);
-                        open = true;
-                        prev = t;
+                        const double y = Y(col.sum / col.n);
+                        if (prev && col.t0 - prev->t1 <= 30) path.lineTo(col.x, y); else path.moveTo(col.x, y);
+                        prev = &col;
                     }
                     p.drawPath(path);
                 }
             };
             for (const Seg& g : segs_)
             {
-                std::vector<std::tuple<qint64, double, double>> inAvg, outAvg;
-                for (const auto& pt : g.s->points)
-                {
-                    if (!pt.computed || !pt.s.rangeKnown || !(pt.s.masteringBlackNits > 0)) continue;
-                    const double x = X(g.off + pt.t - g.s->a);
-                    if (x < PadL - bw || x > xEnd + bw) continue;
-                    const double x0 = x - bw / 2;
-                    if (shown("inband"))
-                        p.fillRect(QRectF(x0, Y(pt.inPeak), bw, Y(pt.s.masteringBlackNits) - Y(pt.inPeak)), traces[0].color);
-                    if (shown("outband"))
-                        p.fillRect(QRectF(x0, Y(pt.outPeak), bw, Y(screenBlack_) - Y(pt.outPeak)), traces[1].color);
-                    if (pt.inAverage > 0)
-                    {
-                        inAvg.emplace_back(pt.t, x, Y(pt.inAverage));
-                        outAvg.emplace_back(pt.t, x, Y(pt.outAverage));
-                    }
-                }
-                if (shown("inband")) avgLine(inAvg, QColor(255, 255, 255));
-                if (shown("outband")) avgLine(outAvg, QColor(0x5c, 0xf2, 0x9a));
+                const auto peaks = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.inPeak : 0.0; });
+                const auto blacks = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.s.masteringBlackNits : 0.0; });
+                const auto outPeaks = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.outPeak : 0.0; });
+                p.setPen(Qt::NoPen);
+                if (shown("inband"))
+                    for (size_t i = 0; i < peaks.size() && i < blacks.size(); ++i)
+                        p.fillRect(QRectF(peaks[i].x - bw / 2, Y(peaks[i].hi), bw, Y(blacks[i].lo) - Y(peaks[i].hi)), traces[0].color);
+                if (shown("outband"))
+                    for (const Column& col : outPeaks)
+                        p.fillRect(QRectF(col.x - bw / 2, Y(col.hi), bw, Y(screenBlack_) - Y(col.hi)), traces[1].color);
+                if (shown("inband"))
+                    avgLine(bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.inAverage : 0.0; }), QColor(255, 255, 255));
+                if (shown("outband"))
+                    avgLine(bin(g, X, 30, [&](const auto& pt) { return placed(pt) && pt.inAverage > 0 ? pt.outAverage : 0.0; }),
+                        QColor(0x5c, 0xf2, 0x9a));
             }
             // The probes' origin lines, over the bands so the white band cannot wash them out.
             for (int i = 0; i < 3; ++i)
@@ -410,22 +477,24 @@ namespace LevelsScopeView
                 p.setPen(pen);
                 p.drawLine(QPointF(PadL, Y(LevelsScopeData::Probes[i])), QPointF(xEnd, Y(LevelsScopeData::Probes[i])));
             }
+            // Where each probe landed: a dot at the column's mean, its spread as a stroke.
             const double r = (std::min)(2.4, (std::max)(1.2, bw / 2));
-            p.setPen(Qt::NoPen);
-            for (const Seg& g : segs_)
-                for (const auto& pt : g.s->points)
+            for (int i = 0; i < 3; ++i)
+            {
+                const Trace& tr = traces[2 + i];
+                if (!shown(tr.key)) continue;
+                for (const Seg& g : segs_)
                 {
-                    if (!pt.computed || !pt.s.rangeKnown || !(pt.s.masteringBlackNits > 0)) continue;
-                    const double x = X(g.off + pt.t - g.s->a);
-                    if (x < PadL - bw || x > xEnd + bw) continue;
-                    for (int i = 0; i < 3; ++i)
-                    {
-                        if (!shown(traces[2 + i].key)) continue;
-                        p.setBrush(traces[2 + i].color);
-                        p.drawEllipse(QPointF(x, Y(pt.outProbe[i])), r, r);
-                    }
+                    const auto columns = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.outProbe[i] : 0.0; });
+                    p.setPen(QPen(tr.color, 1.0));
+                    for (const Column& col : columns)
+                        if (Y(col.lo) - Y(col.hi) > 1.5) p.drawLine(QPointF(col.x, Y(col.hi)), QPointF(col.x, Y(col.lo)));
+                    p.setPen(Qt::NoPen);
+                    p.setBrush(tr.color);
+                    for (const Column& col : columns) p.drawEllipse(QPointF(col.x, Y(col.sum / col.n)), r, r);
+                    p.setBrush(Qt::NoBrush);
                 }
-            p.setBrush(Qt::NoBrush);
+            }
         }
 
         // Right-margin labels, pushed apart so none overlaps; no mastering
@@ -514,7 +583,8 @@ namespace LevelsScopeView
         Range range_ = Range::Full;
         std::map<std::string, bool> shown_;
         std::function<QString(const LevelsScopeData::Section&)> name_;
-        bool dragging_ = false;
-        double dragX_ = 0.0, dragStart_ = 0.0;
+        bool dragging_ = false, dirty_ = true;
+        double dragX_ = 0.0, dragStart_ = 0.0, lastDrawMs_ = 0.0;
+        QPixmap layer_;
     };
 }
