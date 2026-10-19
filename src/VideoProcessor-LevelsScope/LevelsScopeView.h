@@ -601,14 +601,30 @@ namespace LevelsScopeView
                 const auto peaks = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.inPeak : 0.0; });
                 const auto blacks = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.s.masteringBlackNits : 0.0; });
                 const auto outPeaks = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.outPeak : 0.0; });
+                // Each band column reaches halfway to a joined neighbour (30 s
+                // or less away), so neighbours share an edge: no seams where
+                // samples are 6 s apart instead of 5, and no overlap darkening
+                // the translucent bands. Real gaps stay gaps.
+                const auto edges = [&](const std::vector<Column>& cs, size_t i) {
+                    const bool before = i > 0 && cs[i].t0 - cs[i - 1].t1 <= 30;
+                    const bool after = i + 1 < cs.size() && cs[i + 1].t0 - cs[i].t1 <= 30;
+                    return std::pair<double, double>{ before ? (cs[i - 1].x + cs[i].x) / 2 : cs[i].x - bw / 2,
+                        after ? (cs[i].x + cs[i + 1].x) / 2 : cs[i].x + bw / 2 };
+                };
                 p.setPen(Qt::NoPen);
                 p.setRenderHint(QPainter::Antialiasing, false);
                 if (shown("inband"))
                     for (size_t i = 0; i < peaks.size() && i < blacks.size(); ++i)
-                        p.fillRect(QRectF(peaks[i].x - bw / 2, Y(peaks[i].hi), bw, Y(blacks[i].lo) - Y(peaks[i].hi)), traces[0].color);
+                    {
+                        const auto [left, right] = edges(peaks, i);
+                        p.fillRect(QRectF(left, Y(peaks[i].hi), right - left, Y(blacks[i].lo) - Y(peaks[i].hi)), traces[0].color);
+                    }
                 if (shown("outband"))
-                    for (const Column& col : outPeaks)
-                        p.fillRect(QRectF(col.x - bw / 2, Y(col.hi), bw, Y(screenBlack_) - Y(col.hi)), traces[1].color);
+                    for (size_t i = 0; i < outPeaks.size(); ++i)
+                    {
+                        const auto [left, right] = edges(outPeaks, i);
+                        p.fillRect(QRectF(left, Y(outPeaks[i].hi), right - left, Y(screenBlack_) - Y(outPeaks[i].hi)), traces[1].color);
+                    }
                 if (shown("inband"))
                     avgLine(bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.inAverage : 0.0; }), QColor(255, 255, 255));
                 if (shown("outband"))
