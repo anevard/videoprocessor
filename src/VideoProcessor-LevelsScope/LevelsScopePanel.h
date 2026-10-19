@@ -91,7 +91,7 @@ namespace LevelsScopePanel
             sections_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
             layout->addWidget(sections_);
 
-            // View, time window, brightness range, and the traces of the view.
+            // The view, how to zoom, and the traces of the view.
             auto* controls = new QHBoxLayout;
             controls->setSpacing(4);
             const auto group = [&](const QStringList& names, int checked, auto onPick) {
@@ -116,17 +116,11 @@ namespace LevelsScopePanel
                 rebuildLegend();
                 syncScroll();
             });
-            group({ QStringLiteral("All"), QStringLiteral("60 min"), QStringLiteral("30 min"), QStringLiteral("10 min"), QStringLiteral("5 min") },
-                0, [this](int id) {
-                    static const double seconds[] = { 0, 3600, 1800, 600, 300 };
-                    chart_->setWindow(seconds[id]);
-                    syncScroll();
-                });
-            const int range = settings_.value(QStringLiteral("range"), 0).toInt();
-            group({ QStringLiteral("Full"), QStringLiteral("Shadows"), QStringLiteral("Highlights") }, range, [this](int id) {
-                chart_->setRange(static_cast<LevelsScopeView::Range>(id));
-                settings_.setValue(QStringLiteral("range"), id);
-            });
+            // No zoom buttons: the chart zooms and scrolls both ways itself.
+            auto* howTo = new QLabel(QStringLiteral(
+                "Wheel: zoom time  ·  Ctrl+wheel: zoom brightness  ·  drag: move  ·  double-click: show all"));
+            howTo->setProperty("help", true);
+            controls->addWidget(howTo);
             controls->addStretch(1);
             layout->addLayout(controls);
             // The view's traces on a row of their own, so seven chips never
@@ -139,12 +133,18 @@ namespace LevelsScopePanel
             layout->addLayout(legendRow);
 
             chart_->setView(view == 0 ? LevelsScopeView::View::Input : LevelsScopeView::View::InOut);
-            chart_->setRange(static_cast<LevelsScopeView::Range>(range));
             for (const auto* list : { &LevelsScopeView::InputTraces(), &LevelsScopeView::InOutTraces() })
                 for (const auto& t : *list)
                     chart_->setShown(t.key, settings_.value(QStringLiteral("shown/") + QString::fromStdString(t.key), true).toBool());
             chart_->setNames([this](const LevelsScopeData::Section& s) { return shortName(s); });
-            layout->addWidget(chart_, 1);
+            // The chart with its brightness scrollbar on the right, time below.
+            auto* chartRow = new QHBoxLayout;
+            chartRow->setSpacing(2);
+            chartRow->addWidget(chart_, 1);
+            brightness_ = new QScrollBar(Qt::Vertical);
+            brightness_->setRange(0, 0);
+            chartRow->addWidget(brightness_);
+            layout->addLayout(chartRow, 1);
             scroll_ = new QScrollBar(Qt::Horizontal);
             scroll_->setRange(0, 1000);
             layout->addWidget(scroll_);
@@ -202,6 +202,7 @@ namespace LevelsScopePanel
                 sections_->editItem(item, 0);
             });
             connect(scroll_, &QScrollBar::valueChanged, this, [this](int v) { if (!syncing_) chart_->setPosition(v); });
+            connect(brightness_, &QScrollBar::valueChanged, this, [this](int v) { if (!syncing_) chart_->setBrightnessPosition(v); });
             chart_->onMoved = [this] { syncScroll(); };
             chart_->onHover = [this](const QString& text) { readout_->setText(text); };
 
@@ -403,6 +404,10 @@ namespace LevelsScopePanel
             scroll_->setEnabled(position >= 0);
             scroll_->setRange(0, position >= 0 ? 1000 : 0);
             scroll_->setValue((std::max)(position, 0));
+            const int level = chart_->brightnessPosition();
+            brightness_->setEnabled(level >= 0);
+            brightness_->setRange(0, level >= 0 ? 1000 : 0);
+            brightness_->setValue((std::max)(level, 0));
             syncing_ = false;
         }
 
@@ -467,6 +472,7 @@ namespace LevelsScopePanel
         QHBoxLayout* legend_ = nullptr;
         LevelsScopeView::Chart* chart_ = nullptr;
         QScrollBar* scroll_ = nullptr;
+        QScrollBar* brightness_ = nullptr;
         QButtonGroup* viewButtons_ = nullptr;
     };
 }

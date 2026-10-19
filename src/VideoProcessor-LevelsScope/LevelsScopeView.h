@@ -30,7 +30,6 @@
 namespace LevelsScopeView
 {
     enum class View { Input, InOut };
-    enum class Range { Full, Shadows, Highlights };
 
     struct Trace
     {
@@ -121,7 +120,38 @@ namespace LevelsScopeView
         void setScreen(double peakNits, double blackNits) { screenPeak_ = peakNits; screenBlack_ = blackNits; changed(); }
         void setNames(std::function<QString(const LevelsScopeData::Section&)> name) { name_ = std::move(name); changed(); }
         void setView(View v) { view_ = v; changed(); }
-        void setRange(Range r) { range_ = r; changed(); }
+        // Show everything: the whole time line and the whole brightness range.
+        void showAll()
+        {
+            window_ = 0.0;
+            start_ = 0.0;
+            yLo_ = Pq(AxisLo);
+            yHi_ = Pq(AxisHi);
+            changed();
+        }
+        // Show this brightness range, in nits.
+        void setBrightness(double loNits, double hiNits)
+        {
+            yLo_ = Pq(loNits);
+            yHi_ = Pq(hiNits);
+            clampBrightness();
+            changed();
+        }
+        // Brightness scroll position, 0 (brightest at the top) to 1000; -1
+        // when the whole brightness range is shown.
+        int brightnessPosition() const
+        {
+            const double free = (Pq(AxisHi) - Pq(AxisLo)) - (yHi_ - yLo_);
+            return free > 1e-9 ? static_cast<int>(std::lround((Pq(AxisHi) - yHi_) / free * 1000.0)) : -1;
+        }
+        void setBrightnessPosition(int value)
+        {
+            const double height = yHi_ - yLo_, free = (Pq(AxisHi) - Pq(AxisLo)) - height;
+            yHi_ = Pq(AxisHi) - free * value / 1000.0;
+            yLo_ = yHi_ - height;
+            clampBrightness();
+            changed();
+        }
         void setShown(const std::string& key, bool on) { shown_[key] = on; changed(); }
         bool shown(const std::string& key) const { auto f = shown_.find(key); return f == shown_.end() || f->second; }
         // 0 shows everything.
@@ -177,20 +207,32 @@ namespace LevelsScopeView
             }
         }
 
+        // Drag moves the view both ways; double-click shows everything.
         void mousePressEvent(QMouseEvent* e) override
         {
             dragging_ = true;
             dragX_ = e->position().x();
+            dragY_ = e->position().y();
             dragStart_ = start_;
+            dragLo_ = yLo_;
             setCursor(Qt::ClosedHandCursor);
         }
         void mouseReleaseEvent(QMouseEvent*) override { dragging_ = false; unsetCursor(); }
+        void mouseDoubleClickEvent(QMouseEvent*) override
+        {
+            showAll();
+            if (onMoved) onMoved();
+        }
         void mouseMoveEvent(QMouseEvent* e) override
         {
             if (dragging_)
             {
                 start_ = dragStart_ - (e->position().x() - dragX_) / plotWidth() * windowLength();
                 clampStart();
+                const double height = yHi_ - yLo_;
+                yLo_ = dragLo_ + (e->position().y() - dragY_) / plotHeight() * height;
+                yHi_ = yLo_ + height;
+                clampBrightness();
                 dirty_ = true;
                 if (onMoved) onMoved();
             }
@@ -204,9 +246,24 @@ namespace LevelsScopeView
             update();
             if (onHover) onHover(QString());
         }
+        // Wheel zooms time; Ctrl+wheel zooms brightness; both about the pointer.
         void wheelEvent(QWheelEvent* e) override
         {
             if (segs_.empty()) return;
+            const bool in = e->angleDelta().y() > 0;
+            if (e->modifiers() & Qt::ControlModifier)
+            {
+                const double height = yHi_ - yLo_;
+                const double at = yLo_ + (1.0 - (e->position().y() - PadT) / plotHeight()) * height;
+                const double next = (std::min)((std::max)(height * (in ? 0.8 : 1.25), MinBrightnessSpan), Pq(AxisHi) - Pq(AxisLo));
+                yLo_ = at - (at - yLo_) * next / height;
+                yHi_ = yLo_ + next;
+                clampBrightness();
+                changed();
+                if (onMoved) onMoved();
+                e->accept();
+                return;
+            }
             const double at = valueAt(e->position().x()), W = windowLength();
             const double next = (std::min)((std::max)(W * (e->angleDelta().y() < 0 ? 1.25 : 0.8), 120.0), total_);
             window_ = next >= total_ ? 0.0 : next;
@@ -219,8 +276,9 @@ namespace LevelsScopeView
 
     private:
         static constexpr double PadL = 64, PadR = 84, PadT = 26, PadB = 30;
+        // The whole brightness range, in nits, and the narrowest zoom, in PQ.
+        static constexpr double AxisLo = 0.0001, AxisHi = 4000, MinBrightnessSpan = 0.02;
         struct Seg { const LevelsScopeData::Section* s; double off, len; };
-        struct Axis { double lo, hi; std::vector<double> ticks; };
         // One pixel column of one quantity.
         struct Column { double x = 0, lo = 0, hi = 0, sum = 0, last = 0; int n = 0; double t0 = 0, t1 = 0; };
 
@@ -310,11 +368,45 @@ namespace LevelsScopeView
             p.restore();
         }
 
-        static Axis AxisFor(Range r)
+        // Nits from PQ, the inverse of Pq(), for the axis only.
+        static double PqNits(double pq)
         {
-            if (r == Range::Shadows) return { 0.00005, 30, { 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1, 3, 10, 30 } };
-            if (r == Range::Highlights) return { 5, 4000, { 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 4000 } };
-            return { 0.0001, 4000, { 0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 4000 } };
+            const double m1 = 2610.0 / 16384, m2 = 2523.0 / 4096 * 128, c1 = 3424.0 / 4096,
+                c2 = 2413.0 / 4096 * 32, c3 = 2392.0 / 4096 * 32;
+            const double e = std::pow((std::max)(pq, 0.0), 1.0 / m2);
+            return 10000.0 * std::pow((std::max)(e - c1, 0.0) / (c2 - c3 * e), 1.0 / m1);
+        }
+
+        // Gridlines for the brightness shown: decades when it spans many,
+        // then 1-3, 1-2-5, and every digit when zoomed in close.
+        static std::vector<double> Ticks(double lo, double hi)
+        {
+            const double decades = std::log10(hi / lo);
+            static const std::vector<double> d1{ 1 }, d13{ 1, 3 }, d125{ 1, 2, 5 }, d19{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+            const std::vector<double>& m = decades > 4 ? d1 : decades > 2 ? d13 : decades > 0.7 ? d125 : d19;
+            std::vector<double> ticks;
+            for (int e = -5; e <= 4; ++e)
+                for (double k : m)
+                {
+                    const double n = k * std::pow(10.0, e);
+                    if (n >= lo * 0.999 && n <= hi * 1.001) ticks.push_back(n);
+                }
+            if (decades > 4 && hi >= 3999 && (ticks.empty() || ticks.back() < 4000)) ticks.push_back(4000);
+            return ticks;
+        }
+        static QString TickLabel(double n)
+        {
+            if (n >= 1) return QString::number(n, 'g', 6);
+            return QString::number(n, 'f', static_cast<int>(std::ceil(-std::log10(n) - 1e-9)));
+        }
+
+        double plotHeight() const { return (std::max)(1.0, height() - PadT - PadB); }
+        void clampBrightness()
+        {
+            const double full = Pq(AxisHi) - Pq(AxisLo);
+            const double height = (std::min)((std::max)(yHi_ - yLo_, MinBrightnessSpan), full);
+            yLo_ = (std::min)((std::max)(yLo_, Pq(AxisLo)), Pq(AxisHi) - height);
+            yHi_ = yLo_ + height;
         }
 
         void changed() { dirty_ = true; update(); }
@@ -388,24 +480,23 @@ namespace LevelsScopeView
                 return;
             }
             const double W = windowLength(), v0 = start_, xEnd = w - PadR;
-            const Axis axis = AxisFor(range_);
-            const double ylo = Pq(axis.lo), yhi = Pq(axis.hi);
+            const double ylo = yLo_, yhi = yHi_, loNits = PqNits(ylo), hiNits = PqNits(yhi);
             const auto X = [&](double v) { return PadL + (v - v0) / W * (xEnd - PadL); };
             const auto Y = [&](double n) { return PadT + (1.0 - (Pq(n) - ylo) / (yhi - ylo)) * (h - PadT - PadB); };
-            const auto inY = [&](double n) { return n >= axis.lo && n <= axis.hi; };
+            const auto inY = [&](double n) { return n >= loNits * 0.999 && n <= hiNits * 1.001; };
 
             // The screen band and the graticule; a tick label only where it clears the last one.
-            const double bandTop = Y((std::min)(screenPeak_, axis.hi)), bandBot = Y((std::max)(screenBlack_, axis.lo));
+            const double bandTop = Y((std::min)(screenPeak_, hiNits)), bandBot = Y((std::max)(screenBlack_, loNits));
             if (bandBot > bandTop) p.fillRect(QRectF(PadL, bandTop, xEnd - PadL, bandBot - bandTop), QColor(120, 170, 255, 18));
             double lastLabelY = 1e9;
-            for (double n : axis.ticks)
+            for (double n : Ticks(loNits, hiNits))
             {
                 p.setPen(QPen(Grid(), 1.0));
                 p.drawLine(QPointF(PadL, Y(n)), QPointF(xEnd, Y(n)));
                 if (lastLabelY - Y(n) < 15) continue;
                 lastLabelY = Y(n);
                 p.setPen(Muted());
-                p.drawText(QRectF(0, Y(n) - 8, PadL - 8, 16), Qt::AlignRight | Qt::AlignVCenter, QString::number(n));
+                p.drawText(QRectF(0, Y(n) - 8, PadL - 8, 16), Qt::AlignRight | Qt::AlignVCenter, TickLabel(n));
             }
             for (double n : { screenPeak_, screenBlack_ })
             {
@@ -444,8 +535,12 @@ namespace LevelsScopeView
                     p.drawText(QRectF(x - 30, h - PadB + 4, 60, 16), Qt::AlignHCenter | Qt::AlignTop, clock);
                 }
             }
+            // Data stays inside the plot when zoomed in on brightness.
+            p.save();
+            p.setClipRect(QRectF(PadL, PadT, xEnd - PadL, h - PadT - PadB), Qt::IntersectClip);
             if (view_ == View::InOut) drawInOut(p, X, Y, W, xEnd, inY);
             else drawInput(p, X, Y, W);
+            p.restore();
             p.restore();
             drawMarginLabels(p, Y, inY, xEnd, h);
         }
@@ -630,11 +725,11 @@ namespace LevelsScopeView
         double total_ = 1.0, window_ = 0.0, start_ = 0.0, hover_ = -1.0;
         double screenPeak_ = 203.0, screenBlack_ = 0.0;
         View view_ = View::InOut;
-        Range range_ = Range::Full;
         std::map<std::string, bool> shown_;
         std::function<QString(const LevelsScopeData::Section&)> name_;
         bool dragging_ = false, dirty_ = true;
-        double dragX_ = 0.0, dragStart_ = 0.0, lastDrawMs_ = 0.0;
+        double dragX_ = 0.0, dragY_ = 0.0, dragStart_ = 0.0, dragLo_ = 0.0, lastDrawMs_ = 0.0;
+        double yLo_ = Pq(AxisLo), yHi_ = Pq(AxisHi); // the brightness shown, in PQ
         QPixmap layer_;
         std::map<QString, QPixmap> dots_;
     };
