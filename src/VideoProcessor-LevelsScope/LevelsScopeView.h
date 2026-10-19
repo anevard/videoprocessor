@@ -314,16 +314,61 @@ namespace LevelsScopeView
             p.drawPixmap(QPointF(x - half, y - half), dot);
         }
 
+        // Sparse: samples more than ~2.5 px apart on screen (zoomed in). Then
+        // there are few of them and smooth anti-aliased drawing is cheap; when
+        // dense (zoomed out) the pixel-column drawing below is used, where its
+        // steps are too small to see.
+        static bool Sparse(const std::vector<Column>& columns)
+        {
+            if (columns.size() < 2) return true;
+            return (columns.back().x - columns.front().x) / (columns.size() - 1) > 2.5;
+        }
+
+        // A smooth anti-aliased line through the column values, broken at gaps.
+        template<class FY>
+        void Smooth(QPainter& p, const std::vector<Column>& columns, const FY& Y, const QColor& color,
+            double thick, bool step, bool dashed)
+        {
+            p.save();
+            p.setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(color, thick);
+            pen.setJoinStyle(Qt::RoundJoin);
+            if (dashed) pen.setDashPattern({ 7 / thick, 4 / thick });
+            p.setPen(pen);
+            p.setBrush(Qt::NoBrush);
+            QPainterPath path;
+            const Column* prev = nullptr;
+            for (const Column& col : columns)
+            {
+                const double y = Y(step ? col.last : col.sum / col.n);
+                if (prev && col.t0 - prev->t1 <= 30)
+                {
+                    if (step) path.lineTo(col.x, Y(prev->last));
+                    path.lineTo(col.x, y);
+                }
+                else path.moveTo(col.x, y);
+                prev = &col;
+            }
+            p.drawPath(path);
+            p.restore();
+        }
+
         // A trace drawn as a hardware scope draws it: no anti-aliasing, each
         // pixel column filled from its lowest to its highest value (`spread`)
         // and joined to the column before. Anti-aliased strokes cost seconds
-        // a frame on a large high-DPI window; rectangle fills cost almost
-        // nothing. Dashes are gaps in the column pattern; columns further than
-        // a pixel apart (zoomed in) are joined by a plain line.
+        // a frame on a large high-DPI window when the samples are dense;
+        // rectangle fills cost almost nothing. Dashes are gaps in the column
+        // pattern; columns further than a pixel apart are joined by a plain
+        // line. Sparse columns are drawn smooth instead.
         template<class FY>
         void Scope(QPainter& p, const std::vector<Column>& columns, const FY& Y, const QColor& color,
             double thick, bool step, bool dashed, bool spread)
         {
+            if (Sparse(columns))
+            {
+                Smooth(p, columns, Y, color, thick, step, dashed);
+                return;
+            }
             p.save();
             p.setRenderHint(QPainter::Antialiasing, false);
             QPen pen(color, thick);
@@ -611,15 +656,46 @@ namespace LevelsScopeView
                     return std::pair<double, double>{ before ? (cs[i - 1].x + cs[i].x) / 2 : cs[i].x - bw / 2,
                         after ? (cs[i].x + cs[i + 1].x) / 2 : cs[i].x + bw / 2 };
                 };
+                // Zoomed in: each joined run is one smooth shape, its edges
+                // straight from sample to sample; a lone sample stays a bar.
+                const auto area = [&](const std::vector<Column>& tops, const auto& bottom, const QColor& color) {
+                    p.save();
+                    p.setRenderHint(QPainter::Antialiasing, true);
+                    p.setPen(Qt::NoPen);
+                    p.setBrush(color);
+                    for (size_t i = 0; i < tops.size();)
+                    {
+                        size_t j = i;
+                        while (j + 1 < tops.size() && tops[j + 1].t0 - tops[j].t1 <= 30) ++j;
+                        if (i == j)
+                            p.fillRect(QRectF(tops[i].x - bw / 2, Y(tops[i].hi), bw, bottom(i) - Y(tops[i].hi)), color);
+                        else
+                        {
+                            QPolygonF shape;
+                            for (size_t k = i; k <= j; ++k) shape << QPointF(tops[k].x, Y(tops[k].hi));
+                            for (size_t k = j + 1; k-- > i;) shape << QPointF(tops[k].x, bottom(k));
+                            p.drawPolygon(shape);
+                        }
+                        i = j + 1;
+                    }
+                    p.restore();
+                };
+                if (Sparse(peaks))
+                {
+                    if (shown("inband") && blacks.size() == peaks.size())
+                        area(peaks, [&](size_t k) { return Y(blacks[k].lo); }, traces[0].color);
+                    if (shown("outband"))
+                        area(outPeaks, [&](size_t) { return Y(screenBlack_); }, traces[1].color);
+                }
                 p.setPen(Qt::NoPen);
                 p.setRenderHint(QPainter::Antialiasing, false);
-                if (shown("inband"))
+                if (!Sparse(peaks) && shown("inband"))
                     for (size_t i = 0; i < peaks.size() && i < blacks.size(); ++i)
                     {
                         const auto [left, right] = edges(peaks, i);
                         p.fillRect(QRectF(left, Y(peaks[i].hi), right - left, Y(blacks[i].lo) - Y(peaks[i].hi)), traces[0].color);
                     }
-                if (shown("outband"))
+                if (!Sparse(peaks) && shown("outband"))
                     for (size_t i = 0; i < outPeaks.size(); ++i)
                     {
                         const auto [left, right] = edges(outPeaks, i);
