@@ -8,16 +8,25 @@
 #include <QString>
 #include <QStringList>
 #include <algorithm>
+#include <cmath>
+#include <deque>
 #include <fstream>
 #include <map>
 #include <vector>
 
-// The Levels Scope's data: logged samples on one clock, split into viewing
-// sessions and sections, each sample carrying where a profile put its levels.
-// The same reading as the web page it replaces (tools/scope in VP_validation):
-// sessions break at gaps over 30 minutes; a section is a run of one declared
-// source range (DV or not, mastering black and peak) without a gap over 30 s,
-// kept when it lasts 2 minutes or more.
+// The Levels Scope's data: samples on one clock, cut into sections, each
+// sample carrying where a profile put its levels.
+//
+// One Builder takes samples in time order and extends or opens sections, so
+// a log read and a live source (VP's configuration RPC, later) build the
+// same way. Sections live in a deque, which never moves them, because the
+// chart holds pointers to them while samples keep arriving. Times are
+// seconds with millisecond resolution: the log gives whole seconds, live
+// samples arrive several times a second.
+//
+// The cut rules, as the web page had them: a section is a run of one declared
+// source range (DV or not, mastering black and peak) without a gap over 30 s;
+// from a log, a section under 2 minutes is dropped.
 namespace LevelsScopeData
 {
     // The fixed probe levels of the In vs out view, in nits.
@@ -25,10 +34,13 @@ namespace LevelsScopeData
 
     struct Point
     {
-        qint64 t = 0;                  // seconds since the epoch, on the log's clock
+        double t = 0.0;                // seconds since the epoch, millisecond resolution
         LevelsScopeLog::Sample s;
         double inPeak = 0.0;           // measured, else authored (L1)
         double inAverage = 0.0;        // measured PQ average, else authored
+        // The profile this sample is placed with: empty for the one chosen
+        // on the page (logs); the profile VP reported as active (live).
+        QString profile;
         bool computed = false;         // the engine placed this sample
         double outPeak = 0.0, outAverage = 0.0;
         double outProbe[3] = {};
@@ -39,17 +51,96 @@ namespace LevelsScopeData
     {
         QString id;                    // stable across reloads: start, kind and range
         QString kind;                  // the name it gets by default
-        qint64 a = 0, b = 0;           // first and last sample
+        double a = 0.0, b = 0.0;       // first and last sample, seconds
         bool dolbyVision = false;
         bool rangeKnown = false;
         double black = 0.0, peak = 0.0;
         QString build, files;
+        bool open = false;             // still receiving samples
         std::vector<Point> points;
+    };
+
+    // A Point from a logged or live sample; `t` in seconds.
+    inline Point PointOf(const LevelsScopeLog::Sample& s, double t)
+    {
+        Point point;
+        point.t = t;
+        point.s = s;
+        point.inPeak = s.measured && s.detectedPeakNits > 0 ? s.detectedPeakNits : s.authoredPeakNits;
+        point.inAverage = s.measured && s.detectedPqAverageNits > 0 ? s.detectedPqAverageNits : s.authoredAverageNits;
+        return point;
+    }
+
+    inline QString KindOf(const Section& s)
+    {
+        if (s.rangeKnown && std::abs(s.black - 0.0501) < 1e-3) return QStringLiteral("Apple TV home screen");
+        if (s.dolbyVision && s.b - s.a < 360) return QStringLiteral("Short DV clip");
+        return s.dolbyVision ? QStringLiteral("DV programme") : QStringLiteral("HDR10");
+    }
+
+    class Builder
+    {
+    public:
+        // `keepShort`: keep sections under 2 minutes (live keeps everything).
+        explicit Builder(std::deque<Section>& sections, bool keepShort)
+            : sections_(sections), keepShort_(keepShort) {}
+
+        // Samples in time order. Returns the section the point went into.
+        Section& Add(const Point& point, const QString& build = QString(), const QString& file = QString())
+        {
+            const LevelsScopeLog::Sample& s = point.s;
+            Section* current = open_ ? &sections_.back() : nullptr;
+            const bool same = current && s.dolbyVision == current->dolbyVision && s.rangeKnown == current->rangeKnown &&
+                s.masteringBlackNits == current->black && s.masteringPeakNits == current->peak &&
+                point.t - current->b <= 30.0;
+            if (!same)
+            {
+                Close();
+                Section next;
+                next.a = point.t;
+                next.dolbyVision = s.dolbyVision;
+                next.rangeKnown = s.rangeKnown;
+                next.black = s.masteringBlackNits;
+                next.peak = s.masteringPeakNits;
+                next.open = true;
+                // Whole seconds (logs) print as before, so saved names and ticks still match.
+                next.id = QStringLiteral("%1|%2|%3|%4")
+                    .arg(QString::number(point.t, 'f', point.t == std::floor(point.t) ? 0 : 3)).arg(s.dolbyVision)
+                    .arg(s.masteringBlackNits).arg(s.masteringPeakNits);
+                sections_.push_back(next);
+                open_ = true;
+                current = &sections_.back();
+            }
+            current->b = point.t;
+            current->kind = KindOf(*current);
+            current->points.push_back(point);
+            if (!build.isEmpty() && !current->build.split(QStringLiteral(", ")).contains(build))
+                current->build += (current->build.isEmpty() ? QString() : QStringLiteral(", ")) + build;
+            if (!file.isEmpty() && !current->files.split(QStringLiteral(", ")).contains(file))
+                current->files += (current->files.isEmpty() ? QString() : QStringLiteral(", ")) + file;
+            return *current;
+        }
+
+        // Ends the open section: a short one is dropped unless kept.
+        void Close()
+        {
+            if (!open_) return;
+            open_ = false;
+            Section& last = sections_.back();
+            last.open = false;
+            if (!keepShort_ && last.b - last.a < 120.0)
+                sections_.pop_back();
+        }
+
+    private:
+        std::deque<Section>& sections_;
+        bool keepShort_;
+        bool open_ = false;
     };
 
     struct Library
     {
-        std::vector<Section> sections; // in time order
+        std::deque<Section> sections;  // in time order; never moved
         QStringList notes;             // per file: what was read, or why not
         bool measured = false;         // any log had detection lines
     };
@@ -78,18 +169,13 @@ namespace LevelsScopeData
         return result;
     }
 
-    inline QString KindOf(const Section& s)
-    {
-        if (s.rangeKnown && std::abs(s.black - 0.0501) < 1e-3) return QStringLiteral("Apple TV home screen");
-        if (s.dolbyVision && s.b - s.a < 360) return QStringLiteral("Short DV clip");
-        return s.dolbyVision ? QStringLiteral("DV programme") : QStringLiteral("HDR10");
-    }
-
+    // Logs: every file's samples merged (a sample logged twice counts once),
+    // put in time order, then built into sections.
     inline Library Read(const QStringList& paths)
     {
         Library library;
         struct Entry { Point point; QString file, build; };
-        std::map<QString, Entry> merged;   // one per time, kind, peak and L1 peak
+        std::map<QString, Entry> merged;   // one per time (ms), kind, peak and L1 peak
         for (const QString& path : LogFiles(paths, library.notes))
         {
             const QString name = QFileInfo(path).fileName();
@@ -113,15 +199,8 @@ namespace LevelsScopeData
                 const QDateTime when = QDateTime::fromString(QString::fromStdString(sample.time),
                     QStringLiteral("yyyy-MM-dd HH:mm:ss"));
                 if (!when.isValid()) continue;
-                Entry entry;
-                entry.point.t = when.toSecsSinceEpoch();
-                entry.point.s = sample;
-                entry.point.inPeak = sample.measured && sample.detectedPeakNits > 0 ? sample.detectedPeakNits : sample.authoredPeakNits;
-                entry.point.inAverage = sample.measured && sample.detectedPqAverageNits > 0 ?
-                    sample.detectedPqAverageNits : sample.authoredAverageNits;
-                entry.file = name;
-                entry.build = build;
-                const QString key = QStringLiteral("%1|%2|%3|%4").arg(entry.point.t).arg(sample.dolbyVision)
+                Entry entry{ PointOf(sample, when.toMSecsSinceEpoch() / 1000.0), name, build };
+                const QString key = QStringLiteral("%1|%2|%3|%4").arg(when.toMSecsSinceEpoch()).arg(sample.dolbyVision)
                     .arg(sample.detectedPeakNits).arg(sample.authoredPeakNits);
                 if (merged.emplace(key, entry).second) ++kept;
             }
@@ -129,75 +208,45 @@ namespace LevelsScopeData
                 .arg(reader.Measured() ? QStringLiteral("measured and L1") : QStringLiteral("L1 only"))
                 .arg(build.isEmpty() ? QStringLiteral("not identified") : build);
         }
-        std::vector<Entry> all;
-        for (auto& item : merged) all.push_back(item.second);
-        std::stable_sort(all.begin(), all.end(), [](const Entry& p, const Entry& q) { return p.point.t < q.point.t; });
-
-        Section current;
-        bool open = false;
-        QSet<QString> builds, files;
-        const auto close = [&] {
-            if (open && current.b - current.a >= 120)
-            {
-                current.kind = KindOf(current);
-                current.id = QStringLiteral("%1|%2|%3|%4").arg(current.a).arg(current.dolbyVision)
-                    .arg(current.black).arg(current.peak);
-                current.build = QStringList(builds.values()).join(QStringLiteral(", "));
-                current.files = QStringList(files.values()).join(QStringLiteral(", "));
-                library.sections.push_back(current);
-            }
-            open = false;
-            builds.clear();
-            files.clear();
-        };
-        for (const Entry& entry : all)
-        {
-            const LevelsScopeLog::Sample& s = entry.point.s;
-            const bool same = open && s.dolbyVision == current.dolbyVision && s.rangeKnown == current.rangeKnown &&
-                s.masteringBlackNits == current.black && s.masteringPeakNits == current.peak &&
-                entry.point.t - current.b <= 30;
-            if (!same)
-            {
-                close();
-                current = Section{};
-                current.a = entry.point.t;
-                current.dolbyVision = s.dolbyVision;
-                current.rangeKnown = s.rangeKnown;
-                current.black = s.masteringBlackNits;
-                current.peak = s.masteringPeakNits;
-                open = true;
-            }
-            current.b = entry.point.t;
-            current.points.push_back(entry.point);
-            if (!entry.build.isEmpty()) builds.insert(entry.build);
-            files.insert(entry.file);
-        }
-        close();
+        std::vector<const Entry*> ordered;
+        for (const auto& item : merged) ordered.push_back(&item.second);
+        std::stable_sort(ordered.begin(), ordered.end(),
+            [](const Entry* p, const Entry* q) { return p->point.t < q->point.t; });
+        Builder builder(library.sections, false);
+        for (const Entry* entry : ordered)
+            builder.Add(entry->point, entry->build, entry->file);
+        builder.Close();
         return library;
     }
 
-    // Where `profile` puts each sample's levels, through the shared engine.
-    // False with `error` when libplacebo cannot be loaded.
-    inline bool Place(Library& library, const ToneCurveProvider::Request& profile, std::wstring& error)
+    // Where `profile` puts one sample, through the shared engine. False with
+    // `error` when libplacebo cannot be loaded.
+    inline bool PlacePoint(Point& point, const ToneCurveProvider::Request& profile, std::wstring& error)
+    {
+        point.computed = false;
+        if (!(point.inPeak > 0.0)) return true;   // a black frame: nothing to place
+        const std::vector<double> probes = { Probes[0], Probes[1], Probes[2], point.inPeak,
+            point.inAverage > 0.0 ? point.inAverage : point.inPeak };
+        LevelsScopeEngine::Outcome outcome;
+        if (!LevelsScopeEngine::Evaluate(profile, point.s, probes, outcome, error))
+            return false;
+        for (int i = 0; i < 3; ++i) point.outProbe[i] = outcome.profileNits[i];
+        point.outPeak = outcome.profileNits[3];
+        point.outAverage = outcome.profileNits[4];
+        point.kneeNits = ToneCurveProvider::Registered().pqToNits(outcome.result.kneePq);
+        point.exposure = outcome.result.exposure;
+        point.computed = true;
+        return true;
+    }
+
+    // Every sample of `library` placed with `profileFor(point.profile)`.
+    template<class ProfileFor>
+    bool Place(Library& library, const ProfileFor& profileFor, std::wstring& error)
     {
         for (Section& section : library.sections)
             for (Point& point : section.points)
-            {
-                point.computed = false;
-                if (!(point.inPeak > 0.0)) continue;   // a black frame: nothing to place
-                const std::vector<double> probes = { Probes[0], Probes[1], Probes[2], point.inPeak,
-                    point.inAverage > 0.0 ? point.inAverage : point.inPeak };
-                LevelsScopeEngine::Outcome outcome;
-                if (!LevelsScopeEngine::Evaluate(profile, point.s, probes, outcome, error))
+                if (!PlacePoint(point, profileFor(point.profile), error))
                     return false;
-                for (int i = 0; i < 3; ++i) point.outProbe[i] = outcome.profileNits[i];
-                point.outPeak = outcome.profileNits[3];
-                point.outAverage = outcome.profileNits[4];
-                const auto& f = ToneCurveProvider::Registered();
-                point.kneeNits = f.pqToNits(outcome.result.kneePq);
-                point.exposure = outcome.result.exposure;
-                point.computed = true;
-            }
         return true;
     }
 }
