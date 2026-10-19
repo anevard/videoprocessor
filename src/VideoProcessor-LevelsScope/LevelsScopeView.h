@@ -249,6 +249,60 @@ namespace LevelsScopeView
             p.drawPixmap(QPointF(x - half, y - half), dot);
         }
 
+        // A trace drawn as a hardware scope draws it: no anti-aliasing, each
+        // pixel column filled from its lowest to its highest value (`spread`)
+        // and joined to the column before. Anti-aliased strokes cost seconds
+        // a frame on a large high-DPI window; rectangle fills cost almost
+        // nothing. Dashes are gaps in the column pattern; columns further than
+        // a pixel apart (zoomed in) are joined by a plain line.
+        template<class FY>
+        void Scope(QPainter& p, const std::vector<Column>& columns, const FY& Y, const QColor& color,
+            double thick, bool step, bool dashed, bool spread)
+        {
+            p.save();
+            p.setRenderHint(QPainter::Antialiasing, false);
+            QPen pen(color, thick);
+            pen.setCapStyle(Qt::FlatCap);
+            if (dashed) pen.setDashPattern({ 7 / thick, 4 / thick });
+            p.setPen(pen);
+            const double t = (std::max)(1.0, std::round(thick));
+            const Column* prev = nullptr;
+            double prevY = 0.0;
+            for (const Column& col : columns)
+            {
+                const double y = Y(step ? col.last : col.sum / col.n);
+                const bool joined = prev && col.t0 - prev->t1 <= 30;
+                const bool adjacent = joined && col.x - prev->x <= 1.5;
+                // Dense columns dash by position: 7 pixels on, 4 off.
+                if (!dashed || !adjacent || std::fmod(col.x, 11.0) < 7.0)
+                {
+                    double top = y, bottom = y;
+                    if (spread)
+                    {
+                        top = (std::min)(top, Y(col.hi));
+                        bottom = (std::max)(bottom, Y(col.lo));
+                    }
+                    if (adjacent)
+                    {
+                        top = (std::min)(top, prevY);
+                        bottom = (std::max)(bottom, prevY);
+                    }
+                    else if (joined && step)
+                    {
+                        p.fillRect(QRectF(prev->x, prevY - t / 2, col.x - prev->x, t), color);
+                        top = (std::min)(top, prevY);
+                        bottom = (std::max)(bottom, prevY);
+                    }
+                    else if (joined)
+                        p.drawLine(QPointF(prev->x, prevY), QPointF(col.x, y));
+                    p.fillRect(QRectF(col.x - t / 2, top - t / 2, t, bottom - top + t), color);
+                }
+                prev = &col;
+                prevY = y;
+            }
+            p.restore();
+        }
+
         static Axis AxisFor(Range r)
         {
             if (r == Range::Shadows) return { 0.00005, 30, { 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1, 3, 10, 30 } };
@@ -421,31 +475,9 @@ namespace LevelsScopeView
                         }
                         continue;
                     }
-                    QPen pen(tr.color, tr.width);
-                    if (tr.dashed) pen.setDashPattern(tr.step ? QVector<qreal>{ 6 / tr.width, 5 / tr.width } : QVector<qreal>{ 7 / tr.width, 4 / tr.width });
-                    p.setPen(pen);
-                    // A line through the column means (steps through the last
-                    // value), and the column's spread where it is wider than a pixel.
-                    QPainterPath path;
-                    const Column* prev = nullptr;
-                    for (const Column& col : columns)
-                    {
-                        const double y = Y(tr.step ? col.last : col.sum / col.n);
-                        if (prev && col.t0 - prev->t1 <= 30)
-                        {
-                            if (tr.step) path.lineTo(col.x, Y(prev->last));
-                            path.lineTo(col.x, y);
-                        }
-                        else path.moveTo(col.x, y);
-                        prev = &col;
-                    }
-                    p.drawPath(path);
-                    if (!tr.step)
-                    {
-                        p.setPen(QPen(tr.color, 1.0));
-                        for (const Column& col : columns)
-                            if (Y(col.lo) - Y(col.hi) > 1.5) p.drawLine(QPointF(col.x, Y(col.hi)), QPointF(col.x, Y(col.lo)));
-                    }
+                    // Through the column means (steps through the last value),
+                    // with each column's spread.
+                    Scope(p, columns, Y, tr.color, tr.width, tr.step, tr.dashed, !tr.step);
                 }
         }
 
@@ -457,22 +489,10 @@ namespace LevelsScopeView
             const auto placed = [](const LevelsScopeData::Point& pt) {
                 return pt.computed && pt.s.rangeKnown && pt.s.masteringBlackNits > 0;
             };
+            // The average lines, outlined in the card colour so they read over the bands.
             const auto avgLine = [&](const std::vector<Column>& columns, const QColor& color) {
-                for (const auto& [c, width] : { std::pair<QColor, double>{ Card(), 4.5 }, { color, 2.0 } })
-                {
-                    QPen pen(c, width);
-                    pen.setJoinStyle(Qt::RoundJoin);
-                    p.setPen(pen);
-                    QPainterPath path;
-                    const Column* prev = nullptr;
-                    for (const Column& col : columns)
-                    {
-                        const double y = Y(col.sum / col.n);
-                        if (prev && col.t0 - prev->t1 <= 30) path.lineTo(col.x, y); else path.moveTo(col.x, y);
-                        prev = &col;
-                    }
-                    p.drawPath(path);
-                }
+                Scope(p, columns, Y, Card(), 4.0, false, false, false);
+                Scope(p, columns, Y, color, 2.0, false, false, false);
             };
             for (const Seg& g : segs_)
             {
@@ -487,7 +507,6 @@ namespace LevelsScopeView
                 if (shown("outband"))
                     for (const Column& col : outPeaks)
                         p.fillRect(QRectF(col.x - bw / 2, Y(col.hi), bw, Y(screenBlack_) - Y(col.hi)), traces[1].color);
-                p.setRenderHint(QPainter::Antialiasing, true);
                 if (shown("inband"))
                     avgLine(bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.inAverage : 0.0; }), QColor(255, 255, 255));
                 if (shown("outband"))
@@ -513,10 +532,8 @@ namespace LevelsScopeView
                 for (const Seg& g : segs_)
                 {
                     const auto columns = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.outProbe[i] : 0.0; });
-                    p.setPen(QPen(tr.color, 1.0));
                     for (const Column& col : columns)
-                        if (Y(col.lo) - Y(col.hi) > 1.5) p.drawLine(QPointF(col.x, Y(col.hi)), QPointF(col.x, Y(col.lo)));
-                    p.setPen(Qt::NoPen);
+                        if (Y(col.lo) - Y(col.hi) > 1.5) p.fillRect(QRectF(col.x - 0.5, Y(col.hi), 1.0, Y(col.lo) - Y(col.hi)), tr.color);
                     const QPixmap& dot = Dot(tr.color, r);
                     for (const Column& col : columns) Stamp(p, dot, col.x, Y(col.sum / col.n));
                 }
