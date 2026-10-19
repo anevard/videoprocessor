@@ -239,6 +239,9 @@ int RunSnapshot(int argc, char** argv)
         shot(1, QStringLiteral("-inout.png"), 0);
         shot(0, QStringLiteral("-input.png"), 0);
         shot(1, QStringLiteral("-inout-10min.png"), 600);
+        // Zoomed in on brightness: the shadows, 0.0005 to 20 nits.
+        panel.chart()->setBrightness(0.0005, 20);
+        shot(1, QStringLiteral("-inout-10min-shadows.png"), 600);
     }
     QSettings(QStringLiteral("VideoProcessor"), QStringLiteral("Levels Scope Snapshot")).clear();
     return result;
