@@ -13,7 +13,7 @@
 //
 // The lines, and how each is used:
 //   "HDR luminance:"          one sample (detection and scene values; the
-//                             stats-OSD builds, every 5 s; from cacf7165
+//                             stats-OSD builds, every 5 s; newer logs
 //                             every 2.5 s and on each L1 change, with
 //                             millisecond time=, the L1 minimum, the
 //                             uncapped detected maximum and source_frame);
