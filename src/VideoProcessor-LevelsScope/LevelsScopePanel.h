@@ -130,7 +130,7 @@ namespace LevelsScopePanel
             controls->addWidget(howTo);
             controls->addStretch(1);
             layout->addLayout(controls);
-            // The view's traces on a row of their own, so seven chips never
+            // The view's traces on a row of their own, so eight chips never
             // set the window's minimum width.
             legend_ = new QHBoxLayout;
             legend_->setSpacing(4);
