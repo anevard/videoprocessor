@@ -80,6 +80,7 @@ namespace LevelsScopeView
     inline QString Nits(double v)
     {
         if (!(v >= 0.0)) return QStringLiteral("-");
+        if (v == 0.0) return QStringLiteral("0");
         // Under 0.01 nit, three significant digits: an L1 minimum of 0.000226.
         if (v > 0.0 && v < 0.01) return QString::number(v, 'g', 3);
         return QString::number(v, 'f', v >= 100 ? 0 : v >= 1 ? 1 : v >= 0.01 ? 3 : 4);
@@ -300,7 +301,8 @@ namespace LevelsScopeView
     private:
         static constexpr double PadL = 64, PadR = 84, PadT = 26, PadB = 30;
         // The whole brightness range, in nits, and the narrowest zoom, in PQ.
-        static constexpr double AxisLo = 0.0001, AxisHi = 4000, MinBrightnessSpan = 0.02;
+        // The axis reaches PQ code 0 (0 nit), where Dolby Vision declares true black.
+        static constexpr double AxisLo = 0.0, AxisHi = 4000, MinBrightnessSpan = 0.02;
         struct Seg { const LevelsScopeData::Section* s; double off, len; };
         // One pixel column of one quantity.
         struct Column { double x = 0, lo = 0, hi = 0, sum = 0, last = 0; int n = 0; double t0 = 0, t1 = 0; };
@@ -402,12 +404,15 @@ namespace LevelsScopeView
 
         // Gridlines for the brightness shown: decades when it spans many,
         // then 1-3, 1-2-5, and every digit when zoomed in close.
+        // A view reaching 0 nit gets a 0 line and counts decades from 0.0001,
+        // the old floor, so the spacing above it is as before.
         static std::vector<double> Ticks(double lo, double hi)
         {
-            const double decades = std::log10(hi / lo);
+            const double decades = std::log10(hi / (std::max)(lo, 0.0001));
             static const std::vector<double> d1{ 1 }, d13{ 1, 3 }, d125{ 1, 2, 5 }, d19{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
             const std::vector<double>& m = decades > 4 ? d1 : decades > 2 ? d13 : decades > 0.7 ? d125 : d19;
             std::vector<double> ticks;
+            if (lo < 1e-7) ticks.push_back(0.0);   // the floor, read back through PQ
             for (int e = -5; e <= 4; ++e)
                 for (double k : m)
                 {
@@ -419,6 +424,7 @@ namespace LevelsScopeView
         }
         static QString TickLabel(double n)
         {
+            if (n <= 0) return QStringLiteral("0");
             if (n >= 1) return QString::number(n, 'g', 6);
             return QString::number(n, 'f', static_cast<int>(std::ceil(-std::log10(n) - 1e-9)));
         }
@@ -456,9 +462,10 @@ namespace LevelsScopeView
         }
 
         // The samples of `g` on screen, binned into pixel columns of `value`
-        // (values <= 0 are left out, as missing).
+        // (values <= 0 are left out, as missing; with `zeroIsValue`, only
+        // negative ones).
         template<class FX, class FV>
-        std::vector<Column> bin(const Seg& g, const FX& X, double margin, FV value) const
+        std::vector<Column> bin(const Seg& g, const FX& X, double margin, FV value, bool zeroIsValue = false) const
         {
             std::vector<Column> columns;
             const auto& pts = g.s->points;
@@ -468,7 +475,7 @@ namespace LevelsScopeView
             for (; it != pts.end() && it->t <= t1; ++it)
             {
                 const double v = value(*it);
-                if (!(v > 0)) continue;
+                if (!(v > 0) && !(zeroIsValue && v == 0)) continue;
                 const double x = std::floor(X(g.off + it->t - g.s->a)) + 0.5;
                 if (columns.empty() || columns.back().x != x || it->t - columns.back().t1 > 30)
                 {
@@ -575,7 +582,7 @@ namespace LevelsScopeView
                 if (key == "detpk") return s.measured ? s.detectedPeakNits : 0.0;
                 if (key == "l1pk") return s.authored ? s.authoredPeakNits : 0.0;
                 if (key == "l1avg") return s.authored ? s.authoredAverageNits : 0.0;
-                if (key == "l1min") return s.authored ? s.authoredMinNits : 0.0;
+                if (key == "l1min") return s.authoredMinKnown ? s.authoredMinNits : -1.0;
                 if (key == "detlin") return s.measured ? s.detectedLinearAverageNits : 0.0;
                 if (key == "detpq") return s.measured ? s.detectedPqAverageNits : 0.0;
                 if (key == "mblack") return s.rangeKnown ? s.masteringBlackNits : 0.0;
@@ -585,7 +592,9 @@ namespace LevelsScopeView
                 for (const Trace& tr : InputTraces())
                 {
                     if (!shown(tr.key)) continue;
-                    const auto columns = bin(g, X, 30, [&](const LevelsScopeData::Point& pt) { return value(pt.s, tr.key); });
+                    // An L1 minimum of 0 is true black, drawn at the axis floor.
+                    const auto columns = bin(g, X, 30, [&](const LevelsScopeData::Point& pt) { return value(pt.s, tr.key); },
+                        tr.key == "l1min");
                     if (tr.dots)
                     {
                         // The column's highest and, when apart, its lowest.
@@ -767,7 +776,7 @@ namespace LevelsScopeView
             {
                 parts << item("l1pk", QStringLiteral("L1 peak"), s.authoredPeakNits)
                     << item("l1avg", QStringLiteral("L1 avg"), s.authoredAverageNits);
-                if (s.authoredMinNits > 0)
+                if (s.authoredMinKnown)
                     parts << item("l1min", QStringLiteral("L1 min"), s.authoredMinNits);
             }
             if (s.measured)
