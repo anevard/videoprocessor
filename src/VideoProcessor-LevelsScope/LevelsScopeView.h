@@ -622,6 +622,17 @@ namespace LevelsScopeView
                     // with each column's spread.
                     Scope(p, columns, Y, tr.color, tr.width, tr.step, tr.dashed, !tr.step);
                 }
+            // Where Dolby Vision L1 changed: a tick on the plot's floor per pixel
+            // column, with the L1 peak's colour and chip.
+            if (shown("l1pk"))
+            {
+                const Trace& l1 = *std::find_if(InputTraces().begin(), InputTraces().end(),
+                    [](const Trace& t) { return t.key == "l1pk"; });
+                const double plotFloor = height() - PadB;
+                for (const Seg& g : segs_)
+                    for (const Column& col : bin(g, X, 0, [](const LevelsScopeData::Point& pt) { return pt.s.l1Change ? 1.0 : 0.0; }))
+                        p.fillRect(QRectF(col.x - 0.5, plotFloor - 7, 1.0, 7), l1.color);
+            }
         }
 
         template<class FX, class FY, class FIn>
