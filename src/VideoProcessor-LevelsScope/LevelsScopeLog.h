@@ -162,7 +162,9 @@ namespace LevelsScopeLog
                 line.find("| libplacebo profile settings applied live:") != std::string::npos)
             {
                 const auto values = Values(line);
-                const auto target = values.find(values.count("target") ? "target" : "luminance");
+                // The live line's target= is the gamut (P3-D65); its nits are luminance=.
+                const bool live = line.find("applied live:") != std::string::npos;
+                const auto target = values.find(live ? "luminance" : "target");
                 const auto black = values.find("black");
                 if (target == values.end() || black == values.end()) return;
                 const double nits = std::strtod(target->second.c_str(), nullptr);
