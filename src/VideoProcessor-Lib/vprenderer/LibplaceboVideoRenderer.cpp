@@ -20960,6 +20960,15 @@ bool LibplaceboVideoRenderer::GetRenderLoad(RendererRenderLoad& load) const
 }
 
 
+bool LibplaceboVideoRenderer::GetHdrStatus(RendererHdrStatus& status) const
+{
+	status = {};
+	if (!m_impl)
+		return false;
+	return m_impl->HdrStatusSnapshot(status);
+}
+
+
 void LibplaceboVideoRenderer::SetRenderLoadDisplayRefreshRate(
 	double refreshRateHz)
 {
