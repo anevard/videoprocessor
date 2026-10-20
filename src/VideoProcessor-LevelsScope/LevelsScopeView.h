@@ -51,6 +51,9 @@ namespace LevelsScopeView
             { "detpq", QStringLiteral("Measured avg (PQ)"), QColor(0x19, 0x9e, 0x70) },
             { "mblack", QStringLiteral("Mastering black (metadata)"), QColor(0xf4, 0xf5, 0xf6), false, true, false, 2.4 },
             { "mpeak", QStringLiteral("Mastering peak (metadata)"), QColor(0x8f, 0x96, 0x9d), false, true, true, 1.6 },
+            // HDR10 only: one value for the whole title.
+            { "maxcll", QStringLiteral("MaxCLL"), QColor(0xe8, 0xc5, 0x47), false, true, true, 1.6 },
+            { "maxfall", QStringLiteral("MaxFALL"), QColor(0x5f, 0xc8, 0xd8), false, true, true, 1.6 },
         };
         return traces;
     }
@@ -586,6 +589,8 @@ namespace LevelsScopeView
                 if (key == "detlin") return s.measured ? s.detectedLinearAverageNits : 0.0;
                 if (key == "detpq") return s.measured ? s.detectedPqAverageNits : 0.0;
                 if (key == "mblack") return s.rangeKnown ? s.masteringBlackNits : 0.0;
+                if (key == "maxcll") return s.rangeKnown && !s.dolbyVision ? s.maxCllNits : 0.0;
+                if (key == "maxfall") return s.rangeKnown && !s.dolbyVision ? s.maxFallNits : 0.0;
                 return s.rangeKnown ? s.masteringPeakNits : 0.0;
             };
             for (const Seg& g : segs_)
@@ -710,10 +715,14 @@ namespace LevelsScopeView
                     for (const Trace& tr : InputTraces())
                     {
                         if (!tr.step || !shown(tr.key)) continue;
-                        const double v = tr.key == "mblack" ? q->s.masteringBlackNits : q->s.masteringPeakNits;
+                        const bool mastering = tr.key == "mblack" || tr.key == "mpeak";
+                        if (!mastering && q->s.dolbyVision) continue;   // MaxCLL and MaxFALL are HDR10 only
+                        const double v = tr.key == "mblack" ? q->s.masteringBlackNits : tr.key == "mpeak" ? q->s.masteringPeakNits
+                            : tr.key == "maxcll" ? q->s.maxCllNits : q->s.maxFallNits;
                         if (v > 0 && inY(v))
-                            labels.push_back({ Y(v), 0, QStringLiteral("mastering"),
-                                tr.key == "mblack" ? QStringLiteral("black") : QStringLiteral("peak"), tr.color });
+                            labels.push_back({ Y(v), 0, mastering ? QStringLiteral("mastering") : tr.name,
+                                tr.key == "mblack" ? QStringLiteral("black") : tr.key == "mpeak" ? QStringLiteral("peak") : QString(),
+                                tr.color });
                     }
             }
             std::sort(labels.begin(), labels.end(), [](const Label& a, const Label& b) { return a.y < b.y; });
@@ -785,6 +794,9 @@ namespace LevelsScopeView
             if (s.rangeKnown)
                 parts << QStringLiteral("mastering %1 – %2").arg(Tinted("mblack", QStringLiteral("<b>%1</b>").arg(Nits(s.masteringBlackNits))),
                     Tinted("mpeak", QStringLiteral("<b>%1</b>").arg(Nits(s.masteringPeakNits))));
+            if (s.rangeKnown && !s.dolbyVision)
+                parts << item("maxcll", QStringLiteral("MaxCLL"), s.maxCllNits)
+                    << item("maxfall", QStringLiteral("MaxFALL"), s.maxFallNits);
             return parts.join(QStringLiteral(" &nbsp; "));
         }
 
