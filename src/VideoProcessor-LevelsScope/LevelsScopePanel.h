@@ -80,6 +80,13 @@ namespace LevelsScopePanel
             status_->setWordWrap(true);
             status_->setProperty("help", true);
             layout->addWidget(status_);
+            // The open logs, each removable.
+            logs_ = new QHBoxLayout;
+            logs_->setSpacing(4);
+            auto* logsRow = new QHBoxLayout;
+            logsRow->addLayout(logs_);
+            logsRow->addStretch(1);
+            layout->addLayout(logsRow);
 
             // Sections: tick to show, double-click a name to rename.
             sections_ = new QTreeWidget;
@@ -223,9 +230,9 @@ namespace LevelsScopePanel
             }
             if (!config.isEmpty()) loadConfig(config);
             rebuildLegend();
-            const QStringList logs = settings_.value(QStringLiteral("logs")).toStringList();
-            if (!logs.isEmpty()) loadLogs(logs);
-            else updateNote();
+            // Starts blank: logs are opened each time, never reopened from last time.
+            settings_.remove(QStringLiteral("logs"));
+            reload();
         }
 
         // For a snapshot run: open these, pick that profile and view.
@@ -285,16 +292,56 @@ namespace LevelsScopePanel
             place();
         }
 
+        // Opened logs join those already open (a sample in two files counts once).
         void loadLogs(const QStringList& paths)
         {
-            library_ = LevelsScopeData::Read(paths);
-            settings_.setValue(QStringLiteral("logs"), paths);
-            QString text = library_.notes.join(QStringLiteral(" · "));
-            if (library_.sections.empty())
+            for (const QString& path : paths)
+            {
+                const QString file = QFileInfo(path).absoluteFilePath();
+                if (!files_.contains(file, Qt::CaseInsensitive)) files_ << file;
+            }
+            reload();
+        }
+
+        void removeLog(const QString& file)
+        {
+            files_.removeAll(file);
+            reload();
+        }
+
+        // Every open log read again into sections, then placed and drawn.
+        void reload()
+        {
+            library_ = LevelsScopeData::Read(files_);
+            QString text = files_.isEmpty() ? QStringLiteral("No logs open.") : library_.notes.join(QStringLiteral(" · "));
+            if (!files_.isEmpty() && library_.sections.empty())
                 text += QStringLiteral(" No sections of 2 minutes or more: the logs need a build that writes "
                                        "\"Dolby Vision luminance:\" or \"HDR luminance:\" lines.");
             status_->setText(text);
+            rebuildLogChips();
             place();
+        }
+
+        // One chip per open log file: its folder and name, × removes it.
+        void rebuildLogChips()
+        {
+            while (QLayoutItem* item = logs_->takeAt(0))
+            {
+                delete item->widget();
+                delete item;
+            }
+            for (const QString& file : files_)
+            {
+                const QFileInfo info(file);
+                auto* chip = new QToolButton;
+                chip->setText(info.dir().dirName() + u'/' + info.fileName() + QStringLiteral("  ×"));
+                chip->setToolTip(QStringLiteral("Remove %1").arg(QDir::toNativeSeparators(file)));
+                chip->setStyleSheet(QStringLiteral(
+                    "QToolButton { color: #dce8f2; background: #101d2a; border: 1px solid #35607f; border-radius: 10px; padding: 1px 8px; }"
+                    " QToolButton:hover { border-color: #e0645b; color: #ffb4ad; }"));
+                connect(chip, &QToolButton::clicked, this, [this, file] { removeLog(file); });
+                logs_->addWidget(chip);
+            }
         }
 
         // Where the chosen profile puts every sample, then redraw.
@@ -467,6 +514,8 @@ namespace LevelsScopePanel
         QComboBox* profiles_ = nullptr;
         QLabel* configLabel_ = nullptr;
         QLabel* status_ = nullptr;
+        QHBoxLayout* logs_ = nullptr;
+        QStringList files_;            // the open logs, absolute paths
         QLabel* readout_ = nullptr;
         QLabel* note_ = nullptr;
         QTreeWidget* sections_ = nullptr;
