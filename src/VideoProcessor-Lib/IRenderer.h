@@ -80,9 +80,11 @@ struct RendererHdrStatus
 	// Dolby Vision L1 scene minimum. libplacebo takes no scene minimum, so
 	// this is the stream's value only; zero unless scene values come from L1.
 	double sceneMinNits = 0.0;
-	// libplacebo's detected per-component maximum (scene_max, linear RGB),
-	// smoothed like the peak; zero where detectedLinearAvgNits is zero.
-	double detectedSceneMaxNits[3] = {};
+	// libplacebo's detected maxRGB peak (scene_max; libplacebo writes the same
+	// value to all three components). detectedPeakNits is this capped by the
+	// maximum of Y. Zero where
+	// detectedLinearAvgNits is zero.
+	double detectedSceneMaxNits = 0.0;
 	uint64_t sourceSequence = 0;       // capture frame counter of the picture
 };
 

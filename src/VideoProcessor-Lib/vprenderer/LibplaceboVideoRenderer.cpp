@@ -5560,8 +5560,7 @@ struct LibplaceboVideoRenderer::Impl
 			next.detectedAvgNits = pl_hdr_rescale(
 				PL_HDR_PQ, PL_HDR_NITS, detected.avg_pq_y);
 			next.detectedLinearAvgNits = detected.scene_avg;
-			for (int c = 0; c < 3; ++c)
-				next.detectedSceneMaxNits[c] = detected.scene_max[c];
+			next.detectedSceneMaxNits = detected.scene_max[0];
 		}
 		const bool interval = now >= hdrStatusNextLogTick;
 		if (next.hdr && (next.detectedValid || next.sceneValid) &&
@@ -5574,7 +5573,7 @@ struct LibplaceboVideoRenderer::Impl
 			GetLocalTime(&local);
 			DebugLog::Log(
 				"HDR luminance: dv=%d detection=%s detected_peak_nits=%.2f detected_avg_pq_nits=%.4f detected_avg_linear_nits=%.4f scene=%s scene_peak_nits=%.2f scene_avg_nits=%.4f"
-				" scene_min_nits=%.6f detected_scene_max_rgb_nits=%.2f/%.2f/%.2f"
+				" scene_min_nits=%.6f detected_scene_max_nits=%.2f"
 				" reason=%s time=%04u-%02u-%02uT%02u:%02u:%02u.%03u source_frame=%llu",
 				next.dolbyVision ? 1 : 0,
 				!next.peakDetectionEnabled ? "off" :
@@ -5584,8 +5583,7 @@ struct LibplaceboVideoRenderer::Impl
 				!next.sceneValid ? "none" : next.dolbyVision ? "L1" : "frame",
 				next.scenePeakNits, next.sceneAvgNits,
 				next.sceneMinNits,
-				next.detectedSceneMaxNits[0], next.detectedSceneMaxNits[1],
-				next.detectedSceneMaxNits[2],
+				next.detectedSceneMaxNits,
 				l1Changed ? "L1" : "interval",
 				local.wYear, local.wMonth, local.wDay,
 				local.wHour, local.wMinute, local.wSecond, local.wMilliseconds,
