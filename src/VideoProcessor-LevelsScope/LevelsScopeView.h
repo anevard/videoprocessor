@@ -76,14 +76,16 @@ namespace LevelsScopeView
     inline QString TraceTip(const std::string& key)
     {
         static const std::map<std::string, QString> tips = {
-            { "detpk", QStringLiteral("The frame's peak as libplacebo's peak detection measured it: the value tone mapping used.") },
-            { "detmax", QStringLiteral("The brightest point peak detection saw, without the limit applied to Measured peak. Logs from cacf7165 on.") },
-            { "l1pk", QStringLiteral("Dolby Vision only: the scene's peak as the stream declares it (L1 metadata, set when graded). "
-                "The ticks on the floor mark each L1 change.") },
+            { "detpk", QStringLiteral("The brightest pixel's luminance, as libplacebo's peak detection measured it: how bright "
+                "it looks, red, green and blue weighted as the eye sees them. Never above Measured max.") },
+            { "detmax", QStringLiteral("The brightest single colour channel (red, green or blue), as peak detection measured it, "
+                "ignoring a tiny fraction of the very brightest pixels. Equal to Measured peak for white highlights, higher "
+                "for saturated ones. L1 peak and MaxCLL are counted the same way, so compare those with this.") },
+            { "l1pk", QStringLiteral("Dolby Vision only: the scene's peak as the stream declares it (L1 metadata, set when graded), "
+                "by brightest colour channel: compare with Measured max. The ticks on the floor mark each L1 change.") },
             { "l1avg", QStringLiteral("Dolby Vision only: the scene's average as the stream declares it (L1). Averaged in PQ, "
                 "so lower than a linear average of the same picture.") },
-            { "l1min", QStringLiteral("Dolby Vision only: the scene's black as the stream declares it (L1). 0 is true black. "
-                "Logs from cacf7165 on.") },
+            { "l1min", QStringLiteral("Dolby Vision only: the scene's black as the stream declares it (L1). 0 is true black.") },
             { "detlin", QStringLiteral("The frame's average brightness from peak detection, averaged in linear light. "
                 "The one to compare with MaxFALL.") },
             { "detpq", QStringLiteral("The same frame average taken in PQ code values, which count dark areas for more. "
@@ -92,8 +94,8 @@ namespace LevelsScopeView
                 "Almost always 0.0001 nit.") },
             { "mpeak", QStringLiteral("The peak of the monitor the title was graded on, as the stream declares it. "
                 "Almost always 1000 nits.") },
-            { "maxcll", QStringLiteral("HDR10 only: the brightest pixel anywhere in the title, as the stream declares it. "
-                "One value for the whole title.") },
+            { "maxcll", QStringLiteral("HDR10 only: the brightest pixel anywhere in the title, by brightest colour channel, as the "
+                "stream declares it. One value for the whole title: compare with Measured max.") },
             { "maxfall", QStringLiteral("HDR10 only: the brightest frame average anywhere in the title, in linear light, "
                 "as the stream declares it. One value for the whole title.") },
             { "inband", QStringLiteral("What came in: from the mastering black up to this moment's peak (measured, else L1). "
