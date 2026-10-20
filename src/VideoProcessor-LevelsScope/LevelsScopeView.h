@@ -44,13 +44,15 @@ namespace LevelsScopeView
     {
         static const std::vector<Trace> traces = {
             { "detpk", QStringLiteral("Measured peak"), QColor(0x39, 0x87, 0xe5), true },
+            // The brightest point detection saw, before libplacebo caps the peak above.
+            { "detmax", QStringLiteral("Measured max"), QColor(0x9f, 0xd4, 0xff), true },
             { "l1pk", QStringLiteral("L1 peak"), QColor(0xd9, 0x59, 0x26) },
             { "l1avg", QStringLiteral("L1 average"), QColor(0x90, 0x85, 0xe9), false, false, true },
             { "l1min", QStringLiteral("L1 minimum"), QColor(0xe0, 0x5f, 0xa8) },
             { "detlin", QStringLiteral("Measured avg (linear)"), QColor(0xc9, 0x85, 0x00) },
             { "detpq", QStringLiteral("Measured avg (PQ)"), QColor(0x19, 0x9e, 0x70) },
-            { "mblack", QStringLiteral("Mastering black (metadata)"), QColor(0xf4, 0xf5, 0xf6), false, true, false, 2.4 },
-            { "mpeak", QStringLiteral("Mastering peak (metadata)"), QColor(0x8f, 0x96, 0x9d), false, true, true, 1.6 },
+            { "mblack", QStringLiteral("Mastering black"), QColor(0xf4, 0xf5, 0xf6), false, true, false, 2.4 },
+            { "mpeak", QStringLiteral("Mastering peak"), QColor(0x8f, 0x96, 0x9d), false, true, true, 1.6 },
             // HDR10 only: one value for the whole title.
             { "maxcll", QStringLiteral("MaxCLL"), QColor(0xe8, 0xc5, 0x47), false, true, true, 1.6 },
             { "maxfall", QStringLiteral("MaxFALL"), QColor(0x5f, 0xc8, 0xd8), false, true, true, 1.6 },
@@ -583,6 +585,7 @@ namespace LevelsScopeView
         {
             const auto value = [](const LevelsScopeLog::Sample& s, const std::string& key) {
                 if (key == "detpk") return s.measured ? s.detectedPeakNits : 0.0;
+                if (key == "detmax") return s.measured ? s.detectedSceneMaxNits : 0.0;
                 if (key == "l1pk") return s.authored ? s.authoredPeakNits : 0.0;
                 if (key == "l1avg") return s.authored ? s.authoredAverageNits : 0.0;
                 if (key == "l1min") return s.authoredMinKnown ? s.authoredMinNits : -1.0;
@@ -781,6 +784,8 @@ namespace LevelsScopeView
             };
             parts << (s.measured ? item("detpk", QStringLiteral("peak"), s.detectedPeakNits)
                 : Tinted("detpk", QStringLiteral("peak <b>-</b>")));
+            if (s.measured && s.detectedSceneMaxNits > 0)
+                parts << item("detmax", QStringLiteral("max"), s.detectedSceneMaxNits);
             if (s.authored)
             {
                 parts << item("l1pk", QStringLiteral("L1 peak"), s.authoredPeakNits)
