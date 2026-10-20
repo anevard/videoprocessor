@@ -46,6 +46,7 @@ namespace LevelsScopeView
             { "detpk", QStringLiteral("Measured peak"), QColor(0x39, 0x87, 0xe5), true },
             { "l1pk", QStringLiteral("L1 peak"), QColor(0xd9, 0x59, 0x26) },
             { "l1avg", QStringLiteral("L1 average"), QColor(0x90, 0x85, 0xe9), false, false, true },
+            { "l1min", QStringLiteral("L1 minimum"), QColor(0xe0, 0x5f, 0xa8) },
             { "detlin", QStringLiteral("Measured avg (linear)"), QColor(0xc9, 0x85, 0x00) },
             { "detpq", QStringLiteral("Measured avg (PQ)"), QColor(0x19, 0x9e, 0x70) },
             { "mblack", QStringLiteral("Mastering black (metadata)"), QColor(0xf4, 0xf5, 0xf6), false, true, false, 2.4 },
@@ -79,7 +80,29 @@ namespace LevelsScopeView
     inline QString Nits(double v)
     {
         if (!(v >= 0.0)) return QStringLiteral("-");
+        // Under 0.01 nit, three significant digits: an L1 minimum of 0.000226.
+        if (v > 0.0 && v < 0.01) return QString::number(v, 'g', 3);
         return QString::number(v, 'f', v >= 100 ? 0 : v >= 1 ? 1 : v >= 0.01 ? 3 : 4);
+    }
+
+    // The colour a trace is drawn in, opaque, for the readout's labels.
+    inline QString TraceColor(const std::string& key)
+    {
+        for (const auto* list : { &InputTraces(), &InOutTraces() })
+            for (const Trace& t : *list)
+                if (t.key == key)
+                {
+                    QColor c = t.color;
+                    c.setAlpha(255);
+                    return c.name();
+                }
+        return QString();
+    }
+
+    // `text` in a trace's colour, for the readout.
+    inline QString Tinted(const std::string& key, const QString& text)
+    {
+        return QStringLiteral("<span style=\"color:%1\">%2</span>").arg(TraceColor(key), text);
     }
 
     // A setting as the operator typed it: 75, 0.006 (no padding zeros).
@@ -552,6 +575,7 @@ namespace LevelsScopeView
                 if (key == "detpk") return s.measured ? s.detectedPeakNits : 0.0;
                 if (key == "l1pk") return s.authored ? s.authoredPeakNits : 0.0;
                 if (key == "l1avg") return s.authored ? s.authoredAverageNits : 0.0;
+                if (key == "l1min") return s.authored ? s.authoredMinNits : 0.0;
                 if (key == "detlin") return s.measured ? s.detectedLinearAverageNits : 0.0;
                 if (key == "detpq") return s.measured ? s.detectedPqAverageNits : 0.0;
                 if (key == "mblack") return s.rangeKnown ? s.masteringBlackNits : 0.0;
@@ -716,24 +740,42 @@ namespace LevelsScopeView
             if (view_ == View::InOut)
             {
                 if (!pt->computed) return parts.first() + QStringLiteral(" · black frame");
+                // The master in the input band's colour, where it landed in the output band's.
                 const bool measured = s.measured && s.detectedPeakNits > 0;
-                parts << QStringLiteral("%1 <b>%2 → %3</b>").arg(measured ? QStringLiteral("peak") : QStringLiteral("L1 peak"),
-                    Nits(pt->inPeak), Nits(pt->outPeak));
+                const auto inOut = [](double in, double out) {
+                    return Tinted("inband", QStringLiteral("<b>%1</b>").arg(Nits(in))) + QStringLiteral(" → ") +
+                        Tinted("outband", QStringLiteral("<b>%1</b>").arg(Nits(out)));
+                };
+                parts << QStringLiteral("%1 %2").arg(measured ? QStringLiteral("peak") : QStringLiteral("L1 peak"),
+                    inOut(pt->inPeak, pt->outPeak));
                 if (pt->inAverage > 0)
-                    parts << QStringLiteral("%1 <b>%2 → %3</b>").arg(measured ? QStringLiteral("avg (PQ)") : QStringLiteral("L1 avg"),
-                        Nits(pt->inAverage), Nits(pt->outAverage));
+                    parts << QStringLiteral("%1 %2").arg(measured ? QStringLiteral("avg (PQ)") : QStringLiteral("L1 avg"),
+                        inOut(pt->inAverage, pt->outAverage));
                 for (int i = 0; i < 3; ++i)
-                    parts << QStringLiteral("<b>%1 → %2</b>").arg(Nits(LevelsScopeData::Probes[i]), Nits(pt->outProbe[i]));
+                    parts << Tinted(InOutTraces()[2 + i].key,
+                        QStringLiteral("<b>%1 → %2</b>").arg(Nits(LevelsScopeData::Probes[i]), Nits(pt->outProbe[i])));
                 parts << QStringLiteral("knee <b>%1</b>, exposure <b>%2</b>").arg(Nits(pt->kneeNits), QString::number(pt->exposure, 'f', 3));
                 return parts.join(QStringLiteral(" &nbsp; "));
             }
-            parts << QStringLiteral("peak <b>%1</b>").arg(s.measured ? Nits(s.detectedPeakNits) : QStringLiteral("-"));
+            // Each value in its trace's colour.
+            const auto item = [](const std::string& key, const QString& label, double v) {
+                return Tinted(key, QStringLiteral("%1 <b>%2</b>").arg(label, Nits(v)));
+            };
+            parts << (s.measured ? item("detpk", QStringLiteral("peak"), s.detectedPeakNits)
+                : Tinted("detpk", QStringLiteral("peak <b>-</b>")));
             if (s.authored)
-                parts << QStringLiteral("L1 peak <b>%1</b> &nbsp; L1 avg <b>%2</b>").arg(Nits(s.authoredPeakNits), Nits(s.authoredAverageNits));
+            {
+                parts << item("l1pk", QStringLiteral("L1 peak"), s.authoredPeakNits)
+                    << item("l1avg", QStringLiteral("L1 avg"), s.authoredAverageNits);
+                if (s.authoredMinNits > 0)
+                    parts << item("l1min", QStringLiteral("L1 min"), s.authoredMinNits);
+            }
             if (s.measured)
-                parts << QStringLiteral("avg lin <b>%1</b> &nbsp; avg PQ <b>%2</b>").arg(Nits(s.detectedLinearAverageNits), Nits(s.detectedPqAverageNits));
+                parts << item("detlin", QStringLiteral("avg lin"), s.detectedLinearAverageNits)
+                    << item("detpq", QStringLiteral("avg PQ"), s.detectedPqAverageNits);
             if (s.rangeKnown)
-                parts << QStringLiteral("mastering <b>%1 – %2</b>").arg(Nits(s.masteringBlackNits), Nits(s.masteringPeakNits));
+                parts << QStringLiteral("mastering %1 – %2").arg(Tinted("mblack", QStringLiteral("<b>%1</b>").arg(Nits(s.masteringBlackNits))),
+                    Tinted("mpeak", QStringLiteral("<b>%1</b>").arg(Nits(s.masteringPeakNits))));
             return parts.join(QStringLiteral(" &nbsp; "));
         }
 
