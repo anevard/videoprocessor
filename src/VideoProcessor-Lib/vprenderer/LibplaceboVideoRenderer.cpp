@@ -3887,6 +3887,8 @@ struct LibplaceboVideoRenderer::Impl
 	bool hdrStatusPublished = false;
 	uint64_t hdrStatusNextTick = 0;
 	uint64_t hdrStatusNextLogTick = 0;
+	// The L1 minimum, maximum and average last logged; a change logs at once.
+	float hdrStatusLoggedL1[3] = { -1.0f, -1.0f, -1.0f };
 	ActivePictureTransitionModel nlsTransition;
 	ConfiguredShaderRule nlsRule;
 	std::string requestedShaderSelector;
@@ -5512,16 +5514,24 @@ struct LibplaceboVideoRenderer::Impl
 	// Render thread only: pl_renderer_get_hdr_metadata polls the peak buffer.
 	// `image` is the frame just handed to pl_render_image, so its colour
 	// metadata is exactly what libplacebo tone mapped from.
-	void PublishHdrStatus(const pl_frame& image, bool rendered)
+	void PublishHdrStatus(const pl_frame& image, bool rendered,
+		const DolbyVisionLuminanceStatus& dvLuminance, uint64_t sourceSequence)
 	{
 		if (!rendered)
 			return;
+		// A change of Dolby Vision L1 is published and logged on its own frame.
+		const bool l1 = image.repr.dovi != nullptr && dvLuminance.sceneAvailable;
+		const bool l1Changed = l1 &&
+			(dvLuminance.sceneMin != hdrStatusLoggedL1[0] ||
+				dvLuminance.sceneMax != hdrStatusLoggedL1[1] ||
+				dvLuminance.sceneAvg != hdrStatusLoggedL1[2]);
 		const uint64_t now = GetTickCount64();
-		if (now < hdrStatusNextTick)
+		if (now < hdrStatusNextTick && !l1Changed)
 			return;
 		hdrStatusNextTick = now + 250;
 
 		RendererHdrStatus next;
+		next.sourceSequence = sourceSequence;
 		const pl_hdr_metadata& hdr = image.color.hdr;
 		next.hdr = pl_color_transfer_is_hdr(image.color.transfer);
 		next.dolbyVision = image.repr.dovi != nullptr;
@@ -5536,6 +5546,8 @@ struct LibplaceboVideoRenderer::Impl
 				PL_HDR_PQ, PL_HDR_NITS, hdr.max_pq_y);
 			next.sceneAvgNits = pl_hdr_rescale(
 				PL_HDR_PQ, PL_HDR_NITS, hdr.avg_pq_y);
+			if (l1)
+				next.sceneMinNits = dvLuminance.sceneMin;
 		}
 		next.peakDetectionEnabled = renderParams.peak_detect_params != nullptr;
 		pl_hdr_metadata detected{};
@@ -5548,20 +5560,46 @@ struct LibplaceboVideoRenderer::Impl
 			next.detectedAvgNits = pl_hdr_rescale(
 				PL_HDR_PQ, PL_HDR_NITS, detected.avg_pq_y);
 			next.detectedLinearAvgNits = detected.scene_avg;
+			for (int c = 0; c < 3; ++c)
+				next.detectedSceneMaxNits[c] = detected.scene_max[c];
 		}
+		const bool interval = now >= hdrStatusNextLogTick;
 		if (next.hdr && (next.detectedValid || next.sceneValid) &&
-			now >= hdrStatusNextLogTick)
+			(interval || l1Changed))
 		{
-			hdrStatusNextLogTick = now + 5000;
+			if (interval)
+				hdrStatusNextLogTick = now + 2500;
+			// The line's own prefix has whole seconds only.
+			SYSTEMTIME local{};
+			GetLocalTime(&local);
 			DebugLog::Log(
-				"HDR luminance: dv=%d detection=%s detected_peak_nits=%.2f detected_avg_pq_nits=%.4f detected_avg_linear_nits=%.4f scene=%s scene_peak_nits=%.2f scene_avg_nits=%.4f",
+				"HDR luminance: dv=%d detection=%s detected_peak_nits=%.2f detected_avg_pq_nits=%.4f detected_avg_linear_nits=%.4f scene=%s scene_peak_nits=%.2f scene_avg_nits=%.4f"
+				" scene_min_nits=%.6f detected_scene_max_rgb_nits=%.2f/%.2f/%.2f mastering_nits=%.6f..%.2f MaxCLL=%.1f MaxFALL=%.1f"
+				" reason=%s time=%04u-%02u-%02uT%02u:%02u:%02u.%03u source_frame=%llu",
 				next.dolbyVision ? 1 : 0,
 				!next.peakDetectionEnabled ? "off" :
 					next.detectedValid ? "valid" : "pending",
 				next.detectedPeakNits, next.detectedAvgNits,
 				next.detectedLinearAvgNits,
 				!next.sceneValid ? "none" : next.dolbyVision ? "L1" : "frame",
-				next.scenePeakNits, next.sceneAvgNits);
+				next.scenePeakNits, next.sceneAvgNits,
+				next.sceneMinNits,
+				next.detectedSceneMaxNits[0], next.detectedSceneMaxNits[1],
+				next.detectedSceneMaxNits[2],
+				next.masteringMin, next.masteringMax,
+				next.maxCll, next.maxFall,
+				l1Changed ? "L1" : "interval",
+				local.wYear, local.wMonth, local.wDay,
+				local.wHour, local.wMinute, local.wSecond, local.wMilliseconds,
+				static_cast<unsigned long long>(next.sourceSequence));
+		}
+		// Remembered even when not logged, so one change never bypasses the
+		// 250 ms publish interval on later frames.
+		if (l1Changed)
+		{
+			hdrStatusLoggedL1[0] = dvLuminance.sceneMin;
+			hdrStatusLoggedL1[1] = dvLuminance.sceneMax;
+			hdrStatusLoggedL1[2] = dvLuminance.sceneAvg;
 		}
 		std::lock_guard<std::mutex> lock(hdrStatusMutex);
 		hdrStatus = next;
@@ -15838,7 +15876,7 @@ struct LibplaceboVideoRenderer::Impl
 		preparing.Complete();
 		LogHdrPeakAnalysisMetrics(
 			hdrPeakAnalysisDecision, sourceSequence, rendered);
-		PublishHdrStatus(renderImage, rendered);
+		PublishHdrStatus(renderImage, rendered, frameDvLuminance, sourceSequence);
 		const double renderMs = std::chrono::duration<double, std::milli>(
 			SteadyClock::now() - renderStart).count();
         if (!rendered && targetLutApplied)

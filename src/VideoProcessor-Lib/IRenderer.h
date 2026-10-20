@@ -77,6 +77,13 @@ struct RendererHdrStatus
 	// definition), smoothed like the peak. Zero when the renderer's libplacebo
 	// does not report it, as the stable renderer's 7.360.1 does not.
 	double detectedLinearAvgNits = 0.0;
+	// Dolby Vision L1 scene minimum. libplacebo takes no scene minimum, so
+	// this is the stream's value only; zero unless scene values come from L1.
+	double sceneMinNits = 0.0;
+	// libplacebo's detected per-component maximum (scene_max, linear RGB),
+	// smoothed like the peak; zero where detectedLinearAvgNits is zero.
+	double detectedSceneMaxNits[3] = {};
+	uint64_t sourceSequence = 0;       // capture frame counter of the picture
 };
 
 
