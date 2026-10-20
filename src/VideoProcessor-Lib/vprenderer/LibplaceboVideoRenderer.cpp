@@ -5574,7 +5574,7 @@ struct LibplaceboVideoRenderer::Impl
 			GetLocalTime(&local);
 			DebugLog::Log(
 				"HDR luminance: dv=%d detection=%s detected_peak_nits=%.2f detected_avg_pq_nits=%.4f detected_avg_linear_nits=%.4f scene=%s scene_peak_nits=%.2f scene_avg_nits=%.4f"
-				" scene_min_nits=%.6f detected_scene_max_rgb_nits=%.2f/%.2f/%.2f mastering_nits=%.6f..%.2f MaxCLL=%.1f MaxFALL=%.1f"
+				" scene_min_nits=%.6f detected_scene_max_rgb_nits=%.2f/%.2f/%.2f"
 				" reason=%s time=%04u-%02u-%02uT%02u:%02u:%02u.%03u source_frame=%llu",
 				next.dolbyVision ? 1 : 0,
 				!next.peakDetectionEnabled ? "off" :
@@ -5586,8 +5586,6 @@ struct LibplaceboVideoRenderer::Impl
 				next.sceneMinNits,
 				next.detectedSceneMaxNits[0], next.detectedSceneMaxNits[1],
 				next.detectedSceneMaxNits[2],
-				next.masteringMin, next.masteringMax,
-				next.maxCll, next.maxFall,
 				l1Changed ? "L1" : "interval",
 				local.wYear, local.wMonth, local.wDay,
 				local.wHour, local.wMinute, local.wSecond, local.wMilliseconds,
