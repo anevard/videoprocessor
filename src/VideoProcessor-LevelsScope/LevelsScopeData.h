@@ -47,6 +47,13 @@ namespace LevelsScopeData
         double kneeNits = 0.0, exposure = 1.0;
     };
 
+    // Where a setting changed: the DTM profile, a render option or the target.
+    struct Mark
+    {
+        double t = 0.0;                // seconds since the epoch
+        QString text;
+    };
+
     struct Section
     {
         QString id;                    // stable across reloads: start, kind and range
@@ -58,6 +65,7 @@ namespace LevelsScopeData
         QString build, files;
         bool open = false;             // still receiving samples
         std::vector<Point> points;
+        std::vector<Mark> marks;       // in time order, inside or just before the section
     };
 
     // A Point from a logged or live sample; `t` in seconds.
@@ -178,6 +186,7 @@ namespace LevelsScopeData
         Library library;
         struct Entry { Point point; QString file, build; };
         std::map<QString, Entry> merged;   // one per time (ms), kind, peak and L1 peak
+        std::map<QString, Mark> marks;     // one per time and text, in time order
         for (const QString& path : LogFiles(paths, library.notes))
         {
             const QString name = QFileInfo(path).fileName();
@@ -208,6 +217,15 @@ namespace LevelsScopeData
                     .arg(sample.detectedPeakNits).arg(sample.authoredPeakNits);
                 if (merged.emplace(key, entry).second) ++kept;
             }
+            for (const LevelsScopeLog::Marker& marker : reader.Markers())
+            {
+                const QDateTime when = QDateTime::fromString(QString::fromStdString(marker.time),
+                    QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+                if (!when.isValid()) continue;
+                const QString text = QString::fromStdString(marker.text);
+                marks.emplace(QStringLiteral("%1|%2").arg(when.toMSecsSinceEpoch(), 15, 10, QChar(u'0')).arg(text),
+                    Mark{ when.toMSecsSinceEpoch() / 1000.0, text });
+            }
             library.notes << QStringLiteral("%1: %2 samples (%3), build %4").arg(name).arg(kept)
                 .arg(reader.Measured() ? QStringLiteral("measured and L1") : QStringLiteral("L1 only"))
                 .arg(build.isEmpty() ? QStringLiteral("not identified") : build);
@@ -220,6 +238,17 @@ namespace LevelsScopeData
         for (const Entry* entry : ordered)
             builder.Add(entry->point, entry->build, entry->file);
         builder.Close();
+        // Each mark goes to the section it falls in, or one starting within
+        // 30 s after it (a profile is logged as the renderer starts, before
+        // the first sample); it is drawn no earlier than the section starts.
+        for (const auto& item : marks)
+            for (Section& section : library.sections)
+                if (item.second.t >= section.a - 30.0 && item.second.t <= section.b)
+                {
+                    section.marks.push_back(item.second);
+                    section.marks.back().t = (std::max)(item.second.t, section.a);
+                    break;
+                }
         return library;
     }
 
