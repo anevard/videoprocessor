@@ -45,7 +45,7 @@ namespace LevelsScopeView
         static const std::vector<Trace> traces = {
             { "detpk", QStringLiteral("Measured peak"), QColor(0x39, 0x87, 0xe5), true },
             // The brightest point detection saw, before libplacebo caps the peak above.
-            { "detmax", QStringLiteral("Measured max"), QColor(0x9f, 0xd4, 0xff), true },
+            { "detmax", QStringLiteral("Measured max"), QColor(0xff, 0x3b, 0x3b), true },
             { "l1pk", QStringLiteral("L1 peak"), QColor(0xd9, 0x59, 0x26) },
             { "l1avg", QStringLiteral("L1 average"), QColor(0x90, 0x85, 0xe9), false, false, true },
             { "l1min", QStringLiteral("L1 minimum"), QColor(0xe0, 0x5f, 0xa8) },
