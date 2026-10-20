@@ -37,7 +37,8 @@ namespace LevelsScopeLog
         bool authored = false;          // L1, or the frame's own scene values
         double authoredPeakNits = 0.0;
         double authoredAverageNits = 0.0;
-        double authoredMinNits = 0.0;   // the L1 minimum; 0 if not logged
+        bool authoredMinKnown = false;  // the line has an L1 minimum (0 is true black)
+        double authoredMinNits = 0.0;
         bool l1Change = false;          // logged because L1 changed
         long long sourceFrame = -1;     // -1 if not logged
         bool rangeKnown = false;        // the source's declared range
@@ -141,7 +142,11 @@ namespace LevelsScopeLog
                 {
                     sample.authoredPeakNits = Number(values, "scene_peak_nits");
                     sample.authoredAverageNits = Number(values, "scene_avg_nits");
-                    sample.authoredMinNits = Number(values, "scene_min_nits");
+                    // Only L1 carries a minimum; elsewhere VP logs 0 for "none".
+                    sample.authoredMinKnown = sample.dolbyVision && scene->second == "L1" &&
+                        values.count("scene_min_nits");
+                    if (sample.authoredMinKnown)
+                        sample.authoredMinNits = Number(values, "scene_min_nits");
                 }
                 // reason=interval, L1 or interval,L1.
                 const auto reason = values.find("reason");
