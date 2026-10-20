@@ -433,6 +433,7 @@ namespace LevelsScopePanel
                 b->setStyleSheet(QStringLiteral(
                     "QToolButton { color: %1; background: #101d2a; border: 1px solid %1; border-radius: 10px; padding: 1px 8px; }"
                     " QToolButton:!checked { color: #63798c; border-color: #2c4659; }").arg(c.name()));
+                b->setToolTip(LevelsScopeView::TraceTip(t.key));
                 const std::string key = t.key;
                 connect(b, &QToolButton::toggled, this, [this, key](bool on) {
                     chart_->setShown(key, on);

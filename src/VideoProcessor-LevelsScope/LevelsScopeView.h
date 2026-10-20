@@ -72,6 +72,42 @@ namespace LevelsScopeView
         return traces;
     }
 
+    // What each chip's trace is, for its tooltip.
+    inline QString TraceTip(const std::string& key)
+    {
+        static const std::map<std::string, QString> tips = {
+            { "detpk", QStringLiteral("The frame's peak as libplacebo's peak detection measured it: the value tone mapping used.") },
+            { "detmax", QStringLiteral("The brightest point peak detection saw, without the limit applied to Measured peak. Logs from cacf7165 on.") },
+            { "l1pk", QStringLiteral("Dolby Vision only: the scene's peak as the stream declares it (L1 metadata, set when graded). "
+                "The ticks on the floor mark each L1 change.") },
+            { "l1avg", QStringLiteral("Dolby Vision only: the scene's average as the stream declares it (L1). Averaged in PQ, "
+                "so lower than a linear average of the same picture.") },
+            { "l1min", QStringLiteral("Dolby Vision only: the scene's black as the stream declares it (L1). 0 is true black. "
+                "Logs from cacf7165 on.") },
+            { "detlin", QStringLiteral("The frame's average brightness from peak detection, averaged in linear light. "
+                "The one to compare with MaxFALL.") },
+            { "detpq", QStringLiteral("The same frame average taken in PQ code values, which count dark areas for more. "
+                "The one to compare with L1 average.") },
+            { "mblack", QStringLiteral("The black of the monitor the title was graded on, as the stream declares it. "
+                "Almost always 0.0001 nit.") },
+            { "mpeak", QStringLiteral("The peak of the monitor the title was graded on, as the stream declares it. "
+                "Almost always 1000 nits.") },
+            { "maxcll", QStringLiteral("HDR10 only: the brightest pixel anywhere in the title, as the stream declares it. "
+                "One value for the whole title.") },
+            { "maxfall", QStringLiteral("HDR10 only: the brightest frame average anywhere in the title, in linear light, "
+                "as the stream declares it. One value for the whole title.") },
+            { "inband", QStringLiteral("What came in: from the mastering black up to this moment's peak (measured, else L1). "
+                "The white line is its average.") },
+            { "outband", QStringLiteral("Where the chosen DTM profile put that range on the screen, through libplacebo's own "
+                "tone curve. The green line is the average.") },
+            { "p1", QStringLiteral("Where a 0.1-nit level in the source lands on the screen with the chosen DTM profile.") },
+            { "p01", QStringLiteral("Where a 0.01-nit level in the source lands on the screen with the chosen DTM profile.") },
+            { "p001", QStringLiteral("Where a 0.001-nit level in the source lands on the screen with the chosen DTM profile.") },
+        };
+        const auto found = tips.find(key);
+        return found == tips.end() ? QString() : found->second;
+    }
+
     // SMPTE ST 2084 for the axis only (drawing position, not tone mapping).
     inline double Pq(double nits)
     {
