@@ -1,5 +1,6 @@
 #pragma once
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <string>
@@ -23,8 +24,18 @@
 //                             later HDR10 samples, raw_values= MaxCLL/MaxFALL/
 //                             min/max. Not "libplacebo tone mapping:": it is
 //                             logged only when the EOTF or colorspace changes.
+// And for markers where the settings changed, from lines VP already writes:
+//   "profiles: automatic selections:"           the DTM profile (display/<name>);
+//   "libplacebo resolved render options": all=  every non-default render option;
+//   "libplacebo settings:" / "... applied live:" the target nits and black.
 namespace LevelsScopeLog
 {
+    struct Marker
+    {
+        std::string time;               // the line's first 19 characters
+        std::string text;               // what changed
+    };
+
     struct Sample
     {
         std::string time;               // "yyyy-MM-dd HH:mm:ss", then ".zzz" from time=
@@ -74,6 +85,28 @@ namespace LevelsScopeLog
         return found == values.end() ? 0.0 : std::strtod(found->second.c_str(), nullptr);
     }
 
+    // A logged value as the operator would type it: 1.590000033378601 -> 1.59.
+    inline std::string Short(const std::string& value)
+    {
+        char* end = nullptr;
+        const double number = std::strtod(value.c_str(), &end);
+        if (end == value.c_str() || *end != '\0') return value;
+        char text[32];
+        std::snprintf(text, sizeof text, "%.4g", number);
+        return text;
+    }
+
+    // Up to three changes, then how many more.
+    inline std::string Join(const std::vector<std::string>& changes)
+    {
+        std::string text;
+        for (size_t i = 0; i < changes.size() && i < 3; ++i)
+            text += (i ? "; " : "") + changes[i];
+        if (changes.size() > 3)
+            text += " (+" + std::to_string(changes.size() - 3) + " more)";
+        return text;
+    }
+
     // One file's lines in order. Samples come from "HDR luminance:" lines when
     // the log has any, else from "Dolby Vision luminance:" lines.
     class Reader
@@ -83,7 +116,64 @@ namespace LevelsScopeLog
         {
             if (build_.empty())
                 FindBuild(line);
-            if (line.find("| Dolby Vision luminance:") != std::string::npos)
+            if (line.find("| profiles: automatic selections:") != std::string::npos)
+            {
+                const size_t at = line.find("display/");
+                if (at == std::string::npos) return;
+                size_t end = at + 8;
+                while (end < line.size() && line[end] != ' ' && line[end] != ',') ++end;
+                const std::string profile = line.substr(at + 8, end - at - 8);
+                if (profile != profile_)
+                    markers_.push_back({ line.substr(0, 19), "DTM profile " + profile });
+                profile_ = profile;
+            }
+            else if (line.find("| libplacebo resolved render options") != std::string::npos)
+            {
+                const size_t at = line.find(" all=");
+                if (at == std::string::npos) return;
+                std::map<std::string, std::string> options;
+                const std::string all = line.substr(at + 5);
+                for (size_t start = 0; start < all.size();)
+                {
+                    size_t end = all.find(',', start);
+                    if (end == std::string::npos) end = all.size();
+                    const std::string item = all.substr(start, end - start);
+                    const size_t equals = item.find('=');
+                    if (equals != std::string::npos)
+                        options[item.substr(0, equals)] = item.substr(equals + 1);
+                    start = end + 1;
+                }
+                if (!options_.empty() && options != options_)
+                {
+                    std::vector<std::string> changes;
+                    for (const auto& [key, value] : options)
+                    {
+                        const auto old = options_.find(key);
+                        if (old == options_.end()) changes.push_back(key + " " + Short(value));
+                        else if (old->second != value) changes.push_back(key + " " + Short(old->second) + " → " + Short(value));
+                    }
+                    for (const auto& [key, value] : options_)
+                        if (!options.count(key)) changes.push_back(key + " off");
+                    markers_.push_back({ line.substr(0, 19), Join(changes) });
+                }
+                options_ = options;
+            }
+            else if (line.find("| libplacebo settings:") != std::string::npos ||
+                line.find("| libplacebo profile settings applied live:") != std::string::npos)
+            {
+                const auto values = Values(line);
+                const auto target = values.find(values.count("target") ? "target" : "luminance");
+                const auto black = values.find("black");
+                if (target == values.end() || black == values.end()) return;
+                const double nits = std::strtod(target->second.c_str(), nullptr);
+                const double blackNits = std::strtod(black->second.c_str(), nullptr);
+                if (targetKnown_ && (nits != targetNits_ || blackNits != targetBlack_))
+                    markers_.push_back({ line.substr(0, 19), "target " + Short(target->second) + " nits, black " + Short(black->second) });
+                targetKnown_ = true;
+                targetNits_ = nits;
+                targetBlack_ = blackNits;
+            }
+            else if (line.find("| Dolby Vision luminance:") != std::string::npos)
             {
                 const auto values = Values(line);
                 dmRange_ = true;
@@ -164,6 +254,8 @@ namespace LevelsScopeLog
         const std::vector<Sample>& Samples() const { return Measured() ? measuredLog_ : dvOnly_; }
         // The build named in the log, as "git-<sha>" or "bench-<sha>"; empty if none.
         const std::string& Build() const { return build_; }
+        // Where the DTM profile, a render option or the target changed, in order.
+        const std::vector<Marker>& Markers() const { return markers_; }
 
     private:
         void ApplyRange(Sample& sample) const
@@ -204,7 +296,11 @@ namespace LevelsScopeLog
         }
 
         std::vector<Sample> measuredLog_, dvOnly_;
-        std::string build_;
+        std::vector<Marker> markers_;
+        std::string build_, profile_;
+        std::map<std::string, std::string> options_;
+        bool targetKnown_ = false;
+        double targetNits_ = 0.0, targetBlack_ = 0.0;
         bool dmRange_ = false, staticKnown_ = false;
         double dmBlack_ = 0.0, dmPeak_ = 0.0;
         double staticBlack_ = 0.0, staticPeak_ = 0.0, maxCll_ = 0.0, maxFall_ = 0.0;
