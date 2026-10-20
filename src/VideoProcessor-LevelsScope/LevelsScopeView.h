@@ -317,6 +317,7 @@ namespace LevelsScopeView
         static QColor Fg() { return QColor(QStringLiteral("#e8eaec")); }
         static QColor Fg2() { return QColor(QStringLiteral("#b4b9bf")); }
         static QColor Card() { return QColor(QStringLiteral("#101b27")); }
+        static QColor MarkColor() { return QColor(QStringLiteral("#c8e66a")); }
         static QDateTime When(double seconds) { return QDateTime::fromMSecsSinceEpoch(std::llround(seconds * 1000.0)); }
 
         // A dot drawn once per colour and size and then stamped: anti-aliased
@@ -575,9 +576,33 @@ namespace LevelsScopeView
             p.setClipRect(QRectF(PadL, PadT, xEnd - PadL, h - PadT - PadB), Qt::IntersectClip);
             if (view_ == View::InOut) drawInOut(p, X, Y, W, xEnd, inY);
             else drawInput(p, X, Y, W);
+            drawMarks(p, X, fm, xEnd, h);
             p.restore();
             p.restore();
             drawMarginLabels(p, Y, inY, xEnd, h);
+        }
+
+        // Where a setting changed: a dashed line through the plot and its text
+        // at the top, left out where it would overlap the previous label.
+        template<class FX>
+        void drawMarks(QPainter& p, const FX& X, const QFontMetrics& fm, double xEnd, double h)
+        {
+            double labelEnd = -1e9;
+            QPen pen(MarkColor(), 1.0);
+            pen.setDashPattern({ 3, 3 });
+            for (const Seg& g : segs_)
+                for (const LevelsScopeData::Mark& mark : g.s->marks)
+                {
+                    const double x = std::floor(X(g.off + mark.t - g.s->a)) + 0.5;
+                    if (x < PadL || x > xEnd) continue;
+                    p.setPen(pen);
+                    p.drawLine(QPointF(x, PadT), QPointF(x, h - PadB));
+                    if (x < labelEnd) continue;
+                    const QString text = fm.elidedText(mark.text, Qt::ElideRight, 360);
+                    p.setPen(MarkColor());
+                    p.drawText(QPointF(x + 4, PadT + 13), text);
+                    labelEnd = x + 4 + fm.horizontalAdvance(text) + 8;
+                }
         }
 
         template<class FX, class FY>
@@ -769,9 +794,15 @@ namespace LevelsScopeView
             const QString name = name_ ? name_(*g->s) : g->s->kind;
             const auto& s = pt->s;
             QStringList parts{ QStringLiteral("<b>%1</b> %2").arg(when, name.toHtmlEscaped()) };
+            // A setting change within 5 pixels of the pointer comes first.
+            const double near = 5.0 * windowLength() / plotWidth();
+            for (const LevelsScopeData::Mark& mark : g->s->marks)
+                if (std::abs(g->off + mark.t - g->s->a - v) <= near)
+                    parts << QStringLiteral("<span style=\"color:%1\"><b>%2</b></span>")
+                        .arg(MarkColor().name(), mark.text.toHtmlEscaped());
             if (view_ == View::InOut)
             {
-                if (!pt->computed) return parts.first() + QStringLiteral(" · black frame");
+                if (!pt->computed) return parts.join(QStringLiteral(" &nbsp; ")) + QStringLiteral(" · black frame");
                 // The master in the input band's colour, where it landed in the output band's.
                 const bool measured = s.measured && s.detectedPeakNits > 0;
                 const auto inOut = [](double in, double out) {
