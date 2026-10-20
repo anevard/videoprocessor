@@ -12,7 +12,10 @@
 //
 // The lines, and how each is used:
 //   "HDR luminance:"          one sample (detection and scene values; the
-//                             stats-OSD builds, every 5 s);
+//                             stats-OSD builds, every 5 s; from cacf7165
+//                             every 2.5 s and on each L1 change, with
+//                             millisecond time=, the L1 minimum, the
+//                             uncapped detected maximum and source_frame);
 //   "Dolby Vision luminance:" the DM source range for later DV samples; a
 //                             sample of its own only in a log without the
 //                             line above ("L1 only", older builds);
@@ -24,15 +27,19 @@ namespace LevelsScopeLog
 {
     struct Sample
     {
-        std::string time;               // the line's first 19 characters
+        std::string time;               // "yyyy-MM-dd HH:mm:ss", then ".zzz" from time=
         bool dolbyVision = false;
         bool measured = false;          // detection reported this sample
         double detectedPeakNits = 0.0;
         double detectedPqAverageNits = 0.0;
         double detectedLinearAverageNits = 0.0;
+        double detectedSceneMaxNits = 0.0;  // uncapped maxRGB; 0 if not logged
         bool authored = false;          // L1, or the frame's own scene values
         double authoredPeakNits = 0.0;
         double authoredAverageNits = 0.0;
+        double authoredMinNits = 0.0;   // the L1 minimum; 0 if not logged
+        bool l1Change = false;          // logged because L1 changed
+        long long sourceFrame = -1;     // -1 if not logged
         bool rangeKnown = false;        // the source's declared range
         double masteringBlackNits = 0.0;
         double masteringPeakNits = 0.0;
@@ -115,6 +122,10 @@ namespace LevelsScopeLog
                 const auto values = Values(line);
                 Sample sample;
                 sample.time = line.substr(0, 19);
+                // time=YYYY-MM-DDTHH:MM:SS.mmm, local like the prefix.
+                const auto stamp = values.find("time");
+                if (stamp != values.end() && stamp->second.size() == 23 && stamp->second[10] == 'T')
+                    sample.time = stamp->second.substr(0, 10) + ' ' + stamp->second.substr(11);
                 sample.dolbyVision = values.count("dv") && values.at("dv") == "1";
                 sample.measured = values.count("detection") && values.at("detection") == "valid";
                 if (sample.measured)
@@ -122,6 +133,7 @@ namespace LevelsScopeLog
                     sample.detectedPeakNits = Number(values, "detected_peak_nits");
                     sample.detectedPqAverageNits = Number(values, "detected_avg_pq_nits");
                     sample.detectedLinearAverageNits = Number(values, "detected_avg_linear_nits");
+                    sample.detectedSceneMaxNits = Number(values, "detected_scene_max_nits");
                 }
                 const auto scene = values.find("scene");
                 sample.authored = scene != values.end() && scene->second != "none";
@@ -129,7 +141,14 @@ namespace LevelsScopeLog
                 {
                     sample.authoredPeakNits = Number(values, "scene_peak_nits");
                     sample.authoredAverageNits = Number(values, "scene_avg_nits");
+                    sample.authoredMinNits = Number(values, "scene_min_nits");
                 }
+                // reason=interval, L1 or interval,L1.
+                const auto reason = values.find("reason");
+                sample.l1Change = reason != values.end() && reason->second.find("L1") != std::string::npos;
+                const auto frame = values.find("source_frame");
+                if (frame != values.end())
+                    sample.sourceFrame = std::strtoll(frame->second.c_str(), nullptr, 10);
                 ApplyRange(sample);
                 measuredLog_.push_back(sample);
             }
