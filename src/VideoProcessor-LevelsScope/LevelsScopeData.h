@@ -21,8 +21,8 @@
 // a log read and a live source (VP's configuration RPC, later) build the
 // same way. Sections live in a deque, which never moves them, because the
 // chart holds pointers to them while samples keep arriving. Times are
-// seconds with millisecond resolution: the log gives whole seconds, live
-// samples arrive several times a second.
+// seconds with millisecond resolution: older logs give whole seconds, newer
+// ones milliseconds (time=), live samples arrive several times a second.
 //
 // The cut rules, as the web page had them: a section is a run of one declared
 // source range (DV or not, mastering black and peak) without a gap over 30 s;
@@ -103,9 +103,11 @@ namespace LevelsScopeData
                 next.black = s.masteringBlackNits;
                 next.peak = s.masteringPeakNits;
                 next.open = true;
-                // Whole seconds (logs) print as before, so saved names and ticks still match.
+                // Logs key sections by whole seconds even with millisecond
+                // times, so names saved from older reads still match.
+                const double idT = keepShort_ ? point.t : std::floor(point.t);
                 next.id = QStringLiteral("%1|%2|%3|%4")
-                    .arg(QString::number(point.t, 'f', point.t == std::floor(point.t) ? 0 : 3)).arg(s.dolbyVision)
+                    .arg(QString::number(idT, 'f', idT == std::floor(idT) ? 0 : 3)).arg(s.dolbyVision)
                     .arg(s.masteringBlackNits).arg(s.masteringPeakNits);
                 sections_.push_back(next);
                 open_ = true;
@@ -196,8 +198,10 @@ namespace LevelsScopeData
             int kept = 0;
             for (const LevelsScopeLog::Sample& sample : reader.Samples())
             {
-                const QDateTime when = QDateTime::fromString(QString::fromStdString(sample.time),
-                    QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+                const QString stamp = QString::fromStdString(sample.time);
+                QDateTime when = QDateTime::fromString(stamp, QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
+                if (!when.isValid())
+                    when = QDateTime::fromString(stamp, QStringLiteral("yyyy-MM-dd HH:mm:ss"));
                 if (!when.isValid()) continue;
                 Entry entry{ PointOf(sample, when.toMSecsSinceEpoch() / 1000.0), name, build };
                 const QString key = QStringLiteral("%1|%2|%3|%4").arg(when.toMSecsSinceEpoch()).arg(sample.dolbyVision)
