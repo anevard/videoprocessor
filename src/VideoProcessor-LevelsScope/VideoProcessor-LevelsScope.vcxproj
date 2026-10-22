@@ -96,6 +96,7 @@
     <ClInclude Include="LevelsScopePanel.h" />
     <ClInclude Include="LevelsScopeView.h" />
     <ClInclude Include="..\VideoProcessor-Config\VpTheme.h" />
+    <ClInclude Include="..\VideoProcessor-ChartCore\ChartStyle.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneCurveProvider.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneCurveRuntime.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneProfileRequest.h" />
