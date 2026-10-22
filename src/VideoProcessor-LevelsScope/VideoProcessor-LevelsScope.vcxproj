@@ -91,15 +91,17 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="LevelsScopeData.h" />
-    <ClInclude Include="LevelsScopeEngine.h" />
-    <ClInclude Include="LevelsScopeLog.h" />
     <ClInclude Include="LevelsScopePanel.h" />
+    <ClInclude Include="LevelsScopeTraces.h" />
     <ClInclude Include="LevelsScopeView.h" />
     <ClInclude Include="..\VideoProcessor-Config\VpTheme.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ChartStyle.h" />
+    <ClInclude Include="..\VideoProcessor-ChartCore\LoggedScene.h" />
+    <ClInclude Include="..\VideoProcessor-ChartCore\PqAxis.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneCurveProvider.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneCurveRuntime.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneProfileRequest.h" />
+    <ClInclude Include="..\VideoProcessor-ChartCore\VpLog.h" />
     <ClInclude Include="..\VideoProcessor-Config\RenderingBuiltInDefault.h" />
     <ClInclude Include="..\VideoProcessor-ConfigCore\ConfigEditorCore.h" />
   </ItemGroup>

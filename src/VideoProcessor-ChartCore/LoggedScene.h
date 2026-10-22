@@ -1,5 +1,5 @@
 #pragma once
-#include "LevelsScopeLog.h"
+#include "VpLog.h"
 #include <ToneCurveProvider.h>
 #include <cmath>
 #include <string>
@@ -10,7 +10,7 @@
 // where a profile would have put each probe level at that moment. Nothing
 // here computes a curve; it only fills the request as VP's renderer fills
 // libplacebo's source metadata.
-namespace LevelsScopeEngine
+namespace LoggedScene
 {
     struct Outcome
     {
@@ -31,7 +31,7 @@ namespace LevelsScopeEngine
     // InfoFrame's range and MaxCLL/MaxFALL) or DolbyVisionLuminancePolicy
     // (the DM range, no MaxCLL/MaxFALL, L1 as max_pq_y/avg_pq_y).
     inline ToneCurveProvider::Request RequestFor(const ToneCurveProvider::Request& profile,
-        const LevelsScopeLog::Sample& sample, const ToneCurveProvider::Functions& f)
+        const VpLog::Sample& sample, const ToneCurveProvider::Functions& f)
     {
         ToneCurveProvider::Request request = profile;
         request.betaRenderer = true;
@@ -63,7 +63,7 @@ namespace LevelsScopeEngine
         return request;
     }
 
-    inline bool Evaluate(const ToneCurveProvider::Request& profile, const LevelsScopeLog::Sample& sample,
+    inline bool Evaluate(const ToneCurveProvider::Request& profile, const VpLog::Sample& sample,
         const std::vector<double>& probeNits, Outcome& outcome, std::wstring& error)
     {
         const ToneCurveProvider::Functions& f = ToneCurveProvider::Registered();
