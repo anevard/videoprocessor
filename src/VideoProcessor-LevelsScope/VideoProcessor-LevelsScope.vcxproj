@@ -82,6 +82,9 @@
     <ClCompile Include="..\VideoProcessor-Lib\ShaderConfigValidation.cpp">
       <ObjectFileName>$(IntDir)ShaderConfigValidation.obj</ObjectFileName>
     </ClCompile>
+    <ClCompile Include="..\VideoProcessor-Lib\DisplayRefreshRatePolicy.cpp">
+      <ObjectFileName>$(IntDir)DisplayRefreshRatePolicy.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\VideoProcessor-Lib\ConfigFile.cpp">
       <ObjectFileName>$(IntDir)ConfigFileStandalone.obj</ObjectFileName>
     </ClCompile>
