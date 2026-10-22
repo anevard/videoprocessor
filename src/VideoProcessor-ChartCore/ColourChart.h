@@ -1,5 +1,5 @@
 #pragma once
-#include "ToneCurveChart.h"
+#include "ChartStyle.h"
 #include "ToneCurveProvider.h"
 #include <QMouseEvent>
 #include <QPainter>
@@ -76,7 +76,7 @@ protected:
     void paintEvent(QPaintEvent*) override
     {
         QPainter painter(this);
-        painter.fillRect(rect(), QColor(QStringLiteral("#101b27"))); // his card colour
+        painter.fillRect(rect(), ChartStyle::Card());
         painter.setRenderHint(QPainter::Antialiasing);
         QFont chartFont = font();
         chartFont.setPixelSize(11);
@@ -89,10 +89,6 @@ protected:
     }
 
 private:
-    static constexpr const char* kGrid = "#1b2a39";
-    static constexpr const char* kAxis = "#2d475f";
-    static constexpr const char* kInk = "#9fb2c4";
-
     void paintMap(QPainter& painter, const QFontMetrics& metrics)
     {
         const QRectF area = QRectF(rect()).adjusted(40, 8, -10, -22);
@@ -123,7 +119,7 @@ private:
         const auto sx = [&](double u) { return plot.left() + (u - u0) * scale; };
         const auto sy = [&](double v) { return plot.bottom() - (v - v0) * scale; };
 
-        const QColor grid(QString::fromLatin1(kGrid)), ink(QString::fromLatin1(kInk));
+        const QColor grid = ChartStyle::Grid(), ink = ChartStyle::Ink();
         for (double u = std::ceil(u0 * 10.0 - 1e-9) / 10.0; u <= u1 + 1e-9; u += 0.1)
         {
             painter.setPen(grid);
@@ -157,9 +153,9 @@ private:
         const QColor reference(QStringLiteral("#6b8299"));
         triangle(data_.bt2020, QPen(reference, 1.2, Qt::DashLine));
         triangle(data_.rec709, QPen(reference, 1.2, Qt::DotLine));
-        triangle(data_.display, QPen(QColor(QStringLiteral("#c9d6e2")), 1.8));
+        triangle(data_.display, QPen(ChartStyle::Reference(), 1.8));
         // The display's white.
-        painter.setPen(QPen(QColor(QStringLiteral("#c9d6e2")), 1.2));
+        painter.setPen(QPen(ChartStyle::Reference(), 1.2));
         const QPointF white(sx(data_.display.u[3]), sy(data_.display.v[3]));
         painter.drawLine(white - QPointF(4, 0), white + QPointF(4, 0));
         painter.drawLine(white - QPointF(0, 4), white + QPointF(0, 4));
@@ -208,7 +204,7 @@ private:
         int keyWidth = 0;
         for (const QString& key : keys) keyWidth = std::max(keyWidth, metrics.horizontalAdvance(key));
         const double keyX = plot.right() - keyWidth - 28, keyY = plot.top() + 12;
-        const QPen keyPens[3] = { QPen(QColor(QStringLiteral("#c9d6e2")), 1.8),
+        const QPen keyPens[3] = { QPen(ChartStyle::Reference(), 1.8),
             QPen(reference, 1.2, Qt::DashLine), QPen(reference, 1.2, Qt::DotLine) };
         for (int i = 0; i < 4; ++i)
         {
@@ -251,7 +247,7 @@ private:
         if (nearest >= patches.size()) return;
         QStringList lines;
         lines << QStringLiteral("%1 in %2: strongest channel at %3 nits").arg(QString::fromLatin1(patches[nearest].name),
-            data_.mapLabel, ToneCurveChart::Nits(data_.mapNits));
+            data_.mapLabel, ChartStyle::Nits(data_.mapNits));
         const auto& source = data_.series.front().points[nearest];
         if (!source.valid)
             lines << QStringLiteral("This scene cannot hold it this strong.");
@@ -285,14 +281,14 @@ private:
         const auto sx = [&](double nits) { return plot.left() + (scale(nits) - x0) / (x1 - x0) * plot.width(); };
         const auto sy = [&](double s) { return plot.bottom() - (s - low) / (high - low) * plot.height(); };
 
-        const QColor grid(QString::fromLatin1(kGrid)), axis(QString::fromLatin1(kAxis)), ink(QString::fromLatin1(kInk));
+        const QColor grid = ChartStyle::Grid(), axis = ChartStyle::Axis(), ink = ChartStyle::Ink();
         double lastLabel = -1e9;
         for (double nits : { 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0, 10000.0 })
         {
             if (nits < data_.sweepNits.front() * 0.999 || nits > data_.sweepNits.back() * 1.001) continue;
             painter.setPen(grid);
             painter.drawLine(QPointF(sx(nits), plot.top()), QPointF(sx(nits), plot.bottom()));
-            const QString label = ToneCurveChart::Nits(nits);
+            const QString label = ChartStyle::Nits(nits);
             const double width = metrics.horizontalAdvance(label);
             if (sx(nits) - width / 2 < lastLabel + 6) continue;
             painter.setPen(ink);
@@ -320,7 +316,7 @@ private:
         painter.save();
         painter.setClipRect(plot.adjusted(-6, -6, 6, 6));
         // 1.00: the source as mastered keeps all its colour.
-        QColor referenceLine(QStringLiteral("#c9d6e2"));
+        QColor referenceLine = ChartStyle::Reference();
         referenceLine.setAlpha(150);
         painter.setPen(QPen(referenceLine, 1.5));
         painter.drawLine(QPointF(plot.left(), sy(1.0)), QPointF(plot.right(), sy(1.0)));
@@ -366,7 +362,7 @@ private:
                 if (std::abs(sx(data_.sweepNits[i]) - hover_.x()) < std::abs(sx(data_.sweepNits[index]) - hover_.x())) index = i;
             QStringList lines;
             lines << QStringLiteral("%1, strongest channel at %2 nits").arg(QString::fromLatin1(ToneCurveProvider::Patches()[data_.patch].name),
-                ToneCurveChart::Nits(data_.sweepNits[index]));
+                ChartStyle::Nits(data_.sweepNits[index]));
             const auto& first = data_.series.front().points;
             if (index < first.size() && !first[index].valid)
                 lines << QStringLiteral("This scene cannot hold it this strong.");
@@ -374,7 +370,7 @@ private:
                 for (const Series& series : data_.series)
                     if (index < series.points.size())
                         lines << Describe(series.name, series.points[index]);
-            painter.setPen(QPen(QColor(QStringLiteral("#6f8597")), 1.0));
+            painter.setPen(QPen(ChartStyle::HoverLine(), 1.0));
             painter.drawLine(QPointF(sx(data_.sweepNits[index]), plot.top()), QPointF(sx(data_.sweepNits[index]), plot.bottom()));
             hoverBox(painter, metrics, plot, QPointF(sx(data_.sweepNits[index]), plot.top() + 8), lines);
         }
@@ -395,7 +391,7 @@ private:
         const double column = plot.width() / patches.size();
         const auto cx = [&](size_t i) { return plot.left() + column * (i + 0.5); };
 
-        const QColor grid(QString::fromLatin1(kGrid)), axis(QString::fromLatin1(kAxis)), ink(QString::fromLatin1(kInk));
+        const QColor grid = ChartStyle::Grid(), axis = ChartStyle::Axis(), ink = ChartStyle::Ink();
         for (double d = -top; d <= top + 1e-9; d += step)
         {
             painter.setPen(std::abs(d) < 1e-9 ? axis : grid);
@@ -417,7 +413,7 @@ private:
             if (!held) continue;
             const double barWidth = std::max(column * 0.6, 2.0);
             painter.setBrush(Swatch(patches[i]));
-            painter.setPen(QPen(QColor(QStringLiteral("#c9d6e2")), 0.8));
+            painter.setPen(QPen(ChartStyle::Reference(), 0.8));
             painter.drawRect(QRectF(QPointF(cx(i) - barWidth / 2, sy(0.0)), QPointF(cx(i) + barWidth / 2, sy(edited[i].hue))).normalized());
         }
         for (size_t s = 1; s < data_.series.size(); ++s)
@@ -440,7 +436,7 @@ private:
             for (const Series& series : data_.series)
                 if (index < series.points.size())
                     lines << Describe(series.name, series.points[index]);
-        painter.setPen(QPen(QColor(QStringLiteral("#6f8597")), 1.0));
+        painter.setPen(QPen(ChartStyle::HoverLine(), 1.0));
         painter.drawLine(QPointF(cx(index), plot.top()), QPointF(cx(index), plot.bottom()));
         hoverBox(painter, metrics, plot, QPointF(cx(index), plot.top() + 8), lines);
     }
@@ -448,7 +444,7 @@ private:
     static QString Describe(const QString& name, const ToneCurveProvider::ColourPoint& point)
     {
         const QString hue = (point.hue > 0.05 ? QStringLiteral("+") : QString()) + QString::number(point.hue, 'f', 1);
-        return QStringLiteral("%1: %2 nits, saturation %3, hue %4°%5").arg(name, ToneCurveChart::Nits(point.nits),
+        return QStringLiteral("%1: %2 nits, saturation %3, hue %4°%5").arg(name, ChartStyle::Nits(point.nits),
             QString::number(point.saturation, 'f', 2), hue, point.clipped ? QStringLiteral(", clipped") : QString());
     }
 
@@ -463,7 +459,7 @@ private:
         if (hollow)
         {
             painter.setPen(QPen(series.color, 1.6));
-            painter.setBrush(QColor(QStringLiteral("#101b27")));
+            painter.setBrush(ChartStyle::Card());
         }
         else
         {
@@ -475,21 +471,13 @@ private:
 
     void hoverBox(QPainter& painter, const QFontMetrics& metrics, const QRectF& plot, const QPointF& anchor, const QStringList& lines)
     {
-        int width = 0;
-        for (const QString& text : lines) width = std::max(width, metrics.horizontalAdvance(text));
-        const double boxWidth = width + 16.0, boxHeight = lines.size() * 15.0 + 8.0;
+        const QSizeF size = ChartStyle::HoverBoxSize(metrics, lines);
         double left = anchor.x() + 12;
-        if (left + boxWidth > plot.right()) left = anchor.x() - 12 - boxWidth;
+        if (left + size.width() > plot.right()) left = anchor.x() - 12 - size.width();
         left = std::max(left, 2.0);
         double top = anchor.y() + 12;
-        if (top + boxHeight > plot.bottom()) top = std::max(plot.top(), anchor.y() - 12 - boxHeight);
-        const QRectF box(left, top, boxWidth, boxHeight);
-        painter.setPen(QPen(QColor(QString::fromLatin1(kAxis)), 1.0));
-        painter.setBrush(QColor(QStringLiteral("#0f1a26")));
-        painter.drawRoundedRect(box, 4, 4);
-        painter.setPen(QColor(QStringLiteral("#e5eef6")));
-        for (int i = 0; i < lines.size(); ++i)
-            painter.drawText(QPointF(box.left() + 8, box.top() + 16 + i * 15.0), lines[i]);
+        if (top + size.height() > plot.bottom()) top = std::max(plot.top(), anchor.y() - 12 - size.height());
+        ChartStyle::DrawHoverBox(painter, QRectF(QPointF(left, top), size), lines);
     }
 
     Kind kind_;

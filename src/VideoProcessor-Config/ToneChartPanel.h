@@ -1,5 +1,6 @@
 #pragma once
 #include "../VideoProcessor-ChartCore/ChartData.h"
+#include "../VideoProcessor-ChartCore/ChartStyle.h"
 #include "../VideoProcessor-ChartCore/ColourChart.h"
 #include "../VideoProcessor-ChartCore/ToneCurveChart.h"
 #include "../VideoProcessor-ChartCore/ToneCurveProvider.h"
@@ -62,9 +63,9 @@ public:
         pages_ = new QStackedWidget;
         pages_->setObjectName(QStringLiteral("toneChartsPages"));
         pages_->setStyleSheet(QStringLiteral(
-            "#toneChartsPages { background: #101b27; border: 1px solid #273d53; border-radius: 4px; }"
-            " #toneChartsBrightness, #toneChartsColour { background: #101b27; }"
-            " #toneChartsDivider { background: #273d53; }"));
+            "#toneChartsPages { background: %1; border: 1px solid #273d53; border-radius: 4px; }"
+            " #toneChartsBrightness, #toneChartsColour { background: %1; }"
+            " #toneChartsDivider { background: #273d53; }").arg(ChartStyle::Card().name()));
         area->addWidget(pages_, 1);
         connect(tabBar_, &QTabBar::currentChanged, pages_, &QStackedWidget::setCurrentIndex);
         auto* brightness = new QWidget;
@@ -107,7 +108,7 @@ public:
         auto* compareRow = new QHBoxLayout;
         compareRow->setSpacing(6);
         compareRow->addWidget(new QLabel(QStringLiteral("Compare with:")));
-        defaultChip_ = chip(QStringLiteral("libplacebo default"), QColor(QStringLiteral("#e8a93b")), true);
+        defaultChip_ = chip(QStringLiteral("libplacebo default"), ChartStyle::Default(), true);
         defaultChip_->setObjectName(QStringLiteral("toneCharts.compareDefault"));
         defaultChip_->setChecked(true);
         defaultChip_->setToolTip(QStringLiteral("Show or hide libplacebo's default curve."));
@@ -210,14 +211,13 @@ private:
     QColor nextColor() const
     {
         // Blue first, so the profile edited when the page opens is blue.
-        for (const char* candidate : { "#49b6ff", "#6fd08c", "#d77be0", "#f0d75a" })
+        for (const QColor& color : ChartStyle::Chips())
         {
-            const QColor color(QString::fromLatin1(candidate));
             if (std::none_of(compared_.begin(), compared_.end(),
                 [&](const Compared& compared) { return compared.color == color; }))
                 return color;
         }
-        return QColor(QStringLiteral("#49b6ff"));
+        return ChartStyle::Chips().front();
     }
 
     void fillCompareMenu(QMenu* menu)
@@ -485,7 +485,7 @@ private:
         for (size_t i = 0; i < zoneButtons_.size(); ++i)
             zoneButtons_[i]->setChecked(static_cast<int>(i) == zone_);
         const double zoneNits = ChartData::ZoneNits(request, result, zone_);
-        zoneNote_->setText(QStringLiteral("strongest channel at %1 nits").arg(ToneCurveChart::Nits(zoneNits)));
+        zoneNote_->setText(QStringLiteral("strongest channel at %1 nits").arg(ChartStyle::Nits(zoneNits)));
         ColourChart::Data map, sweep;
         if (!ChartData::Colour(request, zoneNits, display_, zone_, patch_, editedName, editedColor,
             defaultChip_->isChecked(), others, map, sweep))
@@ -590,18 +590,18 @@ private:
             parts << QStringLiteral("%1% at %2 nits").arg(part.share * 100.0, 0, 'f', 0).arg(part.nits);
         note << (request.sceneAverageKnown ?
             QStringLiteral("The scene: %1, mastered at %2 nits. Peak detection measures an average of %3 nits for the knee and %4 nits for the dynamic target.")
-                .arg(parts.join(QStringLiteral(", ")), ToneCurveChart::Nits(scene.mastering),
-                    ToneCurveChart::Nits(result.scenePqAverageNits), ToneCurveChart::Nits(result.sceneLinearAverageNits)) :
+                .arg(parts.join(QStringLiteral(", ")), ChartStyle::Nits(scene.mastering),
+                    ChartStyle::Nits(result.scenePqAverageNits), ChartStyle::Nits(result.sceneLinearAverageNits)) :
             scene.mastering > 0 ?
             QStringLiteral("Peak detection is off: only the mastering peak, %1 nits; no scene average, so the fallback knee sets the knee.")
-                .arg(ToneCurveChart::Nits(scene.mastering)) :
+                .arg(ChartStyle::Nits(scene.mastering)) :
             QStringLiteral("Peak detection is off and there is no metadata: libplacebo assumes 10000 nits; no scene average, so the fallback knee sets the knee."));
         if (result.virtualTargetNits > 0)
             note << QStringLiteral("Dynamic target: tone mapped to a virtual %1 nits, then the whole picture ×%2.")
-                .arg(ToneCurveChart::Nits(result.virtualTargetNits)).arg(result.exposure, 0, 'f', 2);
+                .arg(ChartStyle::Nits(result.virtualTargetNits)).arg(result.exposure, 0, 'f', 2);
         if (result.masteringClip > 1e-3)
             note << QStringLiteral("Mastering soft clip at strength %1, from %2 nits.")
-                .arg(result.masteringClip, 0, 'f', 2).arg(ToneCurveChart::Nits(0.95 * scene.mastering));
+                .arg(result.masteringClip, 0, 'f', 2).arg(ChartStyle::Nits(0.95 * scene.mastering));
         note << QStringLiteral("Film strength and gamut overflow correction change colour, not this grey curve. "
             "The scene is not saved and is not a VP setting; VP smooths the measurement over time.");
         sceneNote_->setText(note.join(QLatin1Char(' ')));
