@@ -98,6 +98,7 @@
     <ClInclude Include="..\VideoProcessor-ChartCore\ChartStyle.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\LoggedScene.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\PqAxis.h" />
+    <ClInclude Include="..\VideoProcessor-ChartCore\TimeSeries.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneCurveProvider.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneCurveRuntime.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneProfileRequest.h" />
