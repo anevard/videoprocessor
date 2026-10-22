@@ -466,16 +466,18 @@ namespace LevelsScopePanel
             if (configPath_.isEmpty())
                 note = QStringLiteral("Open a VideoProcessor.cfg to choose a DTM profile.");
             else if (!placeError_.isEmpty())
-                note = QStringLiteral("The scope needs VP Renderer (Beta)'s libplacebo beside this program's folder: %1").arg(placeError_);
+                note = QStringLiteral("The scope needs %1's libplacebo beside this program's folder: %2")
+                    .arg(QString::fromWCharArray(ToneCurveRuntime::RendererName()), placeError_);
             else if (settings_.value(QStringLiteral("view"), 1).toInt() == 0)
                 note = QStringLiteral("Input scope: what VP logged. Measured values are libplacebo's peak detection; "
                                       "L1 and the mastering range are what the stream declared. Screen lines: the profile's target %1 / %2.")
                     .arg(LevelsScopeView::Short(request_.targetNits), LevelsScopeView::Short(request_.blackNits));
             else
-                note = QStringLiteral("In vs out: the profile's curve computed by libplacebo's own functions (VP Renderer (Beta)'s "
-                                      "libplacebo-377.dll), through the Config page's tone engine, from what VP logged. "
-                                      "Contrast recovery (a detail pass) is not part of the curve. Screen lines: the profile's target %1 / %2.")
-                    .arg(LevelsScopeView::Short(request_.targetNits), LevelsScopeView::Short(request_.blackNits));
+                note = QStringLiteral("In vs out: the profile's curve computed by libplacebo's own functions (%1's "
+                                      "%2), through the Config page's tone engine, from what VP logged. "
+                                      "Contrast recovery (a detail pass) is not part of the curve. Screen lines: the profile's target %3 / %4.")
+                    .arg(QString::fromWCharArray(ToneCurveRuntime::RendererName()), QString::fromWCharArray(ToneCurveRuntime::LibraryFile()),
+                        LevelsScopeView::Short(request_.targetNits), LevelsScopeView::Short(request_.blackNits));
             note_->setText(note);
         }
 

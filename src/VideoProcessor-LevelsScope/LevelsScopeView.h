@@ -2,6 +2,7 @@
 #include "ChartStyle.h"
 #include "LevelsScopeData.h"
 #include <ToneCurveProvider.h>
+#include <ToneCurveRuntime.h>
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QFontMetrics>
@@ -553,7 +554,8 @@ namespace LevelsScopeView
             if (!std::isfinite(Pq(AxisHi)))
             {
                 p.setPen(Muted());
-                p.drawText(rect(), Qt::AlignCenter, QStringLiteral("The scope needs VP Renderer (Beta)'s libplacebo beside this program's folder."));
+                p.drawText(rect(), Qt::AlignCenter, QStringLiteral("The scope needs %1's libplacebo beside this program's folder.")
+                    .arg(QString::fromWCharArray(ToneCurveRuntime::RendererName())));
                 return;
             }
             const double W = windowLength(), v0 = start_, xEnd = w - PadR;

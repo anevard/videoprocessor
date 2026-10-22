@@ -6,7 +6,7 @@
 #include <vector>
 
 // One logged sample through the Config page's tone engine (ToneCurveModel,
-// libplacebo's own functions in VP Renderer (Beta)'s libplacebo-377.dll):
+// libplacebo's own functions in the drawn renderer's copy, ToneCurveRuntime):
 // where a profile would have put each probe level at that moment. Nothing
 // here computes a curve; it only fills the request as VP's renderer fills
 // libplacebo's source metadata.
