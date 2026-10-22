@@ -102,6 +102,7 @@
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneCurveRuntime.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneProfileRequest.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\VpLog.h" />
+    <ClInclude Include="..\VideoProcessor-ChartCore\VpLogFiles.h" />
     <ClInclude Include="..\VideoProcessor-Config\RenderingBuiltInDefault.h" />
     <ClInclude Include="..\VideoProcessor-ConfigCore\ConfigEditorCore.h" />
   </ItemGroup>

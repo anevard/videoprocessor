@@ -1,17 +1,12 @@
 #pragma once
 #include <LoggedScene.h>
 #include <VpLog.h>
-#include <QDateTime>
-#include <QFileInfo>
-#include <QRegularExpression>
-#include <QSet>
+#include <VpLogFiles.h>
 #include <QString>
 #include <QStringList>
 #include <algorithm>
 #include <cmath>
 #include <deque>
-#include <fstream>
-#include <map>
 #include <vector>
 
 // The Levels Scope's data: samples on one clock, cut into sections, each
@@ -155,98 +150,27 @@ namespace LevelsScopeData
         bool measured = false;         // any log had detection lines
     };
 
-    // vp.log-family files; a .gz is left out when its plain twin is there too,
-    // and a lone .gz is reported (unpack it first).
-    inline QStringList LogFiles(const QStringList& paths, QStringList& notes)
-    {
-        static const QRegularExpression family(QStringLiteral("(^vp.*\\.log)|(\\.log(\\.\\d+)?(\\.gz)?$)"),
-            QRegularExpression::CaseInsensitiveOption);
-        QSet<QString> names;
-        for (const QString& path : paths) names.insert(QFileInfo(path).fileName().toLower());
-        QStringList result;
-        for (const QString& path : paths)
-        {
-            const QString name = QFileInfo(path).fileName();
-            if (!family.match(name).hasMatch()) continue;
-            if (name.endsWith(QStringLiteral(".gz"), Qt::CaseInsensitive))
-            {
-                if (!names.contains(name.left(name.size() - 3).toLower()))
-                    notes << name + QStringLiteral(": compressed; unpack it first");
-                continue;
-            }
-            result << path;
-        }
-        return result;
-    }
-
-    // Logs: every file's samples merged (a sample logged twice counts once),
-    // put in time order, then built into sections.
+    // Logs: every file's samples merged and in time order (VpLogFiles), then
+    // built into sections.
     inline Library Read(const QStringList& paths)
     {
         Library library;
-        struct Entry { Point point; QString file, build; };
-        std::map<QString, Entry> merged;   // one per time (ms), kind, peak and L1 peak
-        std::map<QString, Mark> marks;     // one per time and text, in time order
-        for (const QString& path : LogFiles(paths, library.notes))
-        {
-            const QString name = QFileInfo(path).fileName();
-            std::ifstream file(path.toStdWString(), std::ios::binary);
-            if (!file)
-            {
-                library.notes << name + QStringLiteral(": could not be read");
-                continue;
-            }
-            VpLog::Reader reader;
-            for (std::string line; std::getline(file, line);)
-            {
-                if (!line.empty() && line.back() == '\r') line.pop_back();
-                reader.Line(line);
-            }
-            library.measured = library.measured || reader.Measured();
-            const QString build = QString::fromStdString(reader.Build());
-            int kept = 0;
-            for (const VpLog::Sample& sample : reader.Samples())
-            {
-                const QString stamp = QString::fromStdString(sample.time);
-                QDateTime when = QDateTime::fromString(stamp, QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
-                if (!when.isValid())
-                    when = QDateTime::fromString(stamp, QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-                if (!when.isValid()) continue;
-                Entry entry{ PointOf(sample, when.toMSecsSinceEpoch() / 1000.0), name, build };
-                const QString key = QStringLiteral("%1|%2|%3|%4").arg(when.toMSecsSinceEpoch()).arg(sample.dolbyVision)
-                    .arg(sample.detectedPeakNits).arg(sample.authoredPeakNits);
-                if (merged.emplace(key, entry).second) ++kept;
-            }
-            for (const VpLog::Marker& marker : reader.Markers())
-            {
-                const QDateTime when = QDateTime::fromString(QString::fromStdString(marker.time),
-                    QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-                if (!when.isValid()) continue;
-                const QString text = QString::fromStdString(marker.text);
-                marks.emplace(QStringLiteral("%1|%2").arg(when.toMSecsSinceEpoch(), 15, 10, QChar(u'0')).arg(text),
-                    Mark{ when.toMSecsSinceEpoch() / 1000.0, text });
-            }
-            library.notes << QStringLiteral("%1: %2 samples (%3), build %4").arg(name).arg(kept)
-                .arg(reader.Measured() ? QStringLiteral("measured and L1") : QStringLiteral("L1 only"))
-                .arg(build.isEmpty() ? QStringLiteral("not identified") : build);
-        }
-        std::vector<const Entry*> ordered;
-        for (const auto& item : merged) ordered.push_back(&item.second);
-        std::stable_sort(ordered.begin(), ordered.end(),
-            [](const Entry* p, const Entry* q) { return p->point.t < q->point.t; });
+        const VpLogFiles::Logs logs = VpLogFiles::Read(paths);
+        library.notes = logs.notes;
+        library.measured = logs.measured;
         Builder builder(library.sections, false);
-        for (const Entry* entry : ordered)
-            builder.Add(entry->point, entry->build, entry->file);
+        for (const VpLogFiles::LoggedSample& logged : logs.samples)
+            builder.Add(PointOf(logged.sample, logged.t), logged.build, logged.file);
         builder.Close();
         // Each mark goes to the section it falls in, or one starting within
         // 30 s after it (a profile is logged as the renderer starts, before
         // the first sample); it is drawn no earlier than the section starts.
-        for (const auto& item : marks)
+        for (const VpLogFiles::LoggedMarker& marker : logs.markers)
             for (Section& section : library.sections)
-                if (item.second.t >= section.a - 30.0 && item.second.t <= section.b)
+                if (marker.t >= section.a - 30.0 && marker.t <= section.b)
                 {
-                    section.marks.push_back(item.second);
-                    section.marks.back().t = (std::max)(item.second.t, section.a);
+                    section.marks.push_back(Mark{ marker.t, marker.text });
+                    section.marks.back().t = (std::max)(marker.t, section.a);
                     break;
                 }
         return library;
