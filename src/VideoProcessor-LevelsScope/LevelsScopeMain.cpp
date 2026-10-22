@@ -28,7 +28,7 @@
 // CSV row per logged sample: what VP logged, what libplacebo received, and
 // where the probe levels landed under the profile and under libplacebo's
 // default. Every curve value comes from the Config page's tone engine, so it
-// runs from config\ beside VP Renderer (Beta)'s folder, as the Config
+// runs from config\ beside the drawn renderer's folder, as the Config
 // application does.
 //
 //   VideoProcessorLevelsScope --config <VideoProcessor.cfg> --profile <section>
