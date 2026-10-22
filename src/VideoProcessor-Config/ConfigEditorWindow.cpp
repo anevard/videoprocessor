@@ -6994,7 +6994,7 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                     toneDrag->second.trimmed() : inheritedTone(name);
             });
             request.betaRenderer = rendererChoice_ && effectiveChoiceValue(rendererChoice_).compare(
-                QStringLiteral("VP Renderer (Beta)"), Qt::CaseInsensitive) == 0;
+                QString::fromWCharArray(ToneCurveRuntime::RendererName()), Qt::CaseInsensitive) == 0;
             return request;
         };
         // Compared profiles come from this page: its profiles, or an exported

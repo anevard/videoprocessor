@@ -2,12 +2,21 @@
 #define WIN32_LEAN_AND_MEAN
 #include "ToneCurveRuntime.h"
 #include <vprenderer/OptionalRendererLayout.h>
+#include <cwchar>
 
 namespace ToneCurveRuntime
 {
     namespace
     {
         HMODULE library = nullptr;
+    }
+
+    const wchar_t* LibraryFile()
+    {
+        for (const wchar_t* file : OptionalRendererLayout::PrivateDependencies(BetaRenderer))
+            if (std::wcsncmp(file, L"libplacebo-", 11) == 0)
+                return file;
+        return L"";
     }
 
     bool Load(std::wstring& missing)
@@ -18,8 +27,8 @@ namespace ToneCurveRuntime
         {
             tried = true;
             // The Config application runs from config\; VP Renderer's folder is
-            // its sibling, where OptionalRendererLayout places it. The charts draw
-            // VP Renderer (Beta), so its folder and libplacebo are the ones loaded.
+            // its sibling, where OptionalRendererLayout places it. The drawn
+            // renderer's folder and libplacebo are the ones loaded.
             std::wstring path(32768, L'\0');
             const DWORD length = GetModuleFileNameW(nullptr, path.data(),
                 static_cast<DWORD>(path.size()));
@@ -28,11 +37,13 @@ namespace ToneCurveRuntime
             const std::wstring root = configDirectory.substr(0, configDirectory.find_last_of(L"\\/"));
             if (length == 0)
                 failure = L"the Config application's own path";
-            else if (!OptionalRendererLayout::FindMissingRuntimeFile(root, failure, true))
+            else if (!*LibraryFile())
+                failure = L"libplacebo in VP's list of the renderer's files";
+            else if (!OptionalRendererLayout::FindMissingRuntimeFile(root, failure, BetaRenderer))
             {
                 // A full path loads the companions from the same folder.
                 const std::wstring file = OptionalRendererLayout::Join(
-                    OptionalRendererLayout::Directory(root, true), L"libplacebo-377.dll");
+                    OptionalRendererLayout::Directory(root, BetaRenderer), LibraryFile());
                 library = LoadLibraryExW(file.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
                 if (!library) failure = file;
             }
