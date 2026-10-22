@@ -42,13 +42,13 @@
       <WarningLevel>Level4</WarningLevel><SDLCheck>true</SDLCheck><ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard><RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <AdditionalOptions>/utf-8 /Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;VP_CONFIGFILE_STANDALONE;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\VideoProcessor-Config\standalone;$(QtRoot)\include;$(QtRoot)\include\QtCore;..\VideoProcessor-Config;..\VideoProcessor-ChartCore;..\VideoProcessor-Lib;..\VideoProcessor-ConfigCore;..\..\3rdparty\libplacebo-beta\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;VP_CONFIGFILE_STANDALONE;QT_WIDGETS_LIB;QT_GUI_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\VideoProcessor-Config\standalone;$(QtRoot)\include;$(QtRoot)\include\QtWidgets;$(QtRoot)\include\QtGui;$(QtRoot)\include\QtCore;..\VideoProcessor-Config;..\VideoProcessor-ChartCore;..\VideoProcessor-Lib;..\VideoProcessor-ConfigCore;..\..\3rdparty\libplacebo-beta\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(QtRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>Qt6Cored.lib;shell32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Qt6Widgetsd.lib;Qt6Guid.lib;Qt6Cored.lib;shell32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -56,17 +56,20 @@
       <WarningLevel>Level4</WarningLevel><SDLCheck>true</SDLCheck><ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard><RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><FunctionLevelLinking>true</FunctionLevelLinking>
       <AdditionalOptions>/utf-8 /Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;VP_CONFIGFILE_STANDALONE;QT_NO_DEBUG;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\VideoProcessor-Config\standalone;$(QtRoot)\include;$(QtRoot)\include\QtCore;..\VideoProcessor-Config;..\VideoProcessor-ChartCore;..\VideoProcessor-Lib;..\VideoProcessor-ConfigCore;..\..\3rdparty\libplacebo-beta\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;VP_CONFIGFILE_STANDALONE;QT_NO_DEBUG;QT_WIDGETS_LIB;QT_GUI_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\VideoProcessor-Config\standalone;$(QtRoot)\include;$(QtRoot)\include\QtWidgets;$(QtRoot)\include\QtGui;$(QtRoot)\include\QtCore;..\VideoProcessor-Config;..\VideoProcessor-ChartCore;..\VideoProcessor-Lib;..\VideoProcessor-ConfigCore;..\..\3rdparty\libplacebo-beta\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(QtRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>Qt6Core.lib;shell32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Qt6Widgets.lib;Qt6Gui.lib;Qt6Core.lib;shell32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="LevelsScopeMain.cpp" />
+    <ClCompile Include="..\VideoProcessor-Config\VpTheme.cpp">
+      <ObjectFileName>$(IntDir)VpTheme.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\VideoProcessor-ChartCore\ToneCurveModel.cpp">
       <ObjectFileName>$(IntDir)ToneCurveModel.obj</ObjectFileName>
     </ClCompile>
@@ -84,8 +87,12 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="LevelsScopeData.h" />
     <ClInclude Include="LevelsScopeEngine.h" />
     <ClInclude Include="LevelsScopeLog.h" />
+    <ClInclude Include="LevelsScopePanel.h" />
+    <ClInclude Include="LevelsScopeView.h" />
+    <ClInclude Include="..\VideoProcessor-Config\VpTheme.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneCurveProvider.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneCurveRuntime.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ToneProfileRequest.h" />
