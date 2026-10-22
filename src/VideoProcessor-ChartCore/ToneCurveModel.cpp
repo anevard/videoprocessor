@@ -735,9 +735,13 @@ namespace
 
     double Rescale(pl_hdr_scaling from, pl_hdr_scaling to, double value)
     {
-        Library library;
-        std::wstring error;
-        if (!Resolve(library, error)) return std::nan("");
+        // Found once: the charts convert every point they draw.
+        static const Library library = [] {
+            Library found;
+            std::wstring error;
+            return Resolve(found, error) ? found : Library{};
+        }();
+        if (!library.rescale) return std::nan("");
         return library.rescale(from, to, static_cast<float>(value));
     }
 
