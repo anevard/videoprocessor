@@ -1,6 +1,6 @@
 #pragma once
-#include "LevelsScopeEngine.h"
-#include "LevelsScopeLog.h"
+#include <LoggedScene.h>
+#include <VpLog.h>
 #include <QDateTime>
 #include <QFileInfo>
 #include <QRegularExpression>
@@ -35,7 +35,7 @@ namespace LevelsScopeData
     struct Point
     {
         double t = 0.0;                // seconds since the epoch, millisecond resolution
-        LevelsScopeLog::Sample s;
+        VpLog::Sample s;
         double inPeak = 0.0;           // measured, else authored (L1)
         double inAverage = 0.0;        // measured PQ average, else authored
         // The profile this sample is placed with: empty for the one chosen
@@ -69,7 +69,7 @@ namespace LevelsScopeData
     };
 
     // A Point from a logged or live sample; `t` in seconds.
-    inline Point PointOf(const LevelsScopeLog::Sample& s, double t)
+    inline Point PointOf(const VpLog::Sample& s, double t)
     {
         Point point;
         point.t = t;
@@ -96,7 +96,7 @@ namespace LevelsScopeData
         // Samples in time order. Returns the section the point went into.
         Section& Add(const Point& point, const QString& build = QString(), const QString& file = QString())
         {
-            const LevelsScopeLog::Sample& s = point.s;
+            const VpLog::Sample& s = point.s;
             Section* current = open_ ? &sections_.back() : nullptr;
             const bool same = current && s.dolbyVision == current->dolbyVision && s.rangeKnown == current->rangeKnown &&
                 s.masteringBlackNits == current->black && s.masteringPeakNits == current->peak &&
@@ -196,7 +196,7 @@ namespace LevelsScopeData
                 library.notes << name + QStringLiteral(": could not be read");
                 continue;
             }
-            LevelsScopeLog::Reader reader;
+            VpLog::Reader reader;
             for (std::string line; std::getline(file, line);)
             {
                 if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -205,7 +205,7 @@ namespace LevelsScopeData
             library.measured = library.measured || reader.Measured();
             const QString build = QString::fromStdString(reader.Build());
             int kept = 0;
-            for (const LevelsScopeLog::Sample& sample : reader.Samples())
+            for (const VpLog::Sample& sample : reader.Samples())
             {
                 const QString stamp = QString::fromStdString(sample.time);
                 QDateTime when = QDateTime::fromString(stamp, QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
@@ -217,7 +217,7 @@ namespace LevelsScopeData
                     .arg(sample.detectedPeakNits).arg(sample.authoredPeakNits);
                 if (merged.emplace(key, entry).second) ++kept;
             }
-            for (const LevelsScopeLog::Marker& marker : reader.Markers())
+            for (const VpLog::Marker& marker : reader.Markers())
             {
                 const QDateTime when = QDateTime::fromString(QString::fromStdString(marker.time),
                     QStringLiteral("yyyy-MM-dd HH:mm:ss"));
@@ -260,8 +260,8 @@ namespace LevelsScopeData
         if (!(point.inPeak > 0.0)) return true;   // a black frame: nothing to place
         const std::vector<double> probes = { Probes[0], Probes[1], Probes[2], point.inPeak,
             point.inAverage > 0.0 ? point.inAverage : point.inPeak };
-        LevelsScopeEngine::Outcome outcome;
-        if (!LevelsScopeEngine::Evaluate(profile, point.s, probes, outcome, error))
+        LoggedScene::Outcome outcome;
+        if (!LoggedScene::Evaluate(profile, point.s, probes, outcome, error))
             return false;
         for (int i = 0; i < 3; ++i) point.outProbe[i] = outcome.profileNits[i];
         point.outPeak = outcome.profileNits[3];
