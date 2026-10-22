@@ -2,6 +2,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <istream>
 #include <map>
 #include <string>
 #include <vector>
@@ -112,142 +113,34 @@ namespace VpLog
     class Reader
     {
     public:
+        // Each line goes to the parser for its type; other lines are skipped.
         void Line(const std::string& line)
         {
             if (build_.empty())
                 FindBuild(line);
             if (line.find("| profiles: automatic selections:") != std::string::npos)
-            {
-                const size_t at = line.find("display/");
-                if (at == std::string::npos) return;
-                size_t end = at + 8;
-                while (end < line.size() && line[end] != ' ' && line[end] != ',') ++end;
-                const std::string profile = line.substr(at + 8, end - at - 8);
-                if (profile != profile_)
-                    markers_.push_back({ line.substr(0, 19), "DTM profile " + profile });
-                profile_ = profile;
-            }
+                Profile(line);
             else if (line.find("| libplacebo resolved render options") != std::string::npos)
-            {
-                const size_t at = line.find(" all=");
-                if (at == std::string::npos) return;
-                std::map<std::string, std::string> options;
-                const std::string all = line.substr(at + 5);
-                for (size_t start = 0; start < all.size();)
-                {
-                    size_t end = all.find(',', start);
-                    if (end == std::string::npos) end = all.size();
-                    const std::string item = all.substr(start, end - start);
-                    const size_t equals = item.find('=');
-                    if (equals != std::string::npos)
-                        options[item.substr(0, equals)] = item.substr(equals + 1);
-                    start = end + 1;
-                }
-                if (!options_.empty() && options != options_)
-                {
-                    std::vector<std::string> changes;
-                    for (const auto& [key, value] : options)
-                    {
-                        const auto old = options_.find(key);
-                        if (old == options_.end()) changes.push_back(key + " " + Short(value));
-                        else if (old->second != value) changes.push_back(key + " " + Short(old->second) + " → " + Short(value));
-                    }
-                    for (const auto& [key, value] : options_)
-                        if (!options.count(key)) changes.push_back(key + " off");
-                    markers_.push_back({ line.substr(0, 19), Join(changes) });
-                }
-                options_ = options;
-            }
+                RenderOptions(line);
             else if (line.find("| libplacebo settings:") != std::string::npos ||
                 line.find("| libplacebo profile settings applied live:") != std::string::npos)
-            {
-                const auto values = Values(line);
-                // The live line's target= is the gamut (P3-D65); its nits are luminance=.
-                const bool live = line.find("applied live:") != std::string::npos;
-                const auto target = values.find(live ? "luminance" : "target");
-                const auto black = values.find("black");
-                if (target == values.end() || black == values.end()) return;
-                const double nits = std::strtod(target->second.c_str(), nullptr);
-                const double blackNits = std::strtod(black->second.c_str(), nullptr);
-                if (targetKnown_ && (nits != targetNits_ || blackNits != targetBlack_))
-                    markers_.push_back({ line.substr(0, 19), "target " + Short(target->second) + " nits, black " + Short(black->second) });
-                targetKnown_ = true;
-                targetNits_ = nits;
-                targetBlack_ = blackNits;
-            }
+                Target(line);
             else if (line.find("| Dolby Vision luminance:") != std::string::npos)
-            {
-                const auto values = Values(line);
-                dmRange_ = true;
-                dmBlack_ = Number(values, "source_min_nits");
-                dmPeak_ = Number(values, "source_max_nits");
-                Sample sample;
-                sample.time = line.substr(0, 19);
-                sample.dolbyVision = true;
-                sample.authored = values.count("scene_present") && values.at("scene_present") == "1";
-                sample.authoredPeakNits = sample.authored ? Number(values, "scene_peak_nits") : 0.0;
-                sample.authoredAverageNits = sample.authored ? Number(values, "scene_average_nits") : 0.0;
-                ApplyRange(sample);
-                dvOnly_.push_back(sample);
-            }
+                DolbyVisionLuminance(line);
             else if (line.find("| LLDV state trace:") != std::string::npos &&
                 line.find("raw_eotf=PQ") != std::string::npos)
-            {
-                const auto values = Values(line);
-                const auto found = values.find("raw_values");
-                if (found == values.end()) return;
-                std::vector<double> raw;
-                for (size_t start = 0; start <= found->second.size();)
-                {
-                    const size_t slash = found->second.find('/', start);
-                    const size_t end = slash == std::string::npos ? found->second.size() : slash;
-                    raw.push_back(std::strtod(found->second.substr(start, end - start).c_str(), nullptr));
-                    start = end + 1;
-                }
-                if (raw.size() == 4 && raw[0] != -1.0)
-                {
-                    staticKnown_ = true;
-                    maxCll_ = raw[0]; maxFall_ = raw[1]; staticBlack_ = raw[2]; staticPeak_ = raw[3];
-                }
-            }
+                StaticMetadata(line);
             else if (line.find("| HDR luminance:") != std::string::npos)
+                HdrLuminance(line);
+        }
+
+        // Every line of a log file, in order; a Windows line end is dropped.
+        void Read(std::istream& in)
+        {
+            for (std::string line; std::getline(in, line);)
             {
-                const auto values = Values(line);
-                Sample sample;
-                sample.time = line.substr(0, 19);
-                // time=YYYY-MM-DDTHH:MM:SS.mmm, local like the prefix.
-                const auto stamp = values.find("time");
-                if (stamp != values.end() && stamp->second.size() == 23 && stamp->second[10] == 'T')
-                    sample.time = stamp->second.substr(0, 10) + ' ' + stamp->second.substr(11);
-                sample.dolbyVision = values.count("dv") && values.at("dv") == "1";
-                sample.measured = values.count("detection") && values.at("detection") == "valid";
-                if (sample.measured)
-                {
-                    sample.detectedPeakNits = Number(values, "detected_peak_nits");
-                    sample.detectedPqAverageNits = Number(values, "detected_avg_pq_nits");
-                    sample.detectedLinearAverageNits = Number(values, "detected_avg_linear_nits");
-                    sample.detectedSceneMaxNits = Number(values, "detected_scene_max_nits");
-                }
-                const auto scene = values.find("scene");
-                sample.authored = scene != values.end() && scene->second != "none";
-                if (sample.authored)
-                {
-                    sample.authoredPeakNits = Number(values, "scene_peak_nits");
-                    sample.authoredAverageNits = Number(values, "scene_avg_nits");
-                    // Only L1 carries a minimum; elsewhere VP logs 0 for "none".
-                    sample.authoredMinKnown = sample.dolbyVision && scene->second == "L1" &&
-                        values.count("scene_min_nits");
-                    if (sample.authoredMinKnown)
-                        sample.authoredMinNits = Number(values, "scene_min_nits");
-                }
-                // reason=interval, L1 or interval,L1.
-                const auto reason = values.find("reason");
-                sample.l1Change = reason != values.end() && reason->second.find("L1") != std::string::npos;
-                const auto frame = values.find("source_frame");
-                if (frame != values.end())
-                    sample.sourceFrame = std::strtoll(frame->second.c_str(), nullptr, 10);
-                ApplyRange(sample);
-                measuredLog_.push_back(sample);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                Line(line);
             }
         }
 
@@ -260,6 +153,150 @@ namespace VpLog
         const std::vector<Marker>& Markers() const { return markers_; }
 
     private:
+        // "profiles: automatic selections:": a marker when the DTM profile changes.
+        void Profile(const std::string& line)
+        {
+            const size_t at = line.find("display/");
+            if (at == std::string::npos) return;
+            size_t end = at + 8;
+            while (end < line.size() && line[end] != ' ' && line[end] != ',') ++end;
+            const std::string profile = line.substr(at + 8, end - at - 8);
+            if (profile != profile_)
+                markers_.push_back({ line.substr(0, 19), "DTM profile " + profile });
+            profile_ = profile;
+        }
+
+        // "libplacebo resolved render options": a marker naming each option that changed.
+        void RenderOptions(const std::string& line)
+        {
+            const size_t at = line.find(" all=");
+            if (at == std::string::npos) return;
+            std::map<std::string, std::string> options;
+            const std::string all = line.substr(at + 5);
+            for (size_t start = 0; start < all.size();)
+            {
+                size_t end = all.find(',', start);
+                if (end == std::string::npos) end = all.size();
+                const std::string item = all.substr(start, end - start);
+                const size_t equals = item.find('=');
+                if (equals != std::string::npos)
+                    options[item.substr(0, equals)] = item.substr(equals + 1);
+                start = end + 1;
+            }
+            if (!options_.empty() && options != options_)
+            {
+                std::vector<std::string> changes;
+                for (const auto& [key, value] : options)
+                {
+                    const auto old = options_.find(key);
+                    if (old == options_.end()) changes.push_back(key + " " + Short(value));
+                    else if (old->second != value) changes.push_back(key + " " + Short(old->second) + " → " + Short(value));
+                }
+                for (const auto& [key, value] : options_)
+                    if (!options.count(key)) changes.push_back(key + " off");
+                markers_.push_back({ line.substr(0, 19), Join(changes) });
+            }
+            options_ = options;
+        }
+
+        // "libplacebo settings:" or "... applied live:": a marker when the target changes.
+        void Target(const std::string& line)
+        {
+            const auto values = Values(line);
+            // The live line's target= is the gamut (P3-D65); its nits are luminance=.
+            const bool live = line.find("applied live:") != std::string::npos;
+            const auto target = values.find(live ? "luminance" : "target");
+            const auto black = values.find("black");
+            if (target == values.end() || black == values.end()) return;
+            const double nits = std::strtod(target->second.c_str(), nullptr);
+            const double blackNits = std::strtod(black->second.c_str(), nullptr);
+            if (targetKnown_ && (nits != targetNits_ || blackNits != targetBlack_))
+                markers_.push_back({ line.substr(0, 19), "target " + Short(target->second) + " nits, black " + Short(black->second) });
+            targetKnown_ = true;
+            targetNits_ = nits;
+            targetBlack_ = blackNits;
+        }
+
+        // "Dolby Vision luminance:": the DM source range, and a sample of its own
+        // for a log without "HDR luminance:" lines.
+        void DolbyVisionLuminance(const std::string& line)
+        {
+            const auto values = Values(line);
+            dmRange_ = true;
+            dmBlack_ = Number(values, "source_min_nits");
+            dmPeak_ = Number(values, "source_max_nits");
+            Sample sample;
+            sample.time = line.substr(0, 19);
+            sample.dolbyVision = true;
+            sample.authored = values.count("scene_present") && values.at("scene_present") == "1";
+            sample.authoredPeakNits = sample.authored ? Number(values, "scene_peak_nits") : 0.0;
+            sample.authoredAverageNits = sample.authored ? Number(values, "scene_average_nits") : 0.0;
+            ApplyRange(sample);
+            dvOnly_.push_back(sample);
+        }
+
+        // "LLDV state trace:" with raw_eotf=PQ: the HDR10 static metadata.
+        void StaticMetadata(const std::string& line)
+        {
+            const auto values = Values(line);
+            const auto found = values.find("raw_values");
+            if (found == values.end()) return;
+            std::vector<double> raw;
+            for (size_t start = 0; start <= found->second.size();)
+            {
+                const size_t slash = found->second.find('/', start);
+                const size_t end = slash == std::string::npos ? found->second.size() : slash;
+                raw.push_back(std::strtod(found->second.substr(start, end - start).c_str(), nullptr));
+                start = end + 1;
+            }
+            if (raw.size() == 4 && raw[0] != -1.0)
+            {
+                staticKnown_ = true;
+                maxCll_ = raw[0]; maxFall_ = raw[1]; staticBlack_ = raw[2]; staticPeak_ = raw[3];
+            }
+        }
+
+        // "HDR luminance:": one sample, detection and scene values.
+        void HdrLuminance(const std::string& line)
+        {
+            const auto values = Values(line);
+            Sample sample;
+            sample.time = line.substr(0, 19);
+            // time=YYYY-MM-DDTHH:MM:SS.mmm, local like the prefix.
+            const auto stamp = values.find("time");
+            if (stamp != values.end() && stamp->second.size() == 23 && stamp->second[10] == 'T')
+                sample.time = stamp->second.substr(0, 10) + ' ' + stamp->second.substr(11);
+            sample.dolbyVision = values.count("dv") && values.at("dv") == "1";
+            sample.measured = values.count("detection") && values.at("detection") == "valid";
+            if (sample.measured)
+            {
+                sample.detectedPeakNits = Number(values, "detected_peak_nits");
+                sample.detectedPqAverageNits = Number(values, "detected_avg_pq_nits");
+                sample.detectedLinearAverageNits = Number(values, "detected_avg_linear_nits");
+                sample.detectedSceneMaxNits = Number(values, "detected_scene_max_nits");
+            }
+            const auto scene = values.find("scene");
+            sample.authored = scene != values.end() && scene->second != "none";
+            if (sample.authored)
+            {
+                sample.authoredPeakNits = Number(values, "scene_peak_nits");
+                sample.authoredAverageNits = Number(values, "scene_avg_nits");
+                // Only L1 carries a minimum; elsewhere VP logs 0 for "none".
+                sample.authoredMinKnown = sample.dolbyVision && scene->second == "L1" &&
+                    values.count("scene_min_nits");
+                if (sample.authoredMinKnown)
+                    sample.authoredMinNits = Number(values, "scene_min_nits");
+            }
+            // reason=interval, L1 or interval,L1.
+            const auto reason = values.find("reason");
+            sample.l1Change = reason != values.end() && reason->second.find("L1") != std::string::npos;
+            const auto frame = values.find("source_frame");
+            if (frame != values.end())
+                sample.sourceFrame = std::strtoll(frame->second.c_str(), nullptr, 10);
+            ApplyRange(sample);
+            measuredLog_.push_back(sample);
+        }
+
         void ApplyRange(Sample& sample) const
         {
             if (sample.dolbyVision && dmRange_)
