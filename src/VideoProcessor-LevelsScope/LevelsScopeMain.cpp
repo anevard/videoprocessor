@@ -1,8 +1,8 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
-#include "LevelsScopeEngine.h"
-#include "LevelsScopeLog.h"
 #include "LevelsScopePanel.h"
+#include <LoggedScene.h>
+#include <VpLog.h>
 #include <VpTheme.h>
 #include <QAbstractButton>
 #include <QApplication>
@@ -130,21 +130,21 @@ int RunCsv(int argc, char** argv)
             std::fclose(out);
             return 1;
         }
-        LevelsScopeLog::Reader reader;
+        VpLog::Reader reader;
         for (std::string line; std::getline(file, line);)
         {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             reader.Line(line);
         }
         const std::string name = path.substr(path.find_last_of("\\/") + 1);
-        for (const LevelsScopeLog::Sample& sample : reader.Samples())
+        for (const VpLog::Sample& sample : reader.Samples())
         {
             std::vector<double> probes(std::begin(FixedProbes), std::end(FixedProbes));
             probes.push_back(sample.detectedPeakNits);
             probes.push_back(sample.detectedPqAverageNits);
             probes.push_back(sample.masteringBlackNits);
-            LevelsScopeEngine::Outcome outcome;
-            if (!LevelsScopeEngine::Evaluate(request, sample, probes, outcome, error))
+            LoggedScene::Outcome outcome;
+            if (!LoggedScene::Evaluate(request, sample, probes, outcome, error))
             {
                 std::cerr << "tone engine: " << Narrow(error) << "\n";
                 std::fclose(out);

@@ -28,7 +28,7 @@
 //   "profiles: automatic selections:"           the DTM profile (display/<name>);
 //   "libplacebo resolved render options": all=  every non-default render option;
 //   "libplacebo settings:" / "... applied live:" the target nits and black.
-namespace LevelsScopeLog
+namespace VpLog
 {
     struct Marker
     {
