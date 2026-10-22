@@ -1,4 +1,5 @@
 #pragma once
+#include "ChartStyle.h"
 #include "ToneCurveProvider.h"
 #include <QMouseEvent>
 #include <QPainter>
@@ -30,7 +31,7 @@ public:
         double (*pqToNits)(double) = nullptr;
         bool showDefault = true; // libplacebo's default curve, switched by its chip
         QString profileName;     // the edited profile, named in the hover
-        QColor profileColor = QColor(QStringLiteral("#49b6ff")); // its chip's colour
+        QColor profileColor = ChartStyle::Chips().front(); // its chip's colour
         // Other profiles drawn for comparison; the chips are the legend.
         struct Compare { QString name; QColor color; std::vector<double> pq; double targetPq = 0.0; };
         std::vector<Compare> compares;
@@ -47,13 +48,6 @@ public:
     void setData(Data chart) { data_ = std::move(chart); valid_ = true; update(); }
     void clear() { valid_ = false; update(); }
 
-    static QString Nits(double nits)
-    {
-        if (!std::isfinite(nits)) return QStringLiteral("-");
-        const int decimals = nits < 1 ? 3 : nits < 10 ? 2 : nits < 100 ? 1 : 0;
-        return QString::number(nits, 'f', decimals);
-    }
-
 protected:
     // No taller than two-thirds of its width: a tall window leaves space below
     // the chart rather than stretching it.
@@ -69,7 +63,7 @@ protected:
     void paintEvent(QPaintEvent*) override
     {
         QPainter painter(this);
-        painter.fillRect(rect(), QColor(QStringLiteral("#101b27"))); // his card colour
+        painter.fillRect(rect(), ChartStyle::Card());
         painter.setRenderHint(QPainter::Antialiasing);
         // Not "small": the Windows headers define it as a macro.
         QFont chartFont = font();
@@ -125,8 +119,7 @@ protected:
         };
 
         // Grid and labels; a label too close to the last one drawn is skipped.
-        const QColor grid(QStringLiteral("#1b2a39")), axis(QStringLiteral("#2d475f"));
-        const QColor ink(QStringLiteral("#9fb2c4"));
+        const QColor grid = ChartStyle::Grid(), axis = ChartStyle::Axis(), ink = ChartStyle::Ink();
         double lastLabel = -1e9;
         for (const auto& [x, label] : data_.xTicks)
         {
@@ -159,7 +152,7 @@ protected:
         // edge, never flattened onto it.
         painter.save();
         painter.setClipRect(plot);
-        const QColor reference(QStringLiteral("#c9d6e2"));
+        const QColor reference = ChartStyle::Reference();
         if (!tone)
         {
             QColor band = reference;
@@ -179,7 +172,7 @@ protected:
         referenceLine.setAlpha(150);
         const QPen referencePen(referenceLine, 1.5);
         const QPen profilePen(data_.profileColor, 2.8); // bold, as its chip
-        QPen defaultPen(QColor(QStringLiteral("#e8a93b")), 1.6, Qt::DashLine);
+        QPen defaultPen(ChartStyle::Default(), 1.6, Qt::DashLine);
         const auto plotted = [&](double out, size_t i) { return tone ? out : Delta(out, data_.sourcePq[i]); };
         if (data_.showDefault)
             line([&](size_t i) { return plotted(data_.result.defaultPq[i], i); }, defaultPen);
@@ -202,7 +195,7 @@ protected:
         if (tone && data_.pqToNits)
         {
             const QString peak = (data_.sceneAverage ? QStringLiteral("scene peak ") :
-                QStringLiteral("mastering peak ")) + Nits(data_.pqToNits(data_.result.scenePeakPq));
+                QStringLiteral("mastering peak ")) + ChartStyle::Nits(data_.pqToNits(data_.result.scenePeakPq));
             painter.setPen(ink);
             painter.drawText(QPointF(peakX - 4 - metrics.horizontalAdvance(peak), plot.top() + 12), peak);
         }
@@ -236,14 +229,14 @@ private:
             if (std::abs(data_.sourcePq[i] - x) < std::abs(data_.sourcePq[index] - x)) index = i;
         const double source = data_.sourcePq[index];
         const double profile = data_.result.profilePq[index], standard = data_.result.defaultPq[index];
-        const auto nits = [&](double pq) { return Nits(data_.pqToNits(pq)); };
+        const auto nits = [&](double pq) { return ChartStyle::Nits(data_.pqToNits(pq)); };
         const auto delta = [&](double pq) {
             const double value = Delta(pq, source);
             return (value > 0 ? QStringLiteral("+") : QString()) + QString::number(value, 'f', 1);
         };
         // Every drawn line: the profile, the default if shown, then the compares.
         std::vector<std::tuple<QString, double, QColor>> shown{ { ProfileLabel(), profile, data_.profileColor } };
-        if (data_.showDefault) shown.emplace_back(QStringLiteral("Default"), standard, QColor(QStringLiteral("#e8a93b")));
+        if (data_.showDefault) shown.emplace_back(QStringLiteral("Default"), standard, ChartStyle::Default());
         for (const auto& compare : data_.compares)
             if (index < compare.pq.size()) shown.emplace_back(compare.name, compare.pq[index], compare.color);
         QStringList lines;
@@ -253,8 +246,7 @@ private:
                 QStringLiteral("%1: ΔE %2 (%3 nits)").arg(name, delta(value), nits(value)));
         if (kind_ == Kind::Tone) lines << QStringLiteral("PQ: %1 nits").arg(nits(source));
 
-        const QColor ink(QStringLiteral("#e5eef6"));
-        painter.setPen(QPen(QColor(QStringLiteral("#6f8597")), 1.0));
+        painter.setPen(QPen(ChartStyle::HoverLine(), 1.0));
         painter.drawLine(QPointF(sx(source), plot.top()), QPointF(sx(source), plot.bottom()));
         for (const auto& [name, value, color] : shown)
         {
@@ -263,18 +255,10 @@ private:
             painter.setBrush(color);
             painter.drawEllipse(QPointF(sx(source), std::clamp(sy(y), plot.top(), plot.bottom())), 3.5, 3.5);
         }
-        int width = 0;
-        for (const QString& text : lines) width = std::max(width, metrics.horizontalAdvance(text));
-        const double boxWidth = width + 16.0, boxHeight = lines.size() * 15.0 + 8.0;
+        const QSizeF size = ChartStyle::HoverBoxSize(metrics, lines);
         double left = sx(source) + 12;
-        if (left + boxWidth > plot.right()) left = sx(source) - 12 - boxWidth;
-        const QRectF box(left, plot.top() + 20, boxWidth, boxHeight);
-        painter.setPen(QPen(QColor(QStringLiteral("#2d475f")), 1.0));
-        painter.setBrush(QColor(QStringLiteral("#0f1a26")));
-        painter.drawRoundedRect(box, 4, 4);
-        painter.setPen(ink);
-        for (int i = 0; i < lines.size(); ++i)
-            painter.drawText(QPointF(box.left() + 8, box.top() + 16 + i * 15.0), lines[i]);
+        if (left + size.width() > plot.right()) left = sx(source) - 12 - size.width();
+        ChartStyle::DrawHoverBox(painter, QRectF(QPointF(left, plot.top() + 20), size), lines);
     }
 
     Kind kind_;

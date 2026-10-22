@@ -1,4 +1,5 @@
 #pragma once
+#include "ChartStyle.h"
 #include "ColourChart.h"
 #include "ToneCurveChart.h"
 #include "ToneCurveProvider.h"
@@ -86,12 +87,12 @@ namespace ChartData
         chart.sceneAverage = request.sceneAverageKnown;
         chart.pqToNits = functions.pqToNits;
         for (double nits : { 0.1, 1.0, 10.0, 100.0, 400.0, 1000.0, 4000.0, 10000.0 })
-            chart.xTicks.emplace_back(functions.nitsToPq(nits), ToneCurveChart::Nits(nits));
+            chart.xTicks.emplace_back(functions.nitsToPq(nits), ChartStyle::Nits(nits));
         for (double nits : { 0.1, 1.0, 10.0, 25.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0,
             400.0, 600.0, 1000.0, 2000.0, 4000.0 })
             if (nits < request.targetNits * 0.95)
-                chart.yTicks.emplace_back(functions.nitsToPq(nits), ToneCurveChart::Nits(nits));
-        chart.yTicks.emplace_back(chart.targetPq, ToneCurveChart::Nits(request.targetNits));
+                chart.yTicks.emplace_back(functions.nitsToPq(nits), ChartStyle::Nits(nits));
+        chart.yTicks.emplace_back(chart.targetPq, ChartStyle::Nits(request.targetNits));
         return true;
     }
 
@@ -164,7 +165,7 @@ namespace ChartData
         // The edited profile first: the map links its points to the rings.
         if (!add(editedName, editedColor, true, false, request, false)) return false;
         if (showDefault)
-            add(QStringLiteral("Default"), QColor(QStringLiteral("#e8a93b")), false, true, request, true);
+            add(QStringLiteral("Default"), ChartStyle::Default(), false, true, request, true);
         for (const auto& [name, color, other] : others)
             add(name, color, false, false, other, false);
         map.sweepNits = sweep.sweepNits;
