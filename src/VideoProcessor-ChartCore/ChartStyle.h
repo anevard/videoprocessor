@@ -16,9 +16,21 @@
 // theme changes it, change it here.
 namespace ChartStyle
 {
+    // From 0.01 nit up, fixed decimals (5.55, 0.250). Below it, three
+    // significant digits written out in full, never as an exponent, so a DV
+    // mastering black of 0.0001 or an L1 minimum of 0.000226 reads as itself
+    // rather than 0.000.
     inline QString Nits(double nits)
     {
         if (!std::isfinite(nits)) return QStringLiteral("-");
+        if (nits == 0.0) return QStringLiteral("0");
+        if (nits > 0.0 && nits < 0.01)
+        {
+            QString text = QString::number(nits, 'f', 2 - static_cast<int>(std::floor(std::log10(nits))));
+            while (text.endsWith(u'0')) text.chop(1);
+            if (text.endsWith(u'.')) text.chop(1);
+            return text;
+        }
         const int decimals = nits < 1 ? 3 : nits < 10 ? 2 : nits < 100 ? 1 : 0;
         return QString::number(nits, 'f', decimals);
     }
