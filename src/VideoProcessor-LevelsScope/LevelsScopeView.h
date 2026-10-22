@@ -1,4 +1,5 @@
 #pragma once
+#include "ChartStyle.h"
 #include "LevelsScopeData.h"
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -350,11 +351,9 @@ namespace LevelsScopeView
         // One pixel column of one quantity.
         struct Column { double x = 0, lo = 0, hi = 0, sum = 0, last = 0; int n = 0; double t0 = 0, t1 = 0; };
 
-        static QColor Grid() { return QColor(QStringLiteral("#2d475f")); }
         static QColor Muted() { return QColor(QStringLiteral("#93a8bb")); }
         static QColor Fg() { return QColor(QStringLiteral("#e8eaec")); }
         static QColor Fg2() { return QColor(QStringLiteral("#b4b9bf")); }
-        static QColor Card() { return QColor(QStringLiteral("#101b27")); }
         static QColor MarkColor() { return QColor(QStringLiteral("#c8e66a")); }
         static QDateTime When(double seconds) { return QDateTime::fromMSecsSinceEpoch(std::llround(seconds * 1000.0)); }
 
@@ -540,7 +539,7 @@ namespace LevelsScopeView
 
         void drawLayer(QPainter& p)
         {
-            p.fillRect(rect(), Card());
+            p.fillRect(rect(), ChartStyle::Card());
             p.setRenderHint(QPainter::Antialiasing);
             QFont font(QStringLiteral("Consolas"));
             font.setPixelSize(12);
@@ -565,7 +564,7 @@ namespace LevelsScopeView
             double lastLabelY = 1e9;
             for (double n : Ticks(loNits, hiNits))
             {
-                p.setPen(QPen(Grid(), 1.0));
+                p.setPen(QPen(ChartStyle::Axis(), 1.0));
                 p.drawLine(QPointF(PadL, Y(n)), QPointF(xEnd, Y(n)));
                 if (lastLabelY - Y(n) < 15) continue;
                 lastLabelY = Y(n);
@@ -708,7 +707,7 @@ namespace LevelsScopeView
             };
             // The average lines, outlined in the card colour so they read over the bands.
             const auto avgLine = [&](const std::vector<Column>& columns, const QColor& color) {
-                Scope(p, columns, Y, Card(), 4.0, false, false, false);
+                Scope(p, columns, Y, ChartStyle::Card(), 4.0, false, false, false);
                 Scope(p, columns, Y, color, 2.0, false, false, false);
             };
             for (const Seg& g : segs_)
