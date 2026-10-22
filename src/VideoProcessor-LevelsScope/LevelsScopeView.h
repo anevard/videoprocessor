@@ -121,16 +121,6 @@ namespace LevelsScopeView
         return toPq ? toPq((std::max)(nits, 0.0)) : std::nan("");
     }
 
-    // Whole from 100, one decimal from 1, three from 0.01, else four.
-    inline QString Nits(double v)
-    {
-        if (!(v >= 0.0)) return QStringLiteral("-");
-        if (v == 0.0) return QStringLiteral("0");
-        // Under 0.01 nit, three significant digits: an L1 minimum of 0.000226.
-        if (v > 0.0 && v < 0.01) return QString::number(v, 'g', 3);
-        return QString::number(v, 'f', v >= 100 ? 0 : v >= 1 ? 1 : v >= 0.01 ? 3 : 4);
-    }
-
     // The colour a trace is drawn in, opaque, for the readout's labels.
     inline QString TraceColor(const std::string& key)
     {
@@ -849,8 +839,8 @@ namespace LevelsScopeView
                 // The master in the input band's colour, where it landed in the output band's.
                 const bool measured = s.measured && s.detectedPeakNits > 0;
                 const auto inOut = [](double in, double out) {
-                    return Tinted("inband", QStringLiteral("<b>%1</b>").arg(Nits(in))) + QStringLiteral(" → ") +
-                        Tinted("outband", QStringLiteral("<b>%1</b>").arg(Nits(out)));
+                    return Tinted("inband", QStringLiteral("<b>%1</b>").arg(ChartStyle::Nits(in))) + QStringLiteral(" → ") +
+                        Tinted("outband", QStringLiteral("<b>%1</b>").arg(ChartStyle::Nits(out)));
                 };
                 parts << QStringLiteral("%1 %2").arg(measured ? QStringLiteral("peak") : QStringLiteral("L1 peak"),
                     inOut(pt->inPeak, pt->outPeak));
@@ -859,13 +849,13 @@ namespace LevelsScopeView
                         inOut(pt->inAverage, pt->outAverage));
                 for (int i = 0; i < 3; ++i)
                     parts << Tinted(InOutTraces()[2 + i].key,
-                        QStringLiteral("<b>%1 → %2</b>").arg(Nits(LevelsScopeData::Probes[i]), Nits(pt->outProbe[i])));
-                parts << QStringLiteral("knee <b>%1</b>, exposure <b>%2</b>").arg(Nits(pt->kneeNits), QString::number(pt->exposure, 'f', 3));
+                        QStringLiteral("<b>%1 → %2</b>").arg(ChartStyle::Nits(LevelsScopeData::Probes[i]), ChartStyle::Nits(pt->outProbe[i])));
+                parts << QStringLiteral("knee <b>%1</b>, exposure <b>%2</b>").arg(ChartStyle::Nits(pt->kneeNits), QString::number(pt->exposure, 'f', 3));
                 return parts.join(QStringLiteral(" &nbsp; "));
             }
             // Each value in its trace's colour.
             const auto item = [](const std::string& key, const QString& label, double v) {
-                return Tinted(key, QStringLiteral("%1 <b>%2</b>").arg(label, Nits(v)));
+                return Tinted(key, QStringLiteral("%1 <b>%2</b>").arg(label, ChartStyle::Nits(v)));
             };
             parts << (s.measured ? item("detpk", QStringLiteral("peak"), s.detectedPeakNits)
                 : Tinted("detpk", QStringLiteral("peak <b>-</b>")));
@@ -882,8 +872,8 @@ namespace LevelsScopeView
                 parts << item("detlin", QStringLiteral("avg lin"), s.detectedLinearAverageNits)
                     << item("detpq", QStringLiteral("avg PQ"), s.detectedPqAverageNits);
             if (s.rangeKnown)
-                parts << QStringLiteral("mastering %1 – %2").arg(Tinted("mblack", QStringLiteral("<b>%1</b>").arg(Nits(s.masteringBlackNits))),
-                    Tinted("mpeak", QStringLiteral("<b>%1</b>").arg(Nits(s.masteringPeakNits))));
+                parts << QStringLiteral("mastering %1 – %2").arg(Tinted("mblack", QStringLiteral("<b>%1</b>").arg(ChartStyle::Nits(s.masteringBlackNits))),
+                    Tinted("mpeak", QStringLiteral("<b>%1</b>").arg(ChartStyle::Nits(s.masteringPeakNits))));
             if (s.rangeKnown && !s.dolbyVision)
                 parts << item("maxcll", QStringLiteral("MaxCLL"), s.maxCllNits)
                     << item("maxfall", QStringLiteral("MaxFALL"), s.maxFallNits);

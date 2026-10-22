@@ -397,7 +397,7 @@ namespace LevelsScopePanel
                 item->setText(1, QDateTime::fromMSecsSinceEpoch(std::llround(s.a * 1000.0)).toString(QStringLiteral("d MMM HH:mm")));
                 item->setText(2, QStringLiteral("%1 min").arg(std::lround((s.b - s.a) / 60.0)));
                 item->setText(3, s.rangeKnown ? QStringLiteral("%1%2 – %3").arg(s.dolbyVision ? QStringLiteral("DV ") : QString(),
-                    LevelsScopeView::Nits(s.black), LevelsScopeView::Nits(s.peak)) : QStringLiteral("not declared"));
+                    ChartStyle::Nits(s.black), ChartStyle::Nits(s.peak)) : QStringLiteral("not declared"));
                 item->setText(4, s.build.isEmpty() ? QStringLiteral("not identified") : s.build);
                 item->setToolTip(0, s.files);
             }
