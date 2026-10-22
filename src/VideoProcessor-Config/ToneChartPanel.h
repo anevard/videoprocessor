@@ -4,6 +4,7 @@
 #include "../VideoProcessor-ChartCore/ColourChart.h"
 #include "../VideoProcessor-ChartCore/ToneCurveChart.h"
 #include "../VideoProcessor-ChartCore/ToneCurveProvider.h"
+#include "../VideoProcessor-ChartCore/ToneCurveRuntime.h"
 #include "ToneProfileFile.h"
 #include <QEvent>
 #include <QFileDialog>
@@ -522,7 +523,8 @@ private:
         }
         if (!request_.betaRenderer)
         {
-            showUnavailable(QStringLiteral("The charts show VP Renderer (Beta) only. Select it under Renderer to see them."));
+            showUnavailable(QStringLiteral("The charts show %1 only. Select it under Renderer to see them.")
+                .arg(QString::fromWCharArray(ToneCurveRuntime::RendererName())));
             return;
         }
         ToneCurveProvider::Request request = request_;
