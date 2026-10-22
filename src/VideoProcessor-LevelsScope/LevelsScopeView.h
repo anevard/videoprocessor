@@ -3,6 +3,7 @@
 #include "LevelsScopeData.h"
 #include "LevelsScopeTraces.h"
 #include <PqAxis.h>
+#include <TimeSeries.h>
 #include <ToneCurveProvider.h>
 #include <ToneCurveRuntime.h>
 #include <QDateTime>
@@ -237,93 +238,15 @@ namespace LevelsScopeView
         // The axis reaches PQ code 0 (0 nit), where Dolby Vision declares true black.
         static constexpr double AxisLo = 0.0, AxisHi = 4000, MinBrightnessSpan = 0.02;
         struct Seg { const LevelsScopeData::Section* s; double off, len; };
-        // One pixel column of one quantity.
-        struct Column { double x = 0, lo = 0, hi = 0, sum = 0, last = 0; int n = 0; double t0 = 0, t1 = 0; };
+        // Samples further apart than this are not joined: a gap in the log.
+        static constexpr double JoinGap = 30;
+        using Column = TimeSeries::Column;
 
         static QColor Muted() { return QColor(QStringLiteral("#93a8bb")); }
         static QColor Fg() { return QColor(QStringLiteral("#e8eaec")); }
         static QColor Fg2() { return QColor(QStringLiteral("#b4b9bf")); }
         static QColor MarkColor() { return QColor(QStringLiteral("#c8e66a")); }
         static QDateTime When(double seconds) { return QDateTime::fromMSecsSinceEpoch(std::llround(seconds * 1000.0)); }
-
-        // A dot drawn once per colour and size and then stamped: anti-aliased
-        // circles drawn one by one cost far more than the rest of the chart.
-        const QPixmap& Dot(const QColor& color, double r)
-        {
-            const qreal dpr = devicePixelRatioF();
-            const QString key = QStringLiteral("%1/%2/%3").arg(color.rgba()).arg(r).arg(dpr);
-            auto found = dots_.find(key);
-            if (found != dots_.end()) return found->second;
-            const int side = static_cast<int>(std::ceil(2 * r + 2));
-            QPixmap dot(QSize(side, side) * dpr);
-            dot.setDevicePixelRatio(dpr);
-            dot.fill(Qt::transparent);
-            QPainter p(&dot);
-            p.setRenderHint(QPainter::Antialiasing);
-            p.setPen(Qt::NoPen);
-            p.setBrush(color);
-            p.drawEllipse(QPointF(side / 2.0, side / 2.0), r, r);
-            return dots_.emplace(key, dot).first->second;
-        }
-        void Stamp(QPainter& p, const QPixmap& dot, double x, double y)
-        {
-            const double half = dot.width() / dot.devicePixelRatio() / 2.0;
-            p.drawPixmap(QPointF(x - half, y - half), dot);
-        }
-
-        // A trace drawn as a hardware scope draws it: no anti-aliasing, each
-        // pixel column filled from its lowest to its highest value (`spread`)
-        // and joined to the column before. Anti-aliased strokes cost seconds
-        // a frame on a large high-DPI window; rectangle fills cost almost
-        // nothing. Dashes are gaps in the column pattern; columns further than
-        // a pixel apart (zoomed in) are joined by a plain line.
-        template<class FY>
-        void Scope(QPainter& p, const std::vector<Column>& columns, const FY& Y, const QColor& color,
-            double thick, bool step, bool dashed, bool spread)
-        {
-            p.save();
-            p.setRenderHint(QPainter::Antialiasing, false);
-            QPen pen(color, thick);
-            pen.setCapStyle(Qt::FlatCap);
-            if (dashed) pen.setDashPattern({ 7 / thick, 4 / thick });
-            p.setPen(pen);
-            const double t = (std::max)(1.0, std::round(thick));
-            const Column* prev = nullptr;
-            double prevY = 0.0;
-            for (const Column& col : columns)
-            {
-                const double y = Y(step ? col.last : col.sum / col.n);
-                const bool joined = prev && col.t0 - prev->t1 <= 30;
-                const bool adjacent = joined && col.x - prev->x <= 1.5;
-                // Dense columns dash by position: 7 pixels on, 4 off.
-                if (!dashed || !adjacent || std::fmod(col.x, 11.0) < 7.0)
-                {
-                    double top = y, bottom = y;
-                    if (spread)
-                    {
-                        top = (std::min)(top, Y(col.hi));
-                        bottom = (std::max)(bottom, Y(col.lo));
-                    }
-                    if (adjacent)
-                    {
-                        top = (std::min)(top, prevY);
-                        bottom = (std::max)(bottom, prevY);
-                    }
-                    else if (joined && step)
-                    {
-                        p.fillRect(QRectF(prev->x, prevY - t / 2, col.x - prev->x, t), color);
-                        top = (std::min)(top, prevY);
-                        bottom = (std::max)(bottom, prevY);
-                    }
-                    else if (joined)
-                        p.drawLine(QPointF(prev->x, prevY), QPointF(col.x, y));
-                    p.fillRect(QRectF(col.x - t / 2, top - t / 2, t, bottom - top + t), color);
-                }
-                prev = &col;
-                prevY = y;
-            }
-            p.restore();
-        }
 
         double plotHeight() const { return (std::max)(1.0, height() - PadT - PadB); }
         void clampBrightness()
@@ -347,14 +270,7 @@ namespace LevelsScopeView
         }
         static const LevelsScopeData::Point* nearest(const Seg& g, double v)
         {
-            const auto& pts = g.s->points;
-            if (pts.empty()) return nullptr;
-            const double t = g.s->a + (v - g.off);
-            auto it = std::lower_bound(pts.begin(), pts.end(), t,
-                [](const LevelsScopeData::Point& p, double value) { return p.t < value; });
-            if (it == pts.end()) return &pts.back();
-            if (it != pts.begin() && std::abs(std::prev(it)->t - t) < std::abs(it->t - t)) --it;
-            return &*it;
+            return TimeSeries::Nearest(g.s->points, g.s->a + (v - g.off));
         }
 
         // The samples of `g` on screen, binned into pixel columns of `value`
@@ -363,31 +279,9 @@ namespace LevelsScopeView
         template<class FX, class FV>
         std::vector<Column> bin(const Seg& g, const FX& X, double margin, FV value, bool zeroIsValue = false) const
         {
-            std::vector<Column> columns;
-            const auto& pts = g.s->points;
             const double t0 = g.s->a + (start_ - g.off) - margin, t1 = g.s->a + (start_ + windowLength() - g.off) + margin;
-            auto it = std::lower_bound(pts.begin(), pts.end(), t0,
-                [](const LevelsScopeData::Point& p, double v) { return p.t < v; });
-            for (; it != pts.end() && it->t <= t1; ++it)
-            {
-                const double v = value(*it);
-                if (!(v > 0) && !(zeroIsValue && v == 0)) continue;
-                const double x = std::floor(X(g.off + it->t - g.s->a)) + 0.5;
-                if (columns.empty() || columns.back().x != x || it->t - columns.back().t1 > 30)
-                {
-                    Column c;
-                    c.x = x; c.lo = c.hi = v; c.t0 = it->t;
-                    columns.push_back(c);
-                }
-                Column& c = columns.back();
-                c.lo = (std::min)(c.lo, v);
-                c.hi = (std::max)(c.hi, v);
-                c.sum += v;
-                c.last = v;
-                ++c.n;
-                c.t1 = it->t;
-            }
-            return columns;
+            return TimeSeries::Bin(g.s->points, t0, t1, [&](double t) { return X(g.off + t - g.s->a); }, value, JoinGap,
+                zeroIsValue);
         }
 
         void drawLayer(QPainter& p)
@@ -532,17 +426,17 @@ namespace LevelsScopeView
                         QColor c = tr.color;
                         c.setAlphaF(0.75f);
                         p.setPen(Qt::NoPen);
-                        const QPixmap& dot = Dot(c, r);
+                        const QPixmap& dot = dots_.Dot(c, r, devicePixelRatioF());
                         for (const Column& col : columns)
                         {
-                            Stamp(p, dot, col.x, Y(col.hi));
-                            if (Y(col.lo) - Y(col.hi) > 2 * r) Stamp(p, dot, col.x, Y(col.lo));
+                            TimeSeries::Stamp(p, dot, col.x, Y(col.hi));
+                            if (Y(col.lo) - Y(col.hi) > 2 * r) TimeSeries::Stamp(p, dot, col.x, Y(col.lo));
                         }
                         continue;
                     }
                     // Through the column means (steps through the last value),
                     // with each column's spread.
-                    Scope(p, columns, Y, tr.color, tr.width, tr.step, tr.dashed, !tr.step);
+                    TimeSeries::DrawColumns(p, columns, Y, tr.color, tr.width, tr.step, tr.dashed, !tr.step, JoinGap);
                 }
             // Where Dolby Vision L1 changed: a tick on the plot's floor per pixel
             // column, with the L1 peak's colour and chip.
@@ -567,8 +461,8 @@ namespace LevelsScopeView
             };
             // The average lines, outlined in the card colour so they read over the bands.
             const auto avgLine = [&](const std::vector<Column>& columns, const QColor& color) {
-                Scope(p, columns, Y, ChartStyle::Card(), 4.0, false, false, false);
-                Scope(p, columns, Y, color, 2.0, false, false, false);
+                TimeSeries::DrawColumns(p, columns, Y, ChartStyle::Card(), 4.0, false, false, false, JoinGap);
+                TimeSeries::DrawColumns(p, columns, Y, color, 2.0, false, false, false, JoinGap);
             };
             for (const Seg& g : segs_)
             {
@@ -580,8 +474,8 @@ namespace LevelsScopeView
                 // samples are 6 s apart instead of 5, and no overlap darkening
                 // the translucent bands. Real gaps stay gaps.
                 const auto edges = [&](const std::vector<Column>& cs, size_t i) {
-                    const bool before = i > 0 && cs[i].t0 - cs[i - 1].t1 <= 30;
-                    const bool after = i + 1 < cs.size() && cs[i + 1].t0 - cs[i].t1 <= 30;
+                    const bool before = i > 0 && cs[i].t0 - cs[i - 1].t1 <= JoinGap;
+                    const bool after = i + 1 < cs.size() && cs[i + 1].t0 - cs[i].t1 <= JoinGap;
                     return std::pair<double, double>{ before ? (cs[i - 1].x + cs[i].x) / 2 : cs[i].x - bw / 2,
                         after ? (cs[i].x + cs[i + 1].x) / 2 : cs[i].x + bw / 2 };
                 };
@@ -626,8 +520,8 @@ namespace LevelsScopeView
                     const auto columns = bin(g, X, 30, [&](const auto& pt) { return placed(pt) ? pt.outProbe[i] : 0.0; });
                     for (const Column& col : columns)
                         if (Y(col.lo) - Y(col.hi) > 1.5) p.fillRect(QRectF(col.x - 0.5, Y(col.hi), 1.0, Y(col.lo) - Y(col.hi)), tr.color);
-                    const QPixmap& dot = Dot(tr.color, r);
-                    for (const Column& col : columns) Stamp(p, dot, col.x, Y(col.sum / col.n));
+                    const QPixmap& dot = dots_.Dot(tr.color, r, devicePixelRatioF());
+                    for (const Column& col : columns) TimeSeries::Stamp(p, dot, col.x, Y(col.sum / col.n));
                 }
             }
         }
@@ -754,6 +648,6 @@ namespace LevelsScopeView
         double dragX_ = 0.0, dragY_ = 0.0, dragStart_ = 0.0, dragLo_ = 0.0, lastDrawMs_ = 0.0;
         double yLo_ = Pq(AxisLo), yHi_ = Pq(AxisHi); // the brightness shown, in PQ
         QPixmap layer_;
-        std::map<QString, QPixmap> dots_;
+        TimeSeries::DotCache dots_;
     };
 }
