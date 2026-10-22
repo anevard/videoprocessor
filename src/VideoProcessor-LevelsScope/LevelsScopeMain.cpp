@@ -131,11 +131,7 @@ int RunCsv(int argc, char** argv)
             return 1;
         }
         VpLog::Reader reader;
-        for (std::string line; std::getline(file, line);)
-        {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            reader.Line(line);
-        }
+        reader.Read(file);
         const std::string name = path.substr(path.find_last_of("\\/") + 1);
         for (const VpLog::Sample& sample : reader.Samples())
         {
