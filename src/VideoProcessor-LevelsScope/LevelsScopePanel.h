@@ -466,7 +466,7 @@ namespace LevelsScopePanel
             if (configPath_.isEmpty())
                 note = QStringLiteral("Open a VideoProcessor.cfg to choose a DTM profile.");
             else if (!placeError_.isEmpty())
-                note = QStringLiteral("In vs out needs VP Renderer (Beta)'s libplacebo beside this program's folder: %1").arg(placeError_);
+                note = QStringLiteral("The scope needs VP Renderer (Beta)'s libplacebo beside this program's folder: %1").arg(placeError_);
             else if (settings_.value(QStringLiteral("view"), 1).toInt() == 0)
                 note = QStringLiteral("Input scope: what VP logged. Measured values are libplacebo's peak detection; "
                                       "L1 and the mastering range are what the stream declared. Screen lines: the profile's target %1 / %2.")

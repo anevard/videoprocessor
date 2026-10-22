@@ -1,6 +1,7 @@
 #pragma once
 #include "ChartStyle.h"
 #include "LevelsScopeData.h"
+#include <ToneCurveProvider.h>
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QFontMetrics>
@@ -111,13 +112,12 @@ namespace LevelsScopeView
         return found == tips.end() ? QString() : found->second;
     }
 
-    // SMPTE ST 2084 for the axis only (drawing position, not tone mapping).
+    // The axis position of a brightness: libplacebo's PQ, as the Config
+    // charts place theirs. Not a number when libplacebo is not loaded.
     inline double Pq(double nits)
     {
-        const double m1 = 2610.0 / 16384, m2 = 2523.0 / 4096 * 128, c1 = 3424.0 / 4096,
-            c2 = 2413.0 / 4096 * 32, c3 = 2392.0 / 4096 * 32;
-        const double y = std::pow((std::max)(nits, 0.0) / 10000.0, m1);
-        return std::pow((c1 + c2 * y) / (1 + c3 * y), m2);
+        const auto toPq = ToneCurveProvider::Registered().nitsToPq;
+        return toPq ? toPq((std::max)(nits, 0.0)) : std::nan("");
     }
 
     // Whole from 100, one decimal from 1, three from 0.01, else four.
@@ -436,13 +436,11 @@ namespace LevelsScopeView
             p.restore();
         }
 
-        // Nits from PQ, the inverse of Pq(), for the axis only.
+        // Nits from an axis position, the inverse of Pq().
         static double PqNits(double pq)
         {
-            const double m1 = 2610.0 / 16384, m2 = 2523.0 / 4096 * 128, c1 = 3424.0 / 4096,
-                c2 = 2413.0 / 4096 * 32, c3 = 2392.0 / 4096 * 32;
-            const double e = std::pow((std::max)(pq, 0.0), 1.0 / m2);
-            return 10000.0 * std::pow((std::max)(e - c1, 0.0) / (c2 - c3 * e), 1.0 / m1);
+            const auto toNits = ToneCurveProvider::Registered().pqToNits;
+            return toNits ? toNits((std::max)(pq, 0.0)) : std::nan("");
         }
 
         // Gridlines for the brightness shown: decades when it spans many,
@@ -550,6 +548,12 @@ namespace LevelsScopeView
             {
                 p.setPen(Muted());
                 p.drawText(rect(), Qt::AlignCenter, QStringLiteral("Open logs, then tick one or more sections above."));
+                return;
+            }
+            if (!std::isfinite(Pq(AxisHi)))
+            {
+                p.setPen(Muted());
+                p.drawText(rect(), Qt::AlignCenter, QStringLiteral("The scope needs VP Renderer (Beta)'s libplacebo beside this program's folder."));
                 return;
             }
             const double W = windowLength(), v0 = start_, xEnd = w - PadR;
