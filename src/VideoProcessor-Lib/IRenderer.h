@@ -91,6 +91,46 @@ struct RendererHdrStatus
 	bool Supported() const { return size == sizeof(RendererHdrStatus) && version == 1; }
 };
 
+// What the renderer made of one captured source frame, matched by the capture
+// device's frame counter and filled once, right after that frame's main render.
+// Crosses the plugin boundary through optional exports, like RendererHdrStatus.
+struct RendererSourceCaptureReport
+{
+	uint32_t size = sizeof(RendererSourceCaptureReport);
+	uint32_t version = 1;
+	uint64_t deviceCounter = 0;      // VideoFrame::GetCounter() of the armed frame
+	bool filled = false;
+	RendererHdrStatus hdr;           // detection and scene values of that frame
+	// libplacebo's view of the source, named as the rendered-output capture names it.
+	char sourceLevels[16]{};
+	char sourceTransfer[32]{};
+	char sourcePrimaries[32]{};
+	double sourceMinNits = 0.0;
+	double sourceMaxNits = 0.0;
+	double scenePeakPq = 0.0;
+	double sceneAveragePq = 0.0;
+	// Dolby Vision values VP keeps per frame: the DM source range and L1.
+	bool dvAvailable = false;
+	bool dvSourceRangeFromMetadata = false;
+	bool dvSceneAvailable = false;
+	double dvSourceMinNits = 0.0;
+	double dvSourceMaxNits = 0.0;
+	double dvSceneMinNits = 0.0;
+	double dvSceneMaxNits = 0.0;
+	double dvSceneAvgNits = 0.0;
+	// Active picture bounds in source pixels, when the renderer trusts them.
+	bool boundsAvailable = false;
+	int32_t boundsLeft = 0;
+	int32_t boundsTop = 0;
+	int32_t boundsRight = 0;
+	int32_t boundsBottom = 0;
+	bool Supported() const
+	{
+		return size == sizeof(RendererSourceCaptureReport) && version == 1 &&
+			hdr.Supported();
+	}
+};
+
 
 /**
  * Renderer callback

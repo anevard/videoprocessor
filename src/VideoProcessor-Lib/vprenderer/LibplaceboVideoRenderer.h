@@ -131,6 +131,11 @@ public:
 	bool GetRenderLoad(RendererRenderLoad& load) const override;
 	// Reached through the plugin's HDR status export, not IRenderer.
 	bool GetHdrStatus(RendererHdrStatus& status) const;
+	// Reached through the plugin's source capture exports, not IRenderer.
+	// Arming replaces any earlier report; the frame must be armed before it is
+	// handed to OnVideoFrame.
+	bool ArmSourceCaptureReport(uint64_t deviceCounter);
+	bool GetSourceCaptureReport(RendererSourceCaptureReport& report) const;
 	void SetRenderLoadDisplayRefreshRate(double refreshRateHz) override;
 	bool SupportsNativeStatsOverlay() const override { return true; }
 	bool SetNativeStatsOverlay(const uint8_t* pixels, size_t byteCount,
