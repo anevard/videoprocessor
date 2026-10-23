@@ -1,4 +1,5 @@
 #pragma once
+#include "LevelsScopeThumbnail.h"
 #include <ConfigurationRpcClient.h>
 #include <SourceCaptureProtocol.h>
 #include <QByteArray>
@@ -24,6 +25,12 @@ namespace LevelsScopeCapture
     inline QString Folder()
     {
         return QDir::cleanPath(QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../captures")));
+    }
+
+    // capture-....raw -> capture-....png
+    inline QString ThumbnailPath(const QString& pixelPath)
+    {
+        return pixelPath.left(pixelPath.size() - 4) + QStringLiteral(".png");
     }
 
     struct Result
@@ -109,7 +116,7 @@ namespace LevelsScopeCapture
         const QJsonObject device = root.value(QStringLiteral("device_state")).toObject();
         result.width = frame.value(QStringLiteral("width")).toInt();
         result.height = frame.value(QStringLiteral("height")).toInt();
-        result.encoding = device.value(QStringLiteral("encoding")).toString();
+        result.encoding = LevelsScopeThumbnail::Code(device.value(QStringLiteral("encoding")).toString());
         result.rendererReport = root.value(QStringLiteral("renderer")).toObject()
             .value(QStringLiteral("available")).toBool();
 
@@ -135,6 +142,11 @@ namespace LevelsScopeCapture
             result.error = "Could not save the capture in the captures folder.";
             return;
         }
+        // The preview is a convenience: the capture stands without it, and
+        // the bank remakes a missing one from the pixels.
+        const QImage thumbnail = LevelsScopeThumbnail::Make(pixels, root);
+        if (!thumbnail.isNull())
+            thumbnail.save(ThumbnailPath(result.pixelPath), "PNG");
         result.ok = true;
     }
 }

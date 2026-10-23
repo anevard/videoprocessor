@@ -1,5 +1,6 @@
 #pragma once
 #include "LevelsScopeCapture.h"
+#include "LevelsScopeCaptureBank.h"
 #include "LevelsScopeData.h"
 #include "LevelsScopeRigSearch.h"
 #include "LevelsScopeSections.h"
@@ -78,6 +79,8 @@ namespace LevelsScopePanel
             capture_ = new QPushButton(QStringLiteral("Capture frame"));
             capture_->setToolTip(QStringLiteral("Save the next source frame the rig receives, exactly as it arrives, with what VP made of it, in the captures folder"));
             capture_->setEnabled(false);
+            auto* captures = new QPushButton(QStringLiteral("Captures…"));
+            captures->setToolTip(QStringLiteral("The frames captured on this PC, each with its preview"));
             profiles_ = new QComboBox;
             profiles_->setMinimumWidth(180);
             // Ignored width: a long path is cut short (whole path on hover)
@@ -92,6 +95,7 @@ namespace LevelsScopePanel
             sources->addWidget(rigs_);
             sources->addWidget(openConfig);
             sources->addWidget(capture_);
+            sources->addWidget(captures);
             sources->addWidget(new QLabel(QStringLiteral("DTM profile")));
             sources->addWidget(profiles_);
             sources->addWidget(configLabel_, 1);
@@ -194,6 +198,13 @@ namespace LevelsScopePanel
                 loadLogs(LevelsScopeSources::FilesIn(dir));
             });
             connect(capture_, &QPushButton::clicked, this, [this] { captureFrame(); });
+            connect(captures, &QPushButton::clicked, this, [this] {
+                if (!bank_) bank_ = new LevelsScopeCaptureBank::Window(this);
+                else bank_->reload();
+                bank_->show();
+                bank_->raise();
+                bank_->activateWindow();
+            });
             connect(openConfig, &QPushButton::clicked, this, [this] {
                 const QString file = QFileDialog::getOpenFileName(this, QStringLiteral("Open VideoProcessor.cfg"),
                     QFileInfo(configPath_).absolutePath(), QStringLiteral("VP configuration (*.cfg);;All files (*)"));
@@ -423,6 +434,7 @@ namespace LevelsScopePanel
                         .arg(name, QString::fromUtf8(result->error)));
                     return;
                 }
+                if (bank_ && bank_->isVisible()) bank_->reload();
                 status_->setText(QStringLiteral("Captured a %1×%2 %3 frame%4: %5")
                     .arg(result->width).arg(result->height).arg(result->encoding,
                         result->rendererReport ? QString() : QStringLiteral(" (without VP's own measurements)"),
@@ -676,6 +688,7 @@ namespace LevelsScopePanel
         QThread* rigThread_ = nullptr;
         QPushButton* capture_ = nullptr;
         QThread* captureThread_ = nullptr;
+        LevelsScopeCaptureBank::Window* bank_ = nullptr;
         // Each open log as last read, with the size and time it had then.
         struct ReadLog
         {
