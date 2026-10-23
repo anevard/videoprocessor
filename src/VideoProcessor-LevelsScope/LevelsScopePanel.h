@@ -443,7 +443,9 @@ namespace LevelsScopePanel
         {
             while (QLayoutItem* item = logs_->takeAt(0))
             {
-                delete item->widget();
+                // A chip's own click rebuilds the chips: delete each after
+                // its event, as the Config page's charts do.
+                if (QWidget* widget = item->widget()) { widget->hide(); widget->deleteLater(); }
                 delete item;
             }
             for (const QString& file : files_)
@@ -499,7 +501,9 @@ namespace LevelsScopePanel
         {
             while (QLayoutItem* item = legend_->takeAt(0))
             {
-                delete item->widget();
+                // A chip's own click rebuilds the chips: delete each after
+                // its event, as the Config page's charts do.
+                if (QWidget* widget = item->widget()) { widget->hide(); widget->deleteLater(); }
                 delete item;
             }
             const bool input = window_.view() == 0;

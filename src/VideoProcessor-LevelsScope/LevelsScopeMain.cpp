@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QFile>
 #include <QElapsedTimer>
+#include <QPointer>
 #include <windows.h>
 #include <ConfigEditorCore.h>
 #include <RenderingBuiltInDefault.h>
@@ -261,14 +262,22 @@ public:
         timer.start();
         ++depth_;
         const QEvent::Type type = event->type();
+        // The event may delete its receiver (a log chip's close removes the chip):
+        // read nothing from it afterwards unless it is still there.
+        const char* className = receiver->metaObject()->className();
+        const QPointer<QObject> alive(receiver);
         const bool result = QApplication::notify(receiver, event);
         --depth_;
         const double ms = timer.nsecsElapsed() / 1e6;
         if (ms > 30.0 && log_.isOpen())
         {
-            QString what = QString::fromLatin1(receiver->metaObject()->className());
-            if (!receiver->objectName().isEmpty()) what += QStringLiteral(" ") + receiver->objectName();
-            if (auto* button = qobject_cast<QAbstractButton*>(receiver)) what += QStringLiteral(" \"") + button->text() + u'"';
+            QString what = QString::fromLatin1(className);
+            if (!alive) what += QStringLiteral(" (deleted by the event)");
+            else
+            {
+                if (!receiver->objectName().isEmpty()) what += QStringLiteral(" ") + receiver->objectName();
+                if (auto* button = qobject_cast<QAbstractButton*>(receiver)) what += QStringLiteral(" \"") + button->text() + u'"';
+            }
             log_.write(QStringLiteral("%1 %2%3 ms  event %4  %5\n")
                 .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz")))
                 .arg(QString(depth_ * 2, u' '))
