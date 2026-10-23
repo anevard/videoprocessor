@@ -292,20 +292,32 @@ private:
     int depth_ = 0;
 };
 
+// The scope is a windowed program, so starting it opens no console. Run from a
+// terminal for --csv or --snapshot, it writes to that terminal; output
+// redirected to a file already reaches the file.
+void UseParentConsole()
+{
+    const bool outGoes = GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) != FILE_TYPE_UNKNOWN;
+    const bool errGoes = GetFileType(GetStdHandle(STD_ERROR_HANDLE)) != FILE_TYPE_UNKNOWN;
+    if ((outGoes && errGoes) || !AttachConsole(ATTACH_PARENT_PROCESS)) return;
+    FILE* stream = nullptr;
+    if (!outGoes) freopen_s(&stream, "CONOUT$", "w", stdout);
+    if (!errGoes) freopen_s(&stream, "CONOUT$", "w", stderr);
+}
+
 int main(int argc, char** argv)
 {
     bool snapshot = false;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--csv") == 0)
+        {
+            UseParentConsole();
             return RunCsv(argc, argv);
+        }
         snapshot = snapshot || std::strcmp(argv[i], "--snapshot") == 0;
     }
-    // A window: drop the console Windows gave a program started from Explorer,
-    // keep the terminal's when started from one.
-    DWORD processes[2] = {};
-    if (!snapshot && GetConsoleProcessList(processes, 2) == 1)
-        FreeConsole();
+    if (snapshot) UseParentConsole();
     TimedApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("VP Levels Scope"));
     QApplication::setOrganizationName(QStringLiteral("VideoProcessor"));

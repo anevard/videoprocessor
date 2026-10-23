@@ -46,7 +46,7 @@
       <AdditionalIncludeDirectories>..\VideoProcessor-Config\standalone;$(QtRoot)\include;$(QtRoot)\include\QtWidgets;$(QtRoot)\include\QtGui;$(QtRoot)\include\QtCore;$(QtRoot)\include\QtNetwork;..\VideoProcessor-Config;..\VideoProcessor-ChartCore;..\VideoProcessor-Lib;..\VideoProcessor-ConfigCore;..\..\3rdparty\libplacebo-beta\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation>
+      <SubSystem>Windows</SubSystem><EntryPointSymbol>mainCRTStartup</EntryPointSymbol><GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(QtRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>Qt6Widgetsd.lib;Qt6Guid.lib;Qt6Cored.lib;Qt6Networkd.lib;Ws2_32.lib;shell32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
@@ -60,7 +60,7 @@
       <AdditionalIncludeDirectories>..\VideoProcessor-Config\standalone;$(QtRoot)\include;$(QtRoot)\include\QtWidgets;$(QtRoot)\include\QtGui;$(QtRoot)\include\QtCore;$(QtRoot)\include\QtNetwork;..\VideoProcessor-Config;..\VideoProcessor-ChartCore;..\VideoProcessor-Lib;..\VideoProcessor-ConfigCore;..\..\3rdparty\libplacebo-beta\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation>
+      <SubSystem>Windows</SubSystem><EntryPointSymbol>mainCRTStartup</EntryPointSymbol><GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(QtRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>Qt6Widgets.lib;Qt6Gui.lib;Qt6Core.lib;Qt6Network.lib;Ws2_32.lib;shell32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
