@@ -2990,6 +2990,40 @@ struct ConfigurationRpcRemoveStage
 		if (!path.empty()) DeleteFileW(path.c_str());
 	}
 };
+
+// The capture report crosses the plugin boundary through optional exports, so
+// it is reached through the proxy; other renderers have none.
+struct SourceCaptureReportAccess : SourceCapture::ReportAccess
+{
+	explicit SourceCaptureReportAccess(IVideoRenderer* renderer) :
+		plugin(dynamic_cast<LibplaceboPluginVideoRenderer*>(renderer)) {}
+	bool Arm(uint64_t deviceCounter) override
+	{
+		return plugin && plugin->ArmSourceCaptureReport(deviceCounter);
+	}
+	bool Get(RendererSourceCaptureReport& report) override
+	{
+		return plugin && plugin->GetSourceCaptureReport(report);
+	}
+	LibplaceboPluginVideoRenderer* plugin = nullptr;
+};
+
+// Identifies the configuration a capture was made under without naming its path.
+std::string SourceCaptureConfigFnv1a64(const std::wstring& path)
+{
+	std::ifstream input(path, std::ios::binary);
+	if (!input) return std::string();
+	uint64_t hash = 1469598103934665603ull;
+	char byte = 0;
+	while (input.get(byte))
+	{
+		hash ^= static_cast<uint8_t>(byte);
+		hash *= 1099511628211ull;
+	}
+	char text[17]{};
+	sprintf_s(text, "%016llx", static_cast<unsigned long long>(hash));
+	return text;
+}
 }
 
 LRESULT CVideoProcessorDlg::OnConfigurationRpcRequest(WPARAM id, LPARAM)
@@ -3002,11 +3036,87 @@ LRESULT CVideoProcessorDlg::OnConfigurationRpcRequest(WPARAM id, LPARAM)
 	return 0;
 }
 
+ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleSourceCaptureRpc(
+	const Frame& request)
+{
+	using namespace ConfigurationRpcProtocol;
+	using CaptureOperation = SourceCaptureProtocol::Operation;
+	const uint16_t operation = request.operation;
+	if (m_wantToTerminate)
+		return ConfigurationRpcError(operation, "VideoProcessor is stopping.");
+	if (request.payload.size() < 2 ||
+		Read16(request.payload.data()) != ConfigurationCompatibilityVersion)
+		return ConfigurationRpcError(operation,
+			"This client uses an incompatible configuration model. Update VP and the client together.");
+	size_t cursor = 2;
+	Frame response;
+	response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+
+	if (operation == static_cast<uint16_t>(CaptureOperation::Arm))
+	{
+		if (cursor != request.payload.size())
+			return ConfigurationRpcError(operation, "Invalid capture request.");
+		// The card publishes a new state before this thread builds VP's view
+		// of it; arming only once the renderer has caught up keeps the
+		// sidecar's VP state the frame's own.
+		const auto sequences = m_rendererIngressState->CaptureSequences();
+		if (sequences.acknowledged != sequences.published)
+			return ConfigurationRpcError(operation,
+				"The source signal is changing; capture again.");
+		SourceCapture::ArmContext context;
+		context.publishedSequence = sequences.published;
+		context.deviceState = m_captureDeviceVideoState;
+		context.vpState = m_builtVideoState;
+		context.buildVersion = ConfigurationRpcUtf8(VERSION_DESCRIBE);
+		ConfigFile active;
+		if (active.Load(ConfigFile::DEFAULT_FILENAME, ConfigFile::ReadPolicy::Fresh) &&
+			!active.GetLoadedPath().empty())
+			context.configFnv1a64 = SourceCaptureConfigFnv1a64(
+				ConfigurationRpcWidePath(active.GetLoadedPath()));
+		if (const auto snapshot = m_profileRuntime.GetSnapshot())
+			context.profiles =
+				RendererProfileConfig::FormatSelections(snapshot->effectiveSelections);
+		uint64_t captureId = 0;
+		std::string error;
+		if (!m_sourceCapture.Arm(std::move(context), captureId, error))
+			return ConfigurationRpcError(operation, error);
+		DebugLog::Log("Source capture armed: capture_id=%llu",
+			static_cast<unsigned long long>(captureId));
+		SourceCaptureProtocol::Write64(response.payload, captureId);
+		return response;
+	}
+
+	uint64_t captureId = 0;
+	if (!SourceCaptureProtocol::Read64At(request.payload, cursor, captureId))
+		return ConfigurationRpcError(operation, "Invalid capture request.");
+	if (operation == static_cast<uint16_t>(CaptureOperation::Pull))
+	{
+		uint32_t offset = 0, length = 0;
+		if (!SourceCaptureProtocol::Read32At(request.payload, cursor, offset) ||
+			!SourceCaptureProtocol::Read32At(request.payload, cursor, length) ||
+			cursor != request.payload.size())
+			return ConfigurationRpcError(operation, "Invalid capture request.");
+		const std::shared_ptr<IVideoRenderer> renderer =
+			std::atomic_load_explicit(&m_videoRenderer, std::memory_order_acquire);
+		SourceCaptureReportAccess reportAccess(renderer.get());
+		response.payload = m_sourceCapture.Pull(captureId, offset, length, &reportAccess);
+		return response;
+	}
+	if (cursor != request.payload.size())
+		return ConfigurationRpcError(operation, "Invalid capture request.");
+	m_sourceCapture.Release(captureId);
+	DebugLog::Log("Source capture released: capture_id=%llu",
+		static_cast<unsigned long long>(captureId));
+	return response;
+}
+
 ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 	const Frame& request)
 {
 	using namespace ConfigurationRpcProtocol;
 	const uint16_t operation = request.operation;
+	if (SourceCaptureProtocol::IsOperation(operation))
+		return HandleSourceCaptureRpc(request);
 	if (operation != static_cast<uint16_t>(Operation::GetConfig) &&
 		operation != static_cast<uint16_t>(Operation::GetCapabilities) &&
 		operation != static_cast<uint16_t>(Operation::ApplyConfig) &&
@@ -8352,6 +8462,8 @@ void CVideoProcessorDlg::OnCaptureDeviceVideoFrame(
 	uint64_t recoveredFirstFrameCounter = 0;
 	uint64_t recoveredLastFrameCounter = 0;
 	uint64_t recoveredTotalRejectedFrameCount = 0;
+	VideoStateComPtr sourceCaptureState;
+	uint64_t sourceCapturePublished = 0;
 	{
 		std::lock_guard<std::mutex> sourceLock(
 			m_captureVideoStateNotificationMutex);
@@ -8359,6 +8471,12 @@ void CVideoProcessorDlg::OnCaptureDeviceVideoFrame(
 			captureRunToken != m_captureVideoStateSourceEpoch)
 			return;
 		ingressLease = m_rendererIngressState->TryAcquire();
+		if (ingressLease && m_sourceCapture.IsArmed())
+		{
+			sourceCaptureState = m_lastPublishedValidCaptureVideoState;
+			sourceCapturePublished =
+				m_rendererIngressState->CaptureSequences().published;
+		}
 		if (!ingressLease)
 		{
 			rejectedSnapshot = m_rendererIngressState->CaptureSequences();
@@ -8437,6 +8555,12 @@ void CVideoProcessorDlg::OnCaptureDeviceVideoFrame(
 	assert(m_captureDeviceState == CaptureDeviceState::CAPTUREDEVICESTATE_CAPTURING);
 	assert(m_rendererState == RendererState::RENDERSTATE_RENDERING);
 
+	if (sourceCaptureState)
+	{
+		SourceCaptureReportAccess reportAccess(renderer.get());
+		m_sourceCapture.OnAdmittedFrame(videoFrame, sourceCaptureState,
+			sourceCapturePublished, &reportAccess);
+	}
 	renderer->OnVideoFrame(videoFrame);
 	if (renderer->HasPresentedLiveFrame() &&
 		!m_transitionRevealPosted.exchange(
