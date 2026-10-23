@@ -2,6 +2,7 @@
 #include "ChartStyle.h"
 #include "LevelsScopeData.h"
 #include "LevelsScopeTraces.h"
+#include <ChartViewport.h>
 #include <PqAxis.h>
 #include <TimeSeries.h>
 #include <ToneCurveProvider.h>
@@ -69,8 +70,7 @@ namespace LevelsScopeView
                 segs_.push_back({ s, off, s->b - s->a });
                 off += s->b - s->a;
             }
-            total_ = (std::max)(off, 1.0);
-            clampStart();
+            viewport_.setTotal((std::max)(off, 1.0));
             changed();
         }
         // The data under the sections changed (a new profile placed them).
@@ -79,60 +79,20 @@ namespace LevelsScopeView
         void setNames(std::function<QString(const LevelsScopeData::Section&)> name) { name_ = std::move(name); changed(); }
         void setView(View v) { view_ = v; changed(); }
         // Show everything: the whole time line and the whole brightness range.
-        void showAll()
-        {
-            window_ = 0.0;
-            start_ = 0.0;
-            yLo_ = Pq(AxisLo);
-            yHi_ = Pq(AxisHi);
-            changed();
-        }
+        void showAll() { viewport_.showAll(); changed(); }
         // Show this brightness range, in nits.
-        void setBrightness(double loNits, double hiNits)
-        {
-            yLo_ = Pq(loNits);
-            yHi_ = Pq(hiNits);
-            clampBrightness();
-            changed();
-        }
+        void setBrightness(double loNits, double hiNits) { viewport_.setBrightness(loNits, hiNits); changed(); }
         // Brightness scroll position, 0 (brightest at the top) to 1000; -1
         // when the whole brightness range is shown.
-        int brightnessPosition() const
-        {
-            const double free = (Pq(AxisHi) - Pq(AxisLo)) - (yHi_ - yLo_);
-            return free > 1e-9 ? static_cast<int>(std::lround((Pq(AxisHi) - yHi_) / free * 1000.0)) : -1;
-        }
-        void setBrightnessPosition(int value)
-        {
-            const double height = yHi_ - yLo_, free = (Pq(AxisHi) - Pq(AxisLo)) - height;
-            yHi_ = Pq(AxisHi) - free * value / 1000.0;
-            yLo_ = yHi_ - height;
-            clampBrightness();
-            changed();
-        }
+        int brightnessPosition() const { return viewport_.brightnessPosition(); }
+        void setBrightnessPosition(int value) { viewport_.setBrightnessPosition(value); changed(); }
         void setShown(const std::string& key, bool on) { shown_[key] = on; changed(); }
         bool shown(const std::string& key) const { auto f = shown_.find(key); return f == shown_.end() || f->second; }
         // 0 shows everything.
-        void setWindow(double seconds)
-        {
-            const double mid = start_ + windowLength() / 2.0;
-            window_ = seconds;
-            start_ = mid - windowLength() / 2.0;
-            clampStart();
-            changed();
-        }
+        void setWindow(double seconds) { viewport_.setWindow(seconds); changed(); }
         // Scroll position, 0 to 1000; -1 when everything is shown.
-        int position() const
-        {
-            const double span = total_ - windowLength();
-            return span > 0 ? static_cast<int>(std::lround(start_ / span * 1000.0)) : -1;
-        }
-        void setPosition(int value)
-        {
-            start_ = (total_ - windowLength()) * value / 1000.0;
-            clampStart();
-            changed();
-        }
+        int position() const { return viewport_.position(); }
+        void setPosition(int value) { viewport_.setPosition(value); changed(); }
         // How long the last data layer took to draw, in milliseconds.
         double lastDrawMs() const { return lastDrawMs_; }
         // Called with a hover description, or empty when the pointer leaves.
@@ -159,7 +119,7 @@ namespace LevelsScopeView
             p.drawPixmap(0, 0, layer_);
             if (hover_ >= 0.0 && !segs_.empty())
             {
-                const double x = PadL + (hover_ - start_) / windowLength() * plotWidth();
+                const double x = PadL + (hover_ - viewport_.start()) / viewport_.windowLength() * plotWidth();
                 p.setPen(QPen(QColor(232, 234, 236, 128), 1.0));
                 p.drawLine(QPointF(x, PadT), QPointF(x, height() - PadB));
             }
@@ -171,8 +131,7 @@ namespace LevelsScopeView
             dragging_ = true;
             dragX_ = e->position().x();
             dragY_ = e->position().y();
-            dragStart_ = start_;
-            dragLo_ = yLo_;
+            viewport_.startDrag();
             setCursor(Qt::ClosedHandCursor);
         }
         void mouseReleaseEvent(QMouseEvent*) override { dragging_ = false; unsetCursor(); }
@@ -185,12 +144,7 @@ namespace LevelsScopeView
         {
             if (dragging_)
             {
-                start_ = dragStart_ - (e->position().x() - dragX_) / plotWidth() * windowLength();
-                clampStart();
-                const double height = yHi_ - yLo_;
-                yLo_ = dragLo_ + (e->position().y() - dragY_) / plotHeight() * height;
-                yHi_ = yLo_ + height;
-                clampBrightness();
+                viewport_.drag((e->position().x() - dragX_) / plotWidth(), (e->position().y() - dragY_) / plotHeight());
                 dirty_ = true;
                 if (onMoved) onMoved();
             }
@@ -205,28 +159,20 @@ namespace LevelsScopeView
             if (onHover) onHover(QString());
         }
         // Wheel zooms time; Ctrl+wheel zooms brightness; both about the pointer.
+        // A step with no vertical turn zooms time in but brightness out.
         void wheelEvent(QWheelEvent* e) override
         {
             if (segs_.empty()) return;
             const bool in = e->angleDelta().y() > 0;
             if (e->modifiers() & Qt::ControlModifier)
             {
-                const double height = yHi_ - yLo_;
-                const double at = yLo_ + (1.0 - (e->position().y() - PadT) / plotHeight()) * height;
-                const double next = (std::min)((std::max)(height * (in ? 0.8 : 1.25), MinBrightnessSpan), Pq(AxisHi) - Pq(AxisLo));
-                yLo_ = at - (at - yLo_) * next / height;
-                yHi_ = yLo_ + next;
-                clampBrightness();
+                viewport_.zoomBrightness(in, 1.0 - (e->position().y() - PadT) / plotHeight());
                 changed();
                 if (onMoved) onMoved();
                 e->accept();
                 return;
             }
-            const double at = valueAt(e->position().x()), W = windowLength();
-            const double next = (std::min)((std::max)(W * (e->angleDelta().y() < 0 ? 1.25 : 0.8), 120.0), total_);
-            window_ = next >= total_ ? 0.0 : next;
-            start_ = at - (at - start_) * next / W;
-            clampStart();
+            viewport_.zoomTime(e->angleDelta().y() < 0, (e->position().x() - PadL) / plotWidth());
             changed();
             if (onMoved) onMoved();
             e->accept();
@@ -237,6 +183,8 @@ namespace LevelsScopeView
         // The whole brightness range, in nits, and the narrowest zoom, in PQ.
         // The axis reaches PQ code 0 (0 nit), where Dolby Vision declares true black.
         static constexpr double AxisLo = 0.0, AxisHi = 4000, MinBrightnessSpan = 0.02;
+        // The narrowest time window, in seconds.
+        static constexpr double MinWindow = 120.0;
         struct Seg { const LevelsScopeData::Section* s; double off, len; };
         // Samples further apart than this are not joined: a gap in the log.
         static constexpr double JoinGap = 30;
@@ -249,19 +197,10 @@ namespace LevelsScopeView
         static QDateTime When(double seconds) { return QDateTime::fromMSecsSinceEpoch(std::llround(seconds * 1000.0)); }
 
         double plotHeight() const { return (std::max)(1.0, height() - PadT - PadB); }
-        void clampBrightness()
-        {
-            const double full = Pq(AxisHi) - Pq(AxisLo);
-            const double height = (std::min)((std::max)(yHi_ - yLo_, MinBrightnessSpan), full);
-            yLo_ = (std::min)((std::max)(yLo_, Pq(AxisLo)), Pq(AxisHi) - height);
-            yHi_ = yLo_ + height;
-        }
 
         void changed() { dirty_ = true; update(); }
-        double windowLength() const { return window_ > 0 ? (std::min)(window_, total_) : total_; }
         double plotWidth() const { return (std::max)(1.0, width() - PadL - PadR); }
-        double valueAt(double x) const { return start_ + (x - PadL) / plotWidth() * windowLength(); }
-        void clampStart() { start_ = (std::min)((std::max)(start_, 0.0), (std::max)(total_ - windowLength(), 0.0)); }
+        double valueAt(double x) const { return viewport_.valueAt((x - PadL) / plotWidth()); }
 
         const Seg* segAt(double v) const
         {
@@ -279,7 +218,8 @@ namespace LevelsScopeView
         template<class FX, class FV>
         std::vector<Column> bin(const Seg& g, const FX& X, double margin, FV value, bool zeroIsValue = false) const
         {
-            const double t0 = g.s->a + (start_ - g.off) - margin, t1 = g.s->a + (start_ + windowLength() - g.off) + margin;
+            const double start = viewport_.start(), t0 = g.s->a + (start - g.off) - margin,
+                t1 = g.s->a + (start + viewport_.windowLength() - g.off) + margin;
             return TimeSeries::Bin(g.s->points, t0, t1, [&](double t) { return X(g.off + t - g.s->a); }, value, JoinGap,
                 zeroIsValue);
         }
@@ -306,8 +246,8 @@ namespace LevelsScopeView
                     .arg(QString::fromWCharArray(ToneCurveRuntime::RendererName())));
                 return;
             }
-            const double W = windowLength(), v0 = start_, xEnd = w - PadR;
-            const double ylo = yLo_, yhi = yHi_, loNits = PqNits(ylo), hiNits = PqNits(yhi);
+            const double W = viewport_.windowLength(), v0 = viewport_.start(), xEnd = w - PadR;
+            const double ylo = viewport_.lo(), yhi = viewport_.hi(), loNits = PqNits(ylo), hiNits = PqNits(yhi);
             const auto X = [&](double v) { return PadL + (v - v0) / W * (xEnd - PadL); };
             const auto Y = [&](double n) { return PadT + (1.0 - (Pq(n) - ylo) / (yhi - ylo)) * (h - PadT - PadB); };
             const auto inY = [&](double n) { return n >= loNits * 0.999 && n <= hiNits * 1.001; };
@@ -537,7 +477,7 @@ namespace LevelsScopeView
             if (inY(screenBlack_)) labels.push_back({ Y(screenBlack_), 0, QStringLiteral("screen"), Short(screenBlack_), Fg2() });
             if (view_ == View::Input)
             {
-                const double vr = (std::min)(start_ + windowLength(), total_) - 1e-6;
+                const double vr = (std::min)(viewport_.start() + viewport_.windowLength(), viewport_.total()) - 1e-6;
                 const Seg* g = segAt(vr);
                 if (!g && !segs_.empty()) g = &segs_.back();
                 const LevelsScopeData::Point* q = g ? nearest(*g, vr) : nullptr;
@@ -586,7 +526,7 @@ namespace LevelsScopeView
             const auto& s = pt->s;
             QStringList parts{ QStringLiteral("<b>%1</b> %2").arg(when, name.toHtmlEscaped()) };
             // A setting change within 5 pixels of the pointer comes first.
-            const double near = 5.0 * windowLength() / plotWidth();
+            const double near = 5.0 * viewport_.windowLength() / plotWidth();
             for (const LevelsScopeData::Mark& mark : g->s->marks)
                 if (std::abs(g->off + mark.t - g->s->a - v) <= near)
                     parts << QStringLiteral("<span style=\"color:%1\"><b>%2</b></span>")
@@ -639,14 +579,14 @@ namespace LevelsScopeView
         }
 
         std::vector<Seg> segs_;
-        double total_ = 1.0, window_ = 0.0, start_ = 0.0, hover_ = -1.0;
+        ChartViewport::Viewport viewport_{ { AxisLo, AxisHi, MinBrightnessSpan, MinWindow } };
+        double hover_ = -1.0;
         double screenPeak_ = 203.0, screenBlack_ = 0.0;
         View view_ = View::InOut;
         std::map<std::string, bool> shown_;
         std::function<QString(const LevelsScopeData::Section&)> name_;
         bool dragging_ = false, dirty_ = true;
-        double dragX_ = 0.0, dragY_ = 0.0, dragStart_ = 0.0, dragLo_ = 0.0, lastDrawMs_ = 0.0;
-        double yLo_ = Pq(AxisLo), yHi_ = Pq(AxisHi); // the brightness shown, in PQ
+        double dragX_ = 0.0, dragY_ = 0.0, lastDrawMs_ = 0.0;
         QPixmap layer_;
         TimeSeries::DotCache dots_;
     };
