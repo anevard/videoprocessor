@@ -1,5 +1,6 @@
 #pragma once
 #include <ConfigEditorCore.h>
+#include <ConfigurationRpcClient.h>
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
@@ -8,8 +9,8 @@
 #include <string>
 #include <vector>
 
-// Where the scope's config and logs come from: a config's DTM profiles, and
-// the log files to open.
+// Where the scope's config and logs come from: a config's DTM profiles, a
+// rig's config over the network, and the log files to open.
 namespace LevelsScopeSources
 {
     // Rendering profiles that set any tone or target key: the DTM profiles.
@@ -41,6 +42,30 @@ namespace LevelsScopeSources
             result.push_back({ shown, name });
         }
         return result;
+    }
+
+    // A rig's config as the Config GUI fetches it: GetConfig over his
+    // ConfigurationRpcClient. Blocks on the network; run it off the UI thread.
+    struct RigConfig
+    {
+        std::string path;
+        std::string bytes;
+        std::string error;
+        bool ok = false;
+    };
+
+    inline void FetchRigConfig(const QString& host, quint16 port, RigConfig& result)
+    {
+        ConfigurationRpcClient client(host.toStdString(), port);
+        result.ok = client.GetConfig(result.path, result.bytes, result.error);
+    }
+
+    // The fetched bytes as a document, loaded as the Config GUI loads them.
+    inline ConfigEditorCore::ConfigDocument RigDocument(const RigConfig& config)
+    {
+        ConfigEditorCore::ConfigDocument document;
+        document.LoadBytes(QString::fromUtf8(config.path).toStdWString(), config.bytes);
+        return document;
     }
 
     // Every file in a folder and its subfolders.
