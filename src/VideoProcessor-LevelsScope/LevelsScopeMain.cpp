@@ -10,7 +10,6 @@
 #include <QDir>
 #include <QFile>
 #include <QElapsedTimer>
-#include <QSettings>
 #include <windows.h>
 #include <ConfigEditorCore.h>
 #include <RenderingBuiltInDefault.h>
@@ -185,19 +184,20 @@ int RunCsv(int argc, char** argv)
     return 0;
 }
 
-// --snapshot <out> --config <cfg> --profile <section> <vp.log>...: the whole
-// window drawn off screen to <out>-inout.png, <out>-input.png and
-// <out>-inout-10min.png, with how long each chart took to draw. For checking
-// the page without a screen capture; its settings are kept apart and cleared.
+// --snapshot <out> --config <cfg> --profile <section> [--settings <folder>]
+// <vp.log>...: the whole window drawn off screen to <out>-inout.png,
+// <out>-input.png and <out>-inout-10min.png, with how long each chart took to
+// draw. For checking the page without a screen capture. It reads and writes no
+// settings unless --settings names a folder (a throwaway one, for a check).
 int RunSnapshot(int argc, char** argv)
 {
-    QString out, config, profile;
+    QString out, config, profile, settings;
     QStringList logs;
     for (int i = 1; i < argc; ++i)
     {
         const std::string arg = argv[i];
-        if ((arg == "--snapshot" || arg == "--config" || arg == "--profile") && i + 1 < argc)
-            (arg == "--snapshot" ? out : arg == "--config" ? config : profile) = QString::fromLocal8Bit(argv[++i]);
+        if ((arg == "--snapshot" || arg == "--config" || arg == "--profile" || arg == "--settings") && i + 1 < argc)
+            (arg == "--snapshot" ? out : arg == "--config" ? config : arg == "--profile" ? profile : settings) = QString::fromLocal8Bit(argv[++i]);
         else if (!arg.empty() && arg[0] != '-')
             logs << QString::fromLocal8Bit(argv[i]);
         else
@@ -207,7 +207,7 @@ int RunSnapshot(int argc, char** argv)
         return Usage();
     int result = 0;
     {
-        LevelsScopePanel::Panel panel(nullptr, QStringLiteral("Levels Scope Snapshot"), false);
+        LevelsScopePanel::Panel panel(nullptr, settings, false);
         panel.setAttribute(Qt::WA_DontShowOnScreen, true);
         panel.resize(1400, 900);
         panel.show();
@@ -240,7 +240,6 @@ int RunSnapshot(int argc, char** argv)
         panel.chart()->setBrightness(0.0005, 20);
         shot(1, QStringLiteral("-inout-10min-shadows.png"), 600);
     }
-    QSettings(QStringLiteral("VideoProcessor"), QStringLiteral("Levels Scope Snapshot")).clear();
     return result;
 }
 

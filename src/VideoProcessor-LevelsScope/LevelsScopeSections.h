@@ -1,15 +1,18 @@
 #pragma once
 #include "LevelsScopeData.h"
+#include "LevelsScopeSettings.h"
 #include <ChartStyle.h>
 #include <QAbstractItemView>
-#include <QByteArray>
 #include <QDateTime>
 #include <QHeaderView>
-#include <QSettings>
+#include <QJsonArray>
 #include <QStringList>
 #include <QTreeWidget>
+#include <algorithm>
 #include <cmath>
 #include <map>
+#include <utility>
+#include <vector>
 
 // The section picker: which sections are ticked, and the names the operator
 // gave them. The panel places its table and redraws when a tick changes.
@@ -36,7 +39,7 @@ namespace LevelsScopeSections
         bool filling() const { return filling_; }
 
         // A tick or a rename in the section column.
-        void edited(QTreeWidgetItem* item, int column, QSettings& settings)
+        void edited(QTreeWidgetItem* item, int column)
         {
             const QString id = item->data(0, Qt::UserRole).toString();
             if (column == 0)
@@ -45,7 +48,7 @@ namespace LevelsScopeSections
                 const QString text = item->text(0).trimmed();
                 const QString kind = item->data(0, Qt::UserRole + 1).toString();
                 if (text.isEmpty() || text == kind) names_.erase(id); else names_[id] = text;
-                save(settings);
+                save();
             }
         }
 
@@ -88,32 +91,52 @@ namespace LevelsScopeSections
             filling_ = false;
         }
 
-        void load(QSettings& settings)
+        // sections.json in the settings folder; none (a snapshot run): nothing read.
+        void load(const QString& folder)
         {
-            settings.beginGroup(QStringLiteral("sections"));
-            for (const QString& key : settings.childKeys())
+            path_ = folder.isEmpty() ? QString() : QDir(folder).absoluteFilePath(QStringLiteral("sections.json"));
+            if (path_.isEmpty()) return;
+            for (const QJsonValue& value : LevelsScopeSettings::ReadJson(path_).value(QStringLiteral("sections")).toArray())
             {
-                const QStringList v = settings.value(key).toStringList();
-                const QString id = QString::fromUtf8(QByteArray::fromHex(key.toLatin1()));
-                if (v.size() >= 1) picked_[id] = v[0] == QStringLiteral("1");
-                if (v.size() >= 2 && !v[1].isEmpty()) names_[id] = v[1];
+                const QJsonObject s = value.toObject();
+                const QString id = s.value(QStringLiteral("id")).toString();
+                if (id.isEmpty()) continue;
+                picked_[id] = s.value(QStringLiteral("ticked")).toBool();
+                const QString name = s.value(QStringLiteral("name")).toString();
+                if (!name.isEmpty()) names_[id] = name;
             }
-            settings.endGroup();
         }
 
-        void save(QSettings& settings) const
+        // Every ticked or renamed section, oldest first. The id is the match key
+        // (start seconds|DV|master black|master peak); the other fields repeat
+        // it readably, so a name can be looked up by hand.
+        void save() const
         {
-            settings.beginGroup(QStringLiteral("sections"));
+            if (path_.isEmpty()) return;
+            std::vector<std::pair<double, QJsonObject>> rows;
             for (const auto& [id, on] : picked_)
             {
+                const QStringList parts = id.split(u'|');
+                const double start = parts.value(0).toDouble();
                 const auto name = names_.find(id);
-                settings.setValue(QString::fromLatin1(id.toUtf8().toHex()),
-                    QStringList{ on ? QStringLiteral("1") : QStringLiteral("0"), name != names_.end() ? name->second : QString() });
+                rows.push_back({ start, QJsonObject{
+                    { QStringLiteral("id"), id },
+                    { QStringLiteral("start"), QDateTime::fromSecsSinceEpoch(static_cast<qint64>(std::floor(start)))
+                        .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")) },
+                    { QStringLiteral("dolbyVision"), parts.value(1) == QStringLiteral("1") },
+                    { QStringLiteral("masterBlack"), parts.value(2).toDouble() },
+                    { QStringLiteral("masterPeak"), parts.value(3).toDouble() },
+                    { QStringLiteral("ticked"), on },
+                    { QStringLiteral("name"), name != names_.end() ? name->second : QString() } } });
             }
-            settings.endGroup();
+            std::stable_sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            QJsonArray sections;
+            for (const auto& row : rows) sections.append(row.second);
+            LevelsScopeSettings::WriteJson(path_, QJsonObject{ { QStringLiteral("sections"), sections } });
         }
 
     private:
+        QString path_;
         bool filling_ = false;
         std::map<QString, bool> picked_;
         std::map<QString, QString> names_;
