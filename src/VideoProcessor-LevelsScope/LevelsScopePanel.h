@@ -1,4 +1,5 @@
 #pragma once
+#include "LevelsScopeCapture.h"
 #include "LevelsScopeData.h"
 #include "LevelsScopeRigSearch.h"
 #include "LevelsScopeSections.h"
@@ -74,6 +75,9 @@ namespace LevelsScopePanel
             rigs_->setToolTip(QStringLiteral("The VP whose config the scope reads, found on the network as the Config window finds it"));
             auto* openConfig = new QPushButton(QStringLiteral("Config file…"));
             openConfig->setToolTip(QStringLiteral("Read a VideoProcessor.cfg on this PC instead of a rig's"));
+            capture_ = new QPushButton(QStringLiteral("Capture frame"));
+            capture_->setToolTip(QStringLiteral("Save the next source frame the rig receives, exactly as it arrives, with what VP made of it, in the captures folder"));
+            capture_->setEnabled(false);
             profiles_ = new QComboBox;
             profiles_->setMinimumWidth(180);
             // Ignored width: a long path is cut short (whole path on hover)
@@ -87,6 +91,7 @@ namespace LevelsScopePanel
             sources->addWidget(new QLabel(QStringLiteral("Config from")));
             sources->addWidget(rigs_);
             sources->addWidget(openConfig);
+            sources->addWidget(capture_);
             sources->addWidget(new QLabel(QStringLiteral("DTM profile")));
             sources->addWidget(profiles_);
             sources->addWidget(configLabel_, 1);
@@ -188,6 +193,7 @@ namespace LevelsScopePanel
                 window_.setLastDir(dir);
                 loadLogs(LevelsScopeSources::FilesIn(dir));
             });
+            connect(capture_, &QPushButton::clicked, this, [this] { captureFrame(); });
             connect(openConfig, &QPushButton::clicked, this, [this] {
                 const QString file = QFileDialog::getOpenFileName(this, QStringLiteral("Open VideoProcessor.cfg"),
                     QFileInfo(configPath_).absolutePath(), QStringLiteral("VP configuration (*.cfg);;All files (*)"));
@@ -255,6 +261,7 @@ namespace LevelsScopePanel
         {
             if (rigThread_) rigThread_->wait();
             if (readThread_) readThread_->wait();
+            if (captureThread_) captureThread_->wait();
         }
 
         // For a snapshot run: open these, pick that profile and view.
@@ -391,6 +398,38 @@ namespace LevelsScopePanel
                     rigs_->addItem(found_[i].label, QStringLiteral("rig:%1").arg(i));
             rigs_->addItem(QStringLiteral("Enter address…"), QStringLiteral("address"));
             rigs_->setCurrentIndex(0);
+            if (capture_) capture_->setEnabled(!rig_.address.isEmpty() && !captureThread_);
+        }
+
+        // One source frame from the rig, pulled off the UI thread into captures\.
+        void captureFrame()
+        {
+            if (captureThread_ || rig_.address.isEmpty()) return;
+            const QString name = rig_.label.section(QStringLiteral(" ("), 0, 0);
+            status_->setText(QStringLiteral("Capturing a frame from %1…").arg(name));
+            auto result = std::make_shared<LevelsScopeCapture::Result>();
+            const QString host = rig_.address;
+            const quint16 port = rig_.port;
+            captureThread_ = QThread::create([result, host, port] { LevelsScopeCapture::Capture(host, port, *result); });
+            captureThread_->setParent(this);
+            QThread* worker = captureThread_;
+            connect(worker, &QThread::finished, this, [this, worker, name, result] {
+                captureThread_ = nullptr;
+                worker->deleteLater();
+                capture_->setEnabled(!rig_.address.isEmpty());
+                if (!result->ok)
+                {
+                    status_->setText(QStringLiteral("No frame captured from %1: %2")
+                        .arg(name, QString::fromUtf8(result->error)));
+                    return;
+                }
+                status_->setText(QStringLiteral("Captured a %1×%2 %3 frame%4: %5")
+                    .arg(result->width).arg(result->height).arg(result->encoding,
+                        result->rendererReport ? QString() : QStringLiteral(" (without VP's own measurements)"),
+                        QDir::toNativeSeparators(result->pixelPath)));
+            });
+            capture_->setEnabled(false);
+            worker->start();
         }
 
         // A config read (file or rig): its DTM profiles fill the picker. From a
@@ -635,6 +674,8 @@ namespace LevelsScopePanel
         QList<LevelsScopeRigSearch::FoundTarget> found_;
         LevelsScopeRigSearch::FoundTarget rig_;
         QThread* rigThread_ = nullptr;
+        QPushButton* capture_ = nullptr;
+        QThread* captureThread_ = nullptr;
         // Each open log as last read, with the size and time it had then.
         struct ReadLog
         {
