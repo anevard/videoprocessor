@@ -45,19 +45,27 @@ namespace LevelsScopeSources
     }
 
     // A rig's config as the Config GUI fetches it: GetConfig over his
-    // ConfigurationRpcClient. Blocks on the network; run it off the UI thread.
+    // ConfigurationRpcClient, then the Rendering profile VP is running
+    // (GetActiveProfileStatus; read only, never SelectProfile). Blocks on the
+    // network; run it off the UI thread.
     struct RigConfig
     {
         std::string path;
         std::string bytes;
         std::string error;
         bool ok = false;
+        std::string activeRendering;   // its section, e.g. vprenderer.Default; empty if VP did not say
     };
 
     inline void FetchRigConfig(const QString& host, quint16 port, RigConfig& result)
     {
         ConfigurationRpcClient client(host.toStdString(), port);
         result.ok = client.GetConfig(result.path, result.bytes, result.error);
+        if (!result.ok) return;
+        ConfigurationRpcProtocol::LiveProfileStatus status;
+        std::string statusError;
+        if (client.GetActiveProfileStatus(status, statusError) && status.available)
+            result.activeRendering = status.renderer;
     }
 
     // The fetched bytes as a document, loaded as the Config GUI loads them.
