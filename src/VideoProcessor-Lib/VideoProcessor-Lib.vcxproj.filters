@@ -186,6 +186,9 @@
     <ClInclude Include="video_frame_formatter\CPluginPassThroughVideoFrameFormatter.h">
       <Filter>Header Files\video_frame_formatter</Filter>
     </ClInclude>
+    <ClInclude Include="source_plugin\SourcePluginCaptureDevice.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="ACaptureDevice.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -503,6 +506,9 @@
     </ClCompile>
     <ClCompile Include="video_frame_formatter\CPluginPassThroughVideoFrameFormatter.cpp">
       <Filter>Source Files\video_frame_formatter</Filter>
+    </ClCompile>
+    <ClCompile Include="source_plugin\SourcePluginCaptureDevice.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ACaptureDevice.cpp">
       <Filter>Source Files</Filter>

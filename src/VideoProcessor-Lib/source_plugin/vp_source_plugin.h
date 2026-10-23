@@ -17,7 +17,9 @@
  *
  * Threads (VP keeps all of its own threading; the plugin never calls VP
  * except through vp_source_host):
- *   - create, destroy, start, stop, get_state, send_command: VP's GUI thread.
+ *   - create, start, stop, get_state, send_command: VP's GUI thread.
+ *   - destroy: any thread, once, after every frame is released (the last
+ *     release can come from a renderer thread after stop).
  *   - wait_frame: VP's one reader thread for this instance, between start
  *     and stop only.
  *   - release_frame, clock_now, frames_*: any thread, at any time between
@@ -179,8 +181,9 @@ typedef struct vp_source_plugin_api {
     const char* name;           /* UTF-8; the input's name in VP */
 
     int32_t (*create)(const vp_source_host* host, vp_source_instance** out);
-    void    (*destroy)(vp_source_instance* inst);   /* after every frame
-                                                       is released */
+    void    (*destroy)(vp_source_instance* inst);   /* any thread, after
+                                                       every frame is
+                                                       released */
 
     int32_t (*start)(vp_source_instance* inst);
     int32_t (*stop)(vp_source_instance* inst);      /* wakes wait_frame */
