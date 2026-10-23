@@ -1,6 +1,7 @@
 #pragma once
 #include "LevelsScopeData.h"
 #include "LevelsScopeSections.h"
+#include "LevelsScopeSettings.h"
 #include "LevelsScopeSources.h"
 #include "LevelsScopeView.h"
 #include <ConfigEditorCore.h>
@@ -19,7 +20,6 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollBar>
-#include <QSettings>
 #include <QSignalBlocker>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -37,10 +37,11 @@ namespace LevelsScopePanel
     class Panel : public QWidget
     {
     public:
-        // `settingsName` keeps a snapshot run's choices apart from the window's.
-        explicit Panel(QWidget* parent = nullptr, const QString& settingsName = QStringLiteral("Levels Scope"),
+        // Settings are JSON files in `settingsFolder`; none (a snapshot run):
+        // kept in memory only, nothing read or written.
+        explicit Panel(QWidget* parent = nullptr, const QString& settingsFolder = LevelsScopeSettings::DefaultFolder(),
             bool restore = true)
-            : QWidget(parent), settings_(QStringLiteral("VideoProcessor"), settingsName)
+            : QWidget(parent), window_(settingsFolder)
         {
             // His theme paints only #root, QMainWindow and his own widgets dark;
             // the rest comes from the colours his Config page and charts use.
@@ -109,10 +110,10 @@ namespace LevelsScopePanel
                 controls->addSpacing(14);
             };
             chart_ = new LevelsScopeView::Chart;
-            const int view = settings_.value(QStringLiteral("view"), 1).toInt();
+            const int view = window_.view();
             group({ QStringLiteral("Input scope"), QStringLiteral("In vs out") }, view, [this](int id) {
                 chart_->setView(id == 0 ? LevelsScopeView::View::Input : LevelsScopeView::View::InOut);
-                settings_.setValue(QStringLiteral("view"), id);
+                window_.setView(id);
                 rebuildLegend();
                 syncScroll();
             });
@@ -135,7 +136,7 @@ namespace LevelsScopePanel
             chart_->setView(view == 0 ? LevelsScopeView::View::Input : LevelsScopeView::View::InOut);
             for (const auto* list : { &LevelsScopeView::InputTraces(), &LevelsScopeView::InOutTraces() })
                 for (const auto& t : *list)
-                    chart_->setShown(t.key, settings_.value(QStringLiteral("shown/") + QString::fromStdString(t.key), true).toBool());
+                    chart_->setShown(t.key, window_.shown(QString::fromStdString(t.key)));
             chart_->setNames([this](const LevelsScopeData::Section& s) { return picker_.shortName(s); });
             // The chart with its brightness scrollbar on the right, time below.
             auto* chartRow = new QHBoxLayout;
@@ -161,16 +162,16 @@ namespace LevelsScopePanel
 
             connect(openLogs, &QPushButton::clicked, this, [this] {
                 const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("Open vp.log files"),
-                    settings_.value(QStringLiteral("lastDir")).toString(), QStringLiteral("VP logs (*.log *.log.* vp*);;All files (*)"));
+                    window_.lastDir(), QStringLiteral("VP logs (*.log *.log.* vp*);;All files (*)"));
                 if (files.isEmpty()) return;
-                settings_.setValue(QStringLiteral("lastDir"), QFileInfo(files.first()).absolutePath());
+                window_.setLastDir(QFileInfo(files.first()).absolutePath());
                 loadLogs(files);
             });
             connect(openFolder, &QPushButton::clicked, this, [this] {
                 const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Open a logs folder"),
-                    settings_.value(QStringLiteral("lastDir")).toString());
+                    window_.lastDir());
                 if (dir.isEmpty()) return;
-                settings_.setValue(QStringLiteral("lastDir"), dir);
+                window_.setLastDir(dir);
                 loadLogs(LevelsScopeSources::FilesIn(dir));
             });
             connect(openConfig, &QPushButton::clicked, this, [this] {
@@ -179,12 +180,12 @@ namespace LevelsScopePanel
                 if (!file.isEmpty()) loadConfig(file);
             });
             connect(profiles_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
-                settings_.setValue(QStringLiteral("profile"), profiles_->currentData().toString());
+                window_.setProfile(profiles_->currentData().toString());
                 place();
             });
             connect(sections_, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* item, int column) {
                 if (picker_.filling()) return;
-                picker_.edited(item, column, settings_);
+                picker_.edited(item, column);
                 showPicked();
             });
             connect(sections_, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
@@ -195,14 +196,14 @@ namespace LevelsScopePanel
             chart_->onMoved = [this] { syncScroll(); };
             chart_->onHover = [this](const QString& text) { readout_->setText(text); };
 
-            picker_.load(settings_);
+            picker_.load(settingsFolder);
             if (!restore)
             {
                 rebuildLegend();
                 updateNote();
                 return;
             }
-            QString config = settings_.value(QStringLiteral("config")).toString();
+            QString config = window_.config();
             if (config.isEmpty() || !QFileInfo::exists(config))
             {
                 // Beside the Config application's folder: <portable>\VideoProcessor.cfg.
@@ -212,7 +213,6 @@ namespace LevelsScopePanel
             if (!config.isEmpty()) loadConfig(config);
             rebuildLegend();
             // Starts blank: logs are opened each time, never reopened from last time.
-            settings_.remove(QStringLiteral("logs"));
             reload();
         }
 
@@ -246,10 +246,10 @@ namespace LevelsScopePanel
             }
             document_ = doc;
             configPath_ = path;
-            settings_.setValue(QStringLiteral("config"), path);
+            window_.setConfig(path);
             configLabel_->setText(QDir::toNativeSeparators(path));
             configLabel_->setToolTip(QDir::toNativeSeparators(path));
-            const QString wanted = settings_.value(QStringLiteral("profile")).toString();
+            const QString wanted = window_.profile();
             const QSignalBlocker block(profiles_);
             profiles_->clear();
             for (const auto& [shown, name] : LevelsScopeSources::DtmProfiles(document_))
@@ -350,7 +350,7 @@ namespace LevelsScopePanel
                 delete item->widget();
                 delete item;
             }
-            const bool input = settings_.value(QStringLiteral("view"), 1).toInt() == 0;
+            const bool input = window_.view() == 0;
             for (const auto& t : input ? LevelsScopeView::InputTraces() : LevelsScopeView::InOutTraces())
             {
                 // The chips of the Config page's charts (ToneChartPanel): the
@@ -368,7 +368,7 @@ namespace LevelsScopePanel
                 const std::string key = t.key;
                 connect(b, &QToolButton::toggled, this, [this, key](bool on) {
                     chart_->setShown(key, on);
-                    settings_.setValue(QStringLiteral("shown/") + QString::fromStdString(key), on);
+                    window_.setShown(QString::fromStdString(key), on);
                 });
                 legend_->addWidget(b);
             }
@@ -398,7 +398,7 @@ namespace LevelsScopePanel
             else if (!placeError_.isEmpty())
                 note = QStringLiteral("The scope needs %1's libplacebo beside this program's folder: %2")
                     .arg(QString::fromWCharArray(ToneCurveRuntime::RendererName()), placeError_);
-            else if (settings_.value(QStringLiteral("view"), 1).toInt() == 0)
+            else if (window_.view() == 0)
                 note = QStringLiteral("Input scope: what VP logged. Measured values are libplacebo's peak detection; "
                                       "L1 and the mastering range are what the stream declared. Screen lines: the profile's target %1 / %2.")
                     .arg(LevelsScopeView::Short(request_.targetNits), LevelsScopeView::Short(request_.blackNits));
@@ -411,7 +411,7 @@ namespace LevelsScopePanel
             note_->setText(note);
         }
 
-        QSettings settings_;
+        LevelsScopeSettings::Window window_;
         ConfigEditorCore::ConfigDocument document_;
         QString configPath_, placeError_;
         ToneCurveProvider::Request request_;
