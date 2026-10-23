@@ -31,6 +31,8 @@
 #include <QWidget>
 #include <map>
 #include <memory>
+#include <map>
+#include <memory>
 #include <set>
 
 // The Levels Scope page: open logs, pick a profile of a saved
@@ -46,7 +48,7 @@ namespace LevelsScopePanel
         // kept in memory only, nothing read or written.
         explicit Panel(QWidget* parent = nullptr, const QString& settingsFolder = LevelsScopeSettings::DefaultFolder(),
             bool restore = true)
-            : QWidget(parent), window_(settingsFolder)
+            : QWidget(parent), window_(settingsFolder), background_(restore)
         {
             // His theme paints only #root, QMainWindow and his own widgets dark;
             // the rest comes from the colours his Config page and charts use.
@@ -252,6 +254,7 @@ namespace LevelsScopePanel
         ~Panel() override
         {
             if (rigThread_) rigThread_->wait();
+            if (readThread_) readThread_->wait();
         }
 
         // For a snapshot run: open these, pick that profile and view.
@@ -425,10 +428,64 @@ namespace LevelsScopePanel
             reload();
         }
 
-        // Every open log read again into sections, then placed and drawn.
-        void reload()
+        // Every open log merged into sections, then placed and drawn. A log
+        // not read yet, or changed since it was (`readChanged`), is read first:
+        // off the window's thread in the window, at once in a snapshot run.
+        void reload(bool readChanged = true)
         {
-            library_ = LevelsScopeData::Read(files_);
+            if (readThread_) return;   // runs again when the read finishes
+            QStringList notes;
+            const QStringList logs = VpLogFiles::LogFiles(files_, notes);
+            QStringList unread;
+            auto pending = std::make_shared<std::vector<ReadLog>>();
+            for (const QString& path : logs)
+            {
+                const QFileInfo info(path);
+                const auto kept = read_.find(path);
+                if (kept == read_.end() || (readChanged && (kept->second.size != info.size() ||
+                    kept->second.modified != info.lastModified())))
+                {
+                    unread << path;
+                    pending->push_back(ReadLog{ info.size(), info.lastModified(), {} });
+                }
+            }
+            if (!unread.isEmpty())
+            {
+                const auto keep = [this, unread, pending] {
+                    for (int i = 0; i < unread.size(); ++i)
+                        read_[unread.at(i)] = std::move((*pending)[i]);
+                };
+                if (!background_)
+                {
+                    std::vector<VpLogFiles::FileLog> files = VpLogFiles::ReadFiles(unread);
+                    for (size_t i = 0; i < files.size(); ++i) (*pending)[i].log = std::move(files[i]);
+                    keep();
+                }
+                else
+                {
+                    status_->setText(unread.size() == 1 ? QStringLiteral("Reading 1 log…")
+                        : QStringLiteral("Reading %1 logs…").arg(unread.size()));
+                    readThread_ = QThread::create([unread, pending] {
+                        std::vector<VpLogFiles::FileLog> files = VpLogFiles::ReadFiles(unread);
+                        for (size_t i = 0; i < files.size(); ++i) (*pending)[i].log = std::move(files[i]);
+                    });
+                    readThread_->setParent(this);
+                    QThread* worker = readThread_;
+                    connect(worker, &QThread::finished, this, [this, worker, keep] {
+                        readThread_ = nullptr;
+                        worker->deleteLater();
+                        keep();
+                        reload(false);
+                    });
+                    worker->start();
+                    return;
+                }
+            }
+            for (auto it = read_.begin(); it != read_.end();)
+                it = logs.contains(it->first) ? std::next(it) : read_.erase(it);
+            std::vector<const VpLogFiles::FileLog*> each;
+            for (const QString& path : logs) each.push_back(&read_.at(path).log);
+            library_ = LevelsScopeData::FromLogs(VpLogFiles::Merge(each, notes));
             QString text = files_.isEmpty() ? QStringLiteral("No logs open.") : library_.notes.join(QStringLiteral(" · "));
             if (!files_.isEmpty() && library_.sections.empty())
                 text += QStringLiteral(" No sections of 2 minutes or more: the logs need a build that writes "
@@ -578,6 +635,16 @@ namespace LevelsScopePanel
         QList<LevelsScopeRigSearch::FoundTarget> found_;
         LevelsScopeRigSearch::FoundTarget rig_;
         QThread* rigThread_ = nullptr;
+        // Each open log as last read, with the size and time it had then.
+        struct ReadLog
+        {
+            qint64 size = 0;
+            QDateTime modified;
+            VpLogFiles::FileLog log;
+        };
+        std::map<QString, ReadLog> read_;
+        QThread* readThread_ = nullptr;
+        bool background_ = true;   // logs read off the window's thread (not in a snapshot run)
         QString lastAutoAttempt_;
         QComboBox* rigs_ = nullptr;
         ToneCurveProvider::Request request_;
