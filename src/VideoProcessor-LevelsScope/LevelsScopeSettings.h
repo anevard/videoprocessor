@@ -7,12 +7,15 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QSaveFile>
+#include <QSettings>
 #include <QString>
 
 // The scope's settings, as JSON files in one folder inside the VideoProcessor
 // folder: window.json (this PC's view, traces, last folder, config and profile)
-// and sections.json (the picker's ticks and names). Never the registry. With no
-// folder (a snapshot run) settings live in memory only and nothing is written.
+// and sections.json (the picker's ticks and names). With no folder (a snapshot
+// run) settings live in memory only and nothing is written. The one exception
+// is the rig the config comes from (Rig, below): in the registry, as the Config
+// GUI keeps its own.
 namespace LevelsScopeSettings
 {
     // <VideoProcessor folder>\levels-scope, beside config\ where the scope runs.
@@ -79,5 +82,40 @@ namespace LevelsScopeSettings
 
         QString path_;
         QJsonObject data_;
+    };
+
+    // The rig the config comes from, under the scope's own key and laid out
+    // like the Config GUI's configRpc values (never his key). selectedInstanceId:
+    // "local" for a config file on this PC, "manual:<host>:<port>" for a typed
+    // address, else the rig's instance id.
+    class Rig
+    {
+    public:
+        QString selectedInstanceId() const { return settings_.value(QStringLiteral("configRpc/selectedInstanceId")).toString(); }
+        QString selectedLabel() const { return settings_.value(QStringLiteral("configRpc/selectedLabel")).toString(); }
+        QString manualHost() const { return settings_.value(QStringLiteral("configRpc/manualHost")).toString(); }
+        quint16 manualPort() const { return static_cast<quint16>(settings_.value(QStringLiteral("configRpc/manualPort"), 41686).toUInt()); }
+
+        void rememberLocal()
+        {
+            settings_.setValue(QStringLiteral("configRpc/selectedInstanceId"), QStringLiteral("local"));
+            settings_.setValue(QStringLiteral("configRpc/selectedLabel"), QStringLiteral("This computer"));
+        }
+        // As the Config GUI remembers a rig: by instance id, or a typed address.
+        void remember(const QString& instanceId, const QString& label, const QString& host, quint16 port)
+        {
+            settings_.setValue(QStringLiteral("configRpc/selectedLabel"), label);
+            if (!instanceId.isEmpty())
+                settings_.setValue(QStringLiteral("configRpc/selectedInstanceId"), instanceId);
+            else
+            {
+                settings_.setValue(QStringLiteral("configRpc/selectedInstanceId"), QStringLiteral("manual:%1:%2").arg(host).arg(port));
+                settings_.setValue(QStringLiteral("configRpc/manualHost"), host);
+                settings_.setValue(QStringLiteral("configRpc/manualPort"), port);
+            }
+        }
+
+    private:
+        QSettings settings_{ QStringLiteral("VideoProcessor"), QStringLiteral("Levels Scope") };
     };
 }

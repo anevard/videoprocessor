@@ -43,12 +43,12 @@
       <LanguageStandard>stdcpp17</LanguageStandard><RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <AdditionalOptions>/utf-8 /Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;VP_CONFIGFILE_STANDALONE;QT_WIDGETS_LIB;QT_GUI_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\VideoProcessor-Config\standalone;$(QtRoot)\include;$(QtRoot)\include\QtWidgets;$(QtRoot)\include\QtGui;$(QtRoot)\include\QtCore;..\VideoProcessor-Config;..\VideoProcessor-ChartCore;..\VideoProcessor-Lib;..\VideoProcessor-ConfigCore;..\..\3rdparty\libplacebo-beta\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\VideoProcessor-Config\standalone;$(QtRoot)\include;$(QtRoot)\include\QtWidgets;$(QtRoot)\include\QtGui;$(QtRoot)\include\QtCore;$(QtRoot)\include\QtNetwork;..\VideoProcessor-Config;..\VideoProcessor-ChartCore;..\VideoProcessor-Lib;..\VideoProcessor-ConfigCore;..\..\3rdparty\libplacebo-beta\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(QtRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>Qt6Widgetsd.lib;Qt6Guid.lib;Qt6Cored.lib;shell32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Qt6Widgetsd.lib;Qt6Guid.lib;Qt6Cored.lib;Qt6Networkd.lib;Ws2_32.lib;shell32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -57,12 +57,12 @@
       <LanguageStandard>stdcpp17</LanguageStandard><RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><FunctionLevelLinking>true</FunctionLevelLinking>
       <AdditionalOptions>/utf-8 /Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;VP_CONFIGFILE_STANDALONE;QT_NO_DEBUG;QT_WIDGETS_LIB;QT_GUI_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\VideoProcessor-Config\standalone;$(QtRoot)\include;$(QtRoot)\include\QtWidgets;$(QtRoot)\include\QtGui;$(QtRoot)\include\QtCore;..\VideoProcessor-Config;..\VideoProcessor-ChartCore;..\VideoProcessor-Lib;..\VideoProcessor-ConfigCore;..\..\3rdparty\libplacebo-beta\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\VideoProcessor-Config\standalone;$(QtRoot)\include;$(QtRoot)\include\QtWidgets;$(QtRoot)\include\QtGui;$(QtRoot)\include\QtCore;$(QtRoot)\include\QtNetwork;..\VideoProcessor-Config;..\VideoProcessor-ChartCore;..\VideoProcessor-Lib;..\VideoProcessor-ConfigCore;..\..\3rdparty\libplacebo-beta\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(QtRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>Qt6Widgets.lib;Qt6Gui.lib;Qt6Core.lib;shell32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Qt6Widgets.lib;Qt6Gui.lib;Qt6Core.lib;Qt6Network.lib;Ws2_32.lib;shell32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -79,6 +79,9 @@
     <ClCompile Include="..\VideoProcessor-ConfigCore\ConfigEditorCore.cpp">
       <ObjectFileName>$(IntDir)ConfigEditorCore.obj</ObjectFileName>
     </ClCompile>
+    <ClCompile Include="..\VideoProcessor-ConfigCore\ConfigurationRpcClient.cpp">
+      <ObjectFileName>$(IntDir)ConfigurationRpcClient.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\VideoProcessor-Lib\ShaderConfigValidation.cpp">
       <ObjectFileName>$(IntDir)ShaderConfigValidation.obj</ObjectFileName>
     </ClCompile>
@@ -92,6 +95,7 @@
   <ItemGroup>
     <ClInclude Include="LevelsScopeData.h" />
     <ClInclude Include="LevelsScopePanel.h" />
+    <ClInclude Include="LevelsScopeRigSearch.h" />
     <ClInclude Include="LevelsScopeSections.h" />
     <ClInclude Include="LevelsScopeSettings.h" />
     <ClInclude Include="LevelsScopeSources.h" />
@@ -110,6 +114,8 @@
     <ClInclude Include="..\VideoProcessor-ChartCore\VpLogFiles.h" />
     <ClInclude Include="..\VideoProcessor-Config\RenderingBuiltInDefault.h" />
     <ClInclude Include="..\VideoProcessor-ConfigCore\ConfigEditorCore.h" />
+    <ClInclude Include="..\VideoProcessor-ConfigCore\ConfigurationRpcClient.h" />
+    <ClInclude Include="..\VideoProcessor-ConfigCore\ConfigurationRpcProtocol.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
