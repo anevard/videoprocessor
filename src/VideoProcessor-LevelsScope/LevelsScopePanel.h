@@ -316,7 +316,8 @@ namespace LevelsScopePanel
                 if (rigMemory_) rigMemory_->remember(target.instanceId, target.label, target.address, target.port);
                 fillRigs();
                 useDocument(LevelsScopeSources::RigDocument(*result),
-                    QStringLiteral("%1: %2").arg(name, QDir::toNativeSeparators(QString::fromUtf8(result->path))));
+                    QStringLiteral("%1: %2").arg(name, QDir::toNativeSeparators(QString::fromUtf8(result->path))),
+                    QString::fromLocal8Bit(result->activeRendering.c_str()));
             });
             worker->start();
             fillRigs();
@@ -389,14 +390,18 @@ namespace LevelsScopePanel
             rigs_->setCurrentIndex(0);
         }
 
-        // A config read (file or rig): its DTM profiles fill the picker.
-        void useDocument(const ConfigEditorCore::ConfigDocument& doc, const QString& source)
+        // A config read (file or rig): its DTM profiles fill the picker. From a
+        // rig, the profile VP is running is picked when it is a DTM profile;
+        // otherwise the last one chosen here.
+        void useDocument(const ConfigEditorCore::ConfigDocument& doc, const QString& source, const QString& running = {})
         {
             document_ = doc;
             hasConfig_ = true;
             configLabel_->setText(source);
             configLabel_->setToolTip(source);
-            const QString wanted = window_.profile();
+            QString wanted = window_.profile();
+            for (const auto& profile : LevelsScopeSources::DtmProfiles(document_))
+                if (!running.isEmpty() && profile.name.compare(running, Qt::CaseInsensitive) == 0) wanted = running;
             const QSignalBlocker block(profiles_);
             profiles_->clear();
             for (const auto& [shown, name] : LevelsScopeSources::DtmProfiles(document_))
