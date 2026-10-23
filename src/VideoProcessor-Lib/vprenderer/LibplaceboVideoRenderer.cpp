@@ -4628,6 +4628,64 @@ struct LibplaceboVideoRenderer::Impl
 	uint64_t hdrStatusNextLogTick = 0;
 	// The L1 minimum, maximum and average last seen; a change logs at once.
 	double hdrStatusLoggedL1[3] = { -1.0f, -1.0f, -1.0f };
+	// Source capture report: armed for one device frame counter by the host,
+	// filled once by the render thread after that frame's main render.
+	std::atomic<bool> sourceCaptureArmed{ false };
+	std::atomic<uint64_t> sourceCaptureCounter{ 0 };
+	mutable std::mutex sourceCaptureMutex;
+	RendererSourceCaptureReport sourceCaptureReport;
+
+	void FillSourceCaptureReport(uint64_t deviceCounter,
+		const RendererHdrStatus& hdr, const pl_frame& image,
+		const DolbyVisionLuminanceStatus& dv)
+	{
+		if (!sourceCaptureArmed.load(std::memory_order_acquire) ||
+			sourceCaptureCounter.load(std::memory_order_acquire) != deviceCounter)
+			return;
+		RendererSourceCaptureReport report;
+		report.deviceCounter = deviceCounter;
+		report.filled = true;
+		report.hdr = hdr;
+		strncpy_s(report.sourceLevels,
+			image.repr.levels == PL_COLOR_LEVELS_LIMITED ? "limited" : "full",
+			_TRUNCATE);
+		strncpy_s(report.sourceTransfer,
+			pl_color_transfer_name(image.color.transfer), _TRUNCATE);
+		strncpy_s(report.sourcePrimaries,
+			pl_color_primaries_name(image.color.primaries), _TRUNCATE);
+		report.sourceMinNits = image.color.hdr.min_luma;
+		report.sourceMaxNits = image.color.hdr.max_luma;
+		report.scenePeakPq = image.color.hdr.max_pq_y;
+		report.sceneAveragePq = image.color.hdr.avg_pq_y;
+		report.dvAvailable = dv.available;
+		report.dvSourceRangeFromMetadata = dv.sourceRangeFromMetadata;
+		report.dvSceneAvailable = dv.sceneAvailable;
+		report.dvSourceMinNits = dv.sourceMin;
+		report.dvSourceMaxNits = dv.sourceMax;
+		report.dvSceneMinNits = dv.sceneMin;
+		report.dvSceneMaxNits = dv.sceneMax;
+		report.dvSceneAvgNits = dv.sceneAvg;
+		// RenderLocked holds renderMutex, which guards the geometry; trusted
+		// only as GetDetectedPictureAspect trusts it.
+		if (nlsGeometryAvailable &&
+			nlsGeometrySourceGeneration == activePictureAnalysisSourceGeneration &&
+			(nlsGeometryClassification == ActivePictureClassification::FULL_RASTER_TRUSTED ||
+			 nlsGeometryClassification == ActivePictureClassification::BAR_CROP_TRUSTED) &&
+			nlsGeometry.right > nlsGeometry.left && nlsGeometry.bottom > nlsGeometry.top)
+		{
+			report.boundsAvailable = true;
+			report.boundsLeft = nlsGeometry.left;
+			report.boundsTop = nlsGeometry.top;
+			report.boundsRight = nlsGeometry.right;
+			report.boundsBottom = nlsGeometry.bottom;
+		}
+		std::lock_guard<std::mutex> lock(sourceCaptureMutex);
+		if (!sourceCaptureArmed.load(std::memory_order_acquire) ||
+			sourceCaptureCounter.load(std::memory_order_acquire) != deviceCounter)
+			return;
+		sourceCaptureReport = report;
+		sourceCaptureArmed.store(false, std::memory_order_release);
+	}
 	ActivePictureTransitionModel nlsTransition;
 	ConfiguredShaderRule nlsRule;
 	std::string requestedShaderSelector;
@@ -18771,6 +18829,8 @@ releaseDriftBaseRetention =
         RendererHdrStatus renderedHdrStatus;
         if(rendered && !temporalRenderer.HdrStatusSnapshot(renderedHdrStatus))
             renderedHdrStatus=FrameHdrStatus::Capture(directHdrSource,renderer,renderParams.peak_detect_params!=nullptr);
+        if(rendered)
+            FillSourceCaptureReport(videoFrame.GetCounter(),renderedHdrStatus,renderImage,frameDvLuminance);
         LogHdrPeakAnalysisMetrics(hdrPeakAnalysisDecision,sourceSequence,rendered,renderedHdrStatus);
 		const double renderMs = std::chrono::duration<double, std::milli>(
 			SteadyClock::now() - renderStart).count();
@@ -21890,6 +21950,28 @@ bool LibplaceboVideoRenderer::GetHdrStatus(RendererHdrStatus& status) const
 	if (!m_impl)
 		return false;
 	return m_impl->HdrStatusSnapshot(status);
+}
+
+bool LibplaceboVideoRenderer::ArmSourceCaptureReport(uint64_t deviceCounter)
+{
+	if (!m_impl)
+		return false;
+	std::lock_guard<std::mutex> lock(m_impl->sourceCaptureMutex);
+	m_impl->sourceCaptureReport = {};
+	m_impl->sourceCaptureCounter.store(deviceCounter, std::memory_order_release);
+	m_impl->sourceCaptureArmed.store(true, std::memory_order_release);
+	return true;
+}
+
+bool LibplaceboVideoRenderer::GetSourceCaptureReport(
+	RendererSourceCaptureReport& report) const
+{
+	report = {};
+	if (!m_impl)
+		return false;
+	std::lock_guard<std::mutex> lock(m_impl->sourceCaptureMutex);
+	report = m_impl->sourceCaptureReport;
+	return report.filled;
 }
 
 

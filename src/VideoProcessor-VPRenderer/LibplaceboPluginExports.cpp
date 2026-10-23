@@ -77,6 +77,26 @@ VideoProcessorLibplaceboGetHdrStatus(
 	return static_cast<const LibplaceboVideoRenderer*>(renderer)->GetHdrStatus(*status);
 }
 
+extern "C" __declspec(dllexport) bool __cdecl
+VideoProcessorLibplaceboArmSourceCaptureReport(
+	IVideoRenderer* renderer,
+	uint64_t deviceCounter)
+{
+	if (!renderer)
+		return false;
+	return static_cast<LibplaceboVideoRenderer*>(renderer)->ArmSourceCaptureReport(deviceCounter);
+}
+
+extern "C" __declspec(dllexport) bool __cdecl
+VideoProcessorLibplaceboGetSourceCaptureReport(
+	const IVideoRenderer* renderer,
+	RendererSourceCaptureReport* report)
+{
+	if (!renderer || !report || !report->Supported())
+		return false;
+	return static_cast<const LibplaceboVideoRenderer*>(renderer)->GetSourceCaptureReport(*report);
+}
+
 extern "C" __declspec(dllexport) bool __cdecl VideoProcessorLibplaceboIsBeta()
 {
 #if defined(VP_LIBPLACEBO_BETA)
