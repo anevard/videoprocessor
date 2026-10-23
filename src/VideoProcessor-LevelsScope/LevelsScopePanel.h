@@ -1,5 +1,7 @@
 #pragma once
 #include "LevelsScopeData.h"
+#include "LevelsScopeSections.h"
+#include "LevelsScopeSources.h"
 #include "LevelsScopeView.h"
 #include <ConfigEditorCore.h>
 #include <RenderingBuiltInDefault.h>
@@ -8,11 +10,9 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
-#include <QDirIterator>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
-#include <QHeaderView>
 #include <QIcon>
 #include <QLabel>
 #include <QPainter>
@@ -88,15 +88,7 @@ namespace LevelsScopePanel
             logsRow->addStretch(1);
             layout->addLayout(logsRow);
 
-            // Sections: tick to show, double-click a name to rename.
-            sections_ = new QTreeWidget;
-            sections_->setColumnCount(5);
-            sections_->setHeaderLabels({ QStringLiteral("Section"), QStringLiteral("Start"), QStringLiteral("Length"),
-                QStringLiteral("Mastering (metadata)"), QStringLiteral("Build") });
-            sections_->setRootIsDecorated(false);
-            sections_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-            sections_->setMaximumHeight(150);
-            sections_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+            sections_ = LevelsScopeSections::Picker::MakeTable();
             layout->addWidget(sections_);
 
             // The view, how to zoom, and the traces of the view.
@@ -144,7 +136,7 @@ namespace LevelsScopePanel
             for (const auto* list : { &LevelsScopeView::InputTraces(), &LevelsScopeView::InOutTraces() })
                 for (const auto& t : *list)
                     chart_->setShown(t.key, settings_.value(QStringLiteral("shown/") + QString::fromStdString(t.key), true).toBool());
-            chart_->setNames([this](const LevelsScopeData::Section& s) { return shortName(s); });
+            chart_->setNames([this](const LevelsScopeData::Section& s) { return picker_.shortName(s); });
             // The chart with its brightness scrollbar on the right, time below.
             auto* chartRow = new QHBoxLayout;
             chartRow->setSpacing(2);
@@ -179,10 +171,7 @@ namespace LevelsScopePanel
                     settings_.value(QStringLiteral("lastDir")).toString());
                 if (dir.isEmpty()) return;
                 settings_.setValue(QStringLiteral("lastDir"), dir);
-                QStringList files;
-                QDirIterator it(dir, QDir::Files, QDirIterator::Subdirectories);
-                while (it.hasNext()) files << it.next();
-                loadLogs(files);
+                loadLogs(LevelsScopeSources::FilesIn(dir));
             });
             connect(openConfig, &QPushButton::clicked, this, [this] {
                 const QString file = QFileDialog::getOpenFileName(this, QStringLiteral("Open VideoProcessor.cfg"),
@@ -194,16 +183,8 @@ namespace LevelsScopePanel
                 place();
             });
             connect(sections_, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* item, int column) {
-                if (filling_) return;
-                const QString id = item->data(0, Qt::UserRole).toString();
-                if (column == 0)
-                {
-                    picked_[id] = item->checkState(0) == Qt::Checked;
-                    const QString text = item->text(0).trimmed();
-                    const QString kind = item->data(0, Qt::UserRole + 1).toString();
-                    if (text.isEmpty() || text == kind) names_.erase(id); else names_[id] = text;
-                    saveSections();
-                }
+                if (picker_.filling()) return;
+                picker_.edited(item, column, settings_);
                 showPicked();
             });
             connect(sections_, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
@@ -214,7 +195,7 @@ namespace LevelsScopePanel
             chart_->onMoved = [this] { syncScroll(); };
             chart_->onHover = [this](const QString& text) { readout_->setText(text); };
 
-            loadSections();
+            picker_.load(settings_);
             if (!restore)
             {
                 rebuildLegend();
@@ -254,14 +235,6 @@ namespace LevelsScopePanel
         QString status() const { return status_->text(); }
 
     private:
-        // Rendering profiles that set any tone or target key: the DTM profiles.
-        static bool IsDtmProfile(const ConfigEditorCore::ConfigDocument& doc, const std::string& section)
-        {
-            for (const char* key : { "tone_mapping", "peak_detection", "sdr_target_nits", "dynamic_target", "knee_default" })
-                if (!doc.Get(section.c_str(), key).empty()) return true;
-            return false;
-        }
-
         void loadConfig(const QString& path)
         {
             ConfigEditorCore::ConfigDocument doc;
@@ -279,13 +252,8 @@ namespace LevelsScopePanel
             const QString wanted = settings_.value(QStringLiteral("profile")).toString();
             const QSignalBlocker block(profiles_);
             profiles_->clear();
-            for (const std::string& section : document_.SectionNames())
+            for (const auto& [shown, name] : LevelsScopeSources::DtmProfiles(document_))
             {
-                const QString name = QString::fromStdString(section);
-                if (!name.startsWith(QStringLiteral("vprenderer"), Qt::CaseInsensitive) || !IsDtmProfile(document_, section)) continue;
-                const QString label = QString::fromLocal8Bit(document_.Get(section.c_str(), "label").c_str()).trimmed();
-                const QString shown = !label.isEmpty() ? label :
-                    name.contains(u'.') ? name.mid(name.indexOf(u'.') + 1) : name;
                 profiles_->addItem(shown, name);
                 if (name.compare(wanted, Qt::CaseInsensitive) == 0) profiles_->setCurrentIndex(profiles_->count() - 1);
             }
@@ -295,11 +263,7 @@ namespace LevelsScopePanel
         // Opened logs join those already open (a sample in two files counts once).
         void loadLogs(const QStringList& paths)
         {
-            for (const QString& path : paths)
-            {
-                const QString file = QFileInfo(path).absoluteFilePath();
-                if (!files_.contains(file, Qt::CaseInsensitive)) files_ << file;
-            }
+            LevelsScopeSources::AddLogs(files_, paths);
             reload();
         }
 
@@ -365,50 +329,16 @@ namespace LevelsScopePanel
             updateNote();
         }
 
-        QString shortName(const LevelsScopeData::Section& s) const
-        {
-            const auto found = names_.find(s.id);
-            if (found != names_.end()) return found->second;
-            if (s.kind == QStringLiteral("Apple TV home screen")) return QStringLiteral("Home screen");
-            if (s.kind == QStringLiteral("Short DV clip")) return QStringLiteral("DV clip");
-            return s.kind;
-        }
-
-        bool isPicked(const LevelsScopeData::Section& s) const
-        {
-            const auto found = picked_.find(s.id);
-            if (found != picked_.end()) return found->second;
-            return s.kind != QStringLiteral("Apple TV home screen") && s.kind != QStringLiteral("Short DV clip");
-        }
-
         void fillSections()
         {
-            filling_ = true;
-            sections_->clear();
-            for (const auto& s : library_.sections)
-            {
-                const auto found = names_.find(s.id);
-                auto* item = new QTreeWidgetItem(sections_);
-                item->setFlags(item->flags() | Qt::ItemIsUserCheckable | Qt::ItemIsEditable);
-                item->setData(0, Qt::UserRole, s.id);
-                item->setData(0, Qt::UserRole + 1, s.kind);
-                item->setText(0, found != names_.end() ? found->second : s.kind);
-                item->setCheckState(0, isPicked(s) ? Qt::Checked : Qt::Unchecked);
-                item->setText(1, QDateTime::fromMSecsSinceEpoch(std::llround(s.a * 1000.0)).toString(QStringLiteral("d MMM HH:mm")));
-                item->setText(2, QStringLiteral("%1 min").arg(std::lround((s.b - s.a) / 60.0)));
-                item->setText(3, s.rangeKnown ? QStringLiteral("%1%2 – %3").arg(s.dolbyVision ? QStringLiteral("DV ") : QString(),
-                    ChartStyle::Nits(s.black), ChartStyle::Nits(s.peak)) : QStringLiteral("not declared"));
-                item->setText(4, s.build.isEmpty() ? QStringLiteral("not identified") : s.build);
-                item->setToolTip(0, s.files);
-            }
-            filling_ = false;
+            picker_.fill(sections_, library_);
             showPicked();
         }
 
         void showPicked()
         {
             std::vector<const LevelsScopeData::Section*> shown;
-            for (const auto& s : library_.sections) if (isPicked(s)) shown.push_back(&s);
+            for (const auto& s : library_.sections) if (picker_.isPicked(s)) shown.push_back(&s);
             chart_->setSections(shown);
             syncScroll();
         }
@@ -481,39 +411,13 @@ namespace LevelsScopePanel
             note_->setText(note);
         }
 
-        void loadSections()
-        {
-            settings_.beginGroup(QStringLiteral("sections"));
-            for (const QString& key : settings_.childKeys())
-            {
-                const QStringList v = settings_.value(key).toStringList();
-                const QString id = QString::fromUtf8(QByteArray::fromHex(key.toLatin1()));
-                if (v.size() >= 1) picked_[id] = v[0] == QStringLiteral("1");
-                if (v.size() >= 2 && !v[1].isEmpty()) names_[id] = v[1];
-            }
-            settings_.endGroup();
-        }
-
-        void saveSections()
-        {
-            settings_.beginGroup(QStringLiteral("sections"));
-            for (const auto& [id, on] : picked_)
-            {
-                const auto name = names_.find(id);
-                settings_.setValue(QString::fromLatin1(id.toUtf8().toHex()),
-                    QStringList{ on ? QStringLiteral("1") : QStringLiteral("0"), name != names_.end() ? name->second : QString() });
-            }
-            settings_.endGroup();
-        }
-
         QSettings settings_;
         ConfigEditorCore::ConfigDocument document_;
         QString configPath_, placeError_;
         ToneCurveProvider::Request request_;
         LevelsScopeData::Library library_;
-        bool placed_ = false, filling_ = false, syncing_ = false;
-        std::map<QString, bool> picked_;
-        std::map<QString, QString> names_;
+        bool placed_ = false, syncing_ = false;
+        LevelsScopeSections::Picker picker_;
         QComboBox* profiles_ = nullptr;
         QLabel* configLabel_ = nullptr;
         QLabel* status_ = nullptr;
