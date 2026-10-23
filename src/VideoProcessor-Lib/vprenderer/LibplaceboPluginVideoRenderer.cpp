@@ -22,6 +22,8 @@ namespace
 		VideoProcessorLibplaceboDestroyRendererFn destroyRenderer = nullptr;
 		VideoProcessorLibplaceboGetStartupReadinessFn startupReadiness = nullptr;
 		VideoProcessorLibplaceboGetHdrStatusFn getHdrStatus = nullptr; // optional
+		VideoProcessorLibplaceboArmSourceCaptureFn armSourceCapture = nullptr; // optional
+		VideoProcessorLibplaceboGetSourceCaptureFn getSourceCapture = nullptr; // optional
 	};
 
     void __cdecl ForwardAnalysisRecord(void* context,const AnalysisDiagnosticRecordV1* record) {
@@ -133,6 +135,10 @@ namespace
 		}
 		result.getHdrStatus = reinterpret_cast<VideoProcessorLibplaceboGetHdrStatusFn>(
 			GetProcAddress(result.module, VP_LIBPLACEBO_HDR_STATUS_EXPORT));
+		result.armSourceCapture = reinterpret_cast<VideoProcessorLibplaceboArmSourceCaptureFn>(
+			GetProcAddress(result.module, VP_LIBPLACEBO_ARM_SOURCE_CAPTURE_EXPORT));
+		result.getSourceCapture = reinterpret_cast<VideoProcessorLibplaceboGetSourceCaptureFn>(
+			GetProcAddress(result.module, VP_LIBPLACEBO_GET_SOURCE_CAPTURE_EXPORT));
 
         const auto diagnostics=reinterpret_cast<VideoProcessorLibplaceboConfigureDiagnosticFn>(
             GetProcAddress(result.module,VP_LIBPLACEBO_DIAGNOSTIC_EXPORT));
@@ -206,6 +212,8 @@ LibplaceboPluginVideoRenderer::LibplaceboPluginVideoRenderer(
 	m_destroyRenderer = plugin.destroyRenderer;
 	m_startupReadiness = plugin.startupReadiness;
 	m_getHdrStatus = plugin.getHdrStatus;
+	m_armSourceCapture = plugin.armSourceCapture;
+	m_getSourceCapture = plugin.getSourceCapture;
     activeDiagnosticProducers.fetch_add(1, std::memory_order_relaxed);
     AnalysisDiagnosticTrace::Instance().SetProducerAvailable(true,true);
 }
@@ -573,6 +581,21 @@ bool LibplaceboPluginVideoRenderer::GetHdrStatus(RendererHdrStatus& status) cons
 	status = {};
 	return m_getHdrStatus && m_getHdrStatus(m_renderer, &status) &&
         status.Supported();
+}
+
+
+bool LibplaceboPluginVideoRenderer::ArmSourceCaptureReport(uint64_t deviceCounter)
+{
+	return m_armSourceCapture && m_armSourceCapture(m_renderer, deviceCounter);
+}
+
+
+bool LibplaceboPluginVideoRenderer::GetSourceCaptureReport(
+	RendererSourceCaptureReport& report) const
+{
+	report = {};
+	return m_getSourceCapture && m_getSourceCapture(m_renderer, &report) &&
+		report.Supported() && report.filled;
 }
 
 

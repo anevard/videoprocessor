@@ -113,9 +113,16 @@ public:
 	// False when the plugin lacks it or has not rendered a frame yet.
 	bool GetHdrStatus(RendererHdrStatus& status) const;
 
+	// Source capture report through the plugin's optional exports. False when
+	// the plugin lacks them, or (Get) before the armed frame has rendered.
+	bool ArmSourceCaptureReport(uint64_t deviceCounter);
+	bool GetSourceCaptureReport(RendererSourceCaptureReport& report) const;
+
 private:
 	IVideoRenderer* m_renderer = nullptr;
 	void (__cdecl *m_destroyRenderer)(IVideoRenderer*) = nullptr;
 	uint32_t (__cdecl *m_startupReadiness)(IVideoRenderer*, StartupPresentation::SnapshotV1*) = nullptr;
 	bool (__cdecl *m_getHdrStatus)(const IVideoRenderer*, RendererHdrStatus*) = nullptr;
+	bool (__cdecl *m_armSourceCapture)(IVideoRenderer*, uint64_t) = nullptr;
+	bool (__cdecl *m_getSourceCapture)(const IVideoRenderer*, RendererSourceCaptureReport*) = nullptr;
 };

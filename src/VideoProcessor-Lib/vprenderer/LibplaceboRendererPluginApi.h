@@ -68,3 +68,15 @@ static constexpr const char* VP_LIBPLACEBO_HDR_STATUS_EXPORT =
 using VideoProcessorLibplaceboGetHdrStatusFn = bool (__cdecl *)(
 	const IVideoRenderer* renderer,
 	RendererHdrStatus* status);
+// Optional, outside the API version, like the HDR status export: a plugin
+// without them reports no renderer values for a source capture.
+static constexpr const char* VP_LIBPLACEBO_ARM_SOURCE_CAPTURE_EXPORT =
+	"VideoProcessorLibplaceboArmSourceCaptureReport";
+using VideoProcessorLibplaceboArmSourceCaptureFn = bool (__cdecl *)(
+	IVideoRenderer* renderer,
+	uint64_t deviceCounter);
+static constexpr const char* VP_LIBPLACEBO_GET_SOURCE_CAPTURE_EXPORT =
+	"VideoProcessorLibplaceboGetSourceCaptureReport";
+using VideoProcessorLibplaceboGetSourceCaptureFn = bool (__cdecl *)(
+	const IVideoRenderer* renderer,
+	RendererSourceCaptureReport* report);
