@@ -60,6 +60,7 @@
 #include <CaptureVideoStatePolicy.h>
 #include <ConfigEditorCore.h>
 #include "ConfigurationRpcServer.h"
+#include "SourceCapture.h"
 #include "ModernOperatorView.h"
 
 #include "resource.h"
@@ -508,6 +509,8 @@ protected:
 	ULONGLONG m_lastBackgroundShortcutTick = 0;
 	HANDLE m_configurationChangedEvent = nullptr;
 	ConfigurationRpcServer m_configurationRpcServer;
+	// Source frame held for the second PC to pull (SourceCapture.h).
+	SourceCapture m_sourceCapture;
 	std::map<std::string, std::map<std::string, std::string>>
 		m_configurationSnapshot;
 	struct StagedRuntimeSettings
@@ -1048,6 +1051,8 @@ protected:
 	void LoadDisplayRefreshRateOverrides();
 	bool ApplySavedConfiguration(bool alreadyStaged = false);
 	ConfigurationRpcProtocol::Frame HandleConfigurationRpc(
+		const ConfigurationRpcProtocol::Frame& request);
+	ConfigurationRpcProtocol::Frame HandleSourceCaptureRpc(
 		const ConfigurationRpcProtocol::Frame& request);
 	void UpdateActiveOutputSweep(ULONGLONG now);
 	bool StartActiveOutputSweep();
