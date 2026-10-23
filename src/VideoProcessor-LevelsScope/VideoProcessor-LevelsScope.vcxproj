@@ -92,6 +92,8 @@
   <ItemGroup>
     <ClInclude Include="LevelsScopeData.h" />
     <ClInclude Include="LevelsScopePanel.h" />
+    <ClInclude Include="LevelsScopeSections.h" />
+    <ClInclude Include="LevelsScopeSources.h" />
     <ClInclude Include="LevelsScopeTraces.h" />
     <ClInclude Include="LevelsScopeView.h" />
     <ClInclude Include="..\VideoProcessor-Config\VpTheme.h" />
