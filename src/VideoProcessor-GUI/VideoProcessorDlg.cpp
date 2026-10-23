@@ -2254,6 +2254,7 @@ CVideoProcessorDlg::CVideoProcessorDlg():
 	m_blackMagicDeviceDiscoverer = new BlackMagicDeckLinkCaptureDeviceDiscoverer(
 		*this, deckLinkFormatPreferences);
 	m_magewellDeviceDiscoverer = MagewellBackend::CreateDiscoverer(*this);
+	m_sourcePluginDeviceDiscoverer = SourcePluginBackend::CreateDiscoverer(*this);
 	
 	// Initialize stats overlay
 	m_statsOverlay = new StatsOverlayWindow();
@@ -13627,6 +13628,15 @@ BOOL CVideoProcessorDlg::OnInitDialog()
 		DebugLog::Log("Magewell discovery unavailable: %s", exception.what());
 	}
 
+	try
+	{
+		m_sourcePluginDeviceDiscoverer->Start();
+	}
+	catch (const std::exception& exception)
+	{
+		DebugLog::Log("Source plugin discovery unavailable: %s", exception.what());
+	}
+
 	const CString magewellUnavailable = MagewellBackend::UnavailableMessage(m_initialCaptureDevice);
 	if (!magewellUnavailable.IsEmpty())
     {
@@ -14762,6 +14772,19 @@ void CVideoProcessorDlg::OnClose()
 			// Never started because the runtime is absent. Nothing to unwind.
 		}
 		m_magewellDeviceDiscoverer.Release();
+	}
+
+	if (m_sourcePluginDeviceDiscoverer)
+	{
+		try
+		{
+			m_sourcePluginDeviceDiscoverer->Stop();
+		}
+		catch (const std::exception&)
+		{
+			// Never started. Nothing to unwind.
+		}
+		m_sourcePluginDeviceDiscoverer.Release();
 	}
 
 	UpdateState();
