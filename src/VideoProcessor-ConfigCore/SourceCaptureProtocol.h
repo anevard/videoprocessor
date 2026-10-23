@@ -1,6 +1,6 @@
 #pragma once
 
-#include <ConfigurationRpcProtocol.h>
+#include "ConfigurationRpcProtocol.h"
 
 #include <cstdint>
 #include <string>
@@ -71,27 +71,21 @@ namespace SourceCaptureProtocol
 		return true;
 	}
 
-	inline std::vector<uint8_t> RequestBody()
-	{
-		std::vector<uint8_t> body;
-		ConfigurationRpcProtocol::Write16(body,
-			ConfigurationRpcProtocol::ConfigurationCompatibilityVersion);
-		return body;
-	}
-
-	inline std::vector<uint8_t> PullRequest(uint64_t captureId,
+	// Request fields after the compatibility version, which
+	// ConfigurationRpcClient::Request writes itself.
+	inline std::vector<uint8_t> PullFields(uint64_t captureId,
 		uint32_t offset, uint32_t length)
 	{
-		std::vector<uint8_t> body = RequestBody();
+		std::vector<uint8_t> body;
 		Write64(body, captureId);
 		ConfigurationRpcProtocol::Write32(body, offset);
 		ConfigurationRpcProtocol::Write32(body, length);
 		return body;
 	}
 
-	inline std::vector<uint8_t> ReleaseRequest(uint64_t captureId)
+	inline std::vector<uint8_t> ReleaseFields(uint64_t captureId)
 	{
-		std::vector<uint8_t> body = RequestBody();
+		std::vector<uint8_t> body;
 		Write64(body, captureId);
 		return body;
 	}

@@ -376,3 +376,69 @@ bool ConfigurationRpcClient::ApplyConfig(const std::string& baseline,
 	result = std::move(parsed);
 	return true;
 }
+
+bool ConfigurationRpcClient::ArmSourceCapture(uint64_t& captureId,
+	std::string& error) const
+{
+	captureId = 0;
+	std::vector<uint8_t> response;
+	if (!Request(static_cast<uint16_t>(SourceCaptureProtocol::Operation::Arm),
+		{}, response, error)) return false;
+	size_t cursor = 0;
+	if (!SourceCaptureProtocol::Read64At(response, cursor, captureId) ||
+		cursor != response.size())
+	{
+		error = "VP returned an invalid capture response.";
+		return false;
+	}
+	return true;
+}
+
+bool ConfigurationRpcClient::PullSourceCapture(uint64_t captureId,
+	uint32_t offset, uint32_t length, SourceCapturePiece& piece,
+	std::string& error) const
+{
+	using SourceCaptureProtocol::PullState;
+	piece = {};
+	std::vector<uint8_t> response;
+	if (!Request(static_cast<uint16_t>(SourceCaptureProtocol::Operation::Pull),
+		SourceCaptureProtocol::PullFields(captureId, offset, length),
+		response, error)) return false;
+	const auto invalid = [&error]()
+	{
+		error = "VP returned an invalid capture response.";
+		return false;
+	};
+	if (response.empty()) return invalid();
+	size_t cursor = 1;
+	piece.state = static_cast<PullState>(response[0]);
+	if (piece.state == PullState::Waiting)
+		return cursor == response.size() ? true : invalid();
+	if (piece.state == PullState::Failed)
+		return ReadString(response, cursor, piece.reason) &&
+			cursor == response.size() ? true : invalid();
+	if (piece.state != PullState::Ready) return invalid();
+	uint32_t pieceBytes = 0;
+	if (!SourceCaptureProtocol::Read32At(response, cursor, piece.frameBytes) ||
+		!ReadString(response, cursor, piece.sidecar) ||
+		!SourceCaptureProtocol::Read32At(response, cursor, pieceBytes) ||
+		pieceBytes != response.size() - cursor || pieceBytes > length)
+		return invalid();
+	piece.bytes.assign(response.begin() + cursor, response.end());
+	return true;
+}
+
+bool ConfigurationRpcClient::ReleaseSourceCapture(uint64_t captureId,
+	std::string& error) const
+{
+	std::vector<uint8_t> response;
+	if (!Request(static_cast<uint16_t>(SourceCaptureProtocol::Operation::Release),
+		SourceCaptureProtocol::ReleaseFields(captureId), response, error))
+		return false;
+	if (!response.empty())
+	{
+		error = "VP returned an invalid capture response.";
+		return false;
+	}
+	return true;
+}

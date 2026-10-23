@@ -1,5 +1,6 @@
 #pragma once
 #include "ConfigurationRpcProtocol.h"
+#include "SourceCaptureProtocol.h"
 
 #include <cstdint>
 #include <map>
@@ -42,6 +43,19 @@ public:
 	bool ApplyConfig(const std::string& baseline,
 		const std::string& candidate, ApplyResult& result,
 		std::string& error) const;
+	// Source capture (SourceCaptureProtocol.h): arm, pull until Ready, release.
+	struct SourceCapturePiece
+	{
+		SourceCaptureProtocol::PullState state = SourceCaptureProtocol::PullState::Waiting;
+		uint32_t frameBytes = 0;
+		std::string sidecar;          // only when the piece length asked was 0
+		std::vector<uint8_t> bytes;
+		std::string reason;           // Failed only
+	};
+	bool ArmSourceCapture(uint64_t& captureId, std::string& error) const;
+	bool PullSourceCapture(uint64_t captureId, uint32_t offset, uint32_t length,
+		SourceCapturePiece& piece, std::string& error) const;
+	bool ReleaseSourceCapture(uint64_t captureId, std::string& error) const;
 
 private:
 	bool Request(uint16_t operation, const std::vector<uint8_t>& payload,
