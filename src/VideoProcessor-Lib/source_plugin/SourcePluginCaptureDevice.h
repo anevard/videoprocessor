@@ -18,6 +18,10 @@
 #include <source_plugin/vp_source_plugin.h>
 
 
+// A plugin's one input, as the dialog and the configuration editor list it.
+#define SOURCE_PLUGIN_INPUT_NAME TEXT("Player")
+
+
 /**
  * A source plugin (plugins/sources/*.dll) shown as a capture device.
  *

@@ -284,7 +284,7 @@ CaptureInputs SourcePluginCaptureDevice::SupportedCaptureInputs()
 {
 	// One input. The dialog lists inputs by name and never reads the type.
 	CaptureInputs captureInputs;
-	captureInputs.emplace_back(0, CaptureInputType::HDMI, CString(TEXT("Player")));
+	captureInputs.emplace_back(0, CaptureInputType::HDMI, CString(SOURCE_PLUGIN_INPUT_NAME));
 	return captureInputs;
 }
 
