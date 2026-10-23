@@ -1,5 +1,6 @@
 #pragma once
 #include "LevelsScopeData.h"
+#include "LevelsScopeRigSearch.h"
 #include "LevelsScopeSections.h"
 #include "LevelsScopeSettings.h"
 #include "LevelsScopeSources.h"
@@ -7,6 +8,7 @@
 #include <ConfigEditorCore.h>
 #include <RenderingBuiltInDefault.h>
 #include <ToneProfileRequest.h>
+#include <QAbstractItemView>
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -15,17 +17,20 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QInputDialog>
 #include <QLabel>
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSignalBlocker>
+#include <QThread>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <map>
+#include <memory>
 #include <set>
 
 // The Levels Scope page: open logs, pick a profile of a saved
@@ -57,11 +62,16 @@ namespace LevelsScopePanel
             layout->setContentsMargins(12, 12, 12, 12);
             layout->setSpacing(8);
 
-            // Logs and the profile.
+            // Logs, where the config comes from (a rig, or a file on this PC),
+            // and the profile.
             auto* sources = new QHBoxLayout;
             auto* openLogs = new QPushButton(QStringLiteral("Open logs…"));
             auto* openFolder = new QPushButton(QStringLiteral("Open logs folder…"));
-            auto* openConfig = new QPushButton(QStringLiteral("Config…"));
+            rigs_ = new QComboBox;
+            rigs_->setMinimumWidth(220);
+            rigs_->setToolTip(QStringLiteral("The VP whose config the scope reads, found on the network as the Config window finds it"));
+            auto* openConfig = new QPushButton(QStringLiteral("Config file…"));
+            openConfig->setToolTip(QStringLiteral("Read a VideoProcessor.cfg on this PC instead of a rig's"));
             profiles_ = new QComboBox;
             profiles_->setMinimumWidth(180);
             // Ignored width: a long path is cut short (whole path on hover)
@@ -72,6 +82,8 @@ namespace LevelsScopePanel
             sources->addWidget(openLogs);
             sources->addWidget(openFolder);
             sources->addSpacing(16);
+            sources->addWidget(new QLabel(QStringLiteral("Config from")));
+            sources->addWidget(rigs_);
             sources->addWidget(openConfig);
             sources->addWidget(new QLabel(QStringLiteral("DTM profile")));
             sources->addWidget(profiles_);
@@ -179,6 +191,16 @@ namespace LevelsScopePanel
                     QFileInfo(configPath_).absolutePath(), QStringLiteral("VP configuration (*.cfg);;All files (*)"));
                 if (!file.isEmpty()) loadConfig(file);
             });
+            connect(rigs_, qOverload<int>(&QComboBox::activated), this, [this](int index) {
+                const QString pick = rigs_->itemData(index).toString();
+                if (pick == QStringLiteral("address")) enterAddress();
+                else if (pick.startsWith(QStringLiteral("rig:")))
+                {
+                    const int i = pick.mid(4).toInt();
+                    if (i >= 0 && i < found_.size()) connectRig(found_[i]);
+                }
+                fillRigs();
+            });
             connect(profiles_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
                 window_.setProfile(profiles_->currentData().toString());
                 place();
@@ -199,21 +221,37 @@ namespace LevelsScopePanel
             picker_.load(settingsFolder);
             if (!restore)
             {
+                // A snapshot run: no network and no registry.
+                rigs_->setEnabled(false);
                 rebuildLegend();
                 updateNote();
                 return;
             }
-            QString config = window_.config();
-            if (config.isEmpty() || !QFileInfo::exists(config))
+            rigMemory_ = std::make_unique<LevelsScopeSettings::Rig>();
+            const QString remembered = rigMemory_->selectedInstanceId();
+            if (remembered.startsWith(QStringLiteral("manual:")))
+                connectRig({ QString(), rigMemory_->manualHost(), rigMemory_->manualHost(), rigMemory_->manualPort() });
+            else if (remembered.isEmpty() || remembered == QStringLiteral("local"))
             {
-                // Beside the Config application's folder: <portable>\VideoProcessor.cfg.
-                const QString guess = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../VideoProcessor.cfg"));
-                if (QFileInfo::exists(guess)) config = QFileInfo(guess).canonicalFilePath();
+                QString config = window_.config();
+                if (config.isEmpty() || !QFileInfo::exists(config))
+                {
+                    // Beside the Config application's folder: <portable>\VideoProcessor.cfg.
+                    const QString guess = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../VideoProcessor.cfg"));
+                    if (QFileInfo::exists(guess)) config = QFileInfo(guess).canonicalFilePath();
+                }
+                if (!config.isEmpty()) loadConfig(config);
             }
-            if (!config.isEmpty()) loadConfig(config);
+            // Otherwise the remembered rig is connected when the search finds it.
+            startRigSearch();
             rebuildLegend();
             // Starts blank: logs are opened each time, never reopened from last time.
             reload();
+        }
+
+        ~Panel() override
+        {
+            if (rigThread_) rigThread_->wait();
         }
 
         // For a snapshot run: open these, pick that profile and view.
@@ -244,11 +282,120 @@ namespace LevelsScopePanel
                 status_->setText(QStringLiteral("Could not read %1: %2").arg(path, QString::fromStdWString(error)));
                 return;
             }
-            document_ = doc;
             configPath_ = path;
             window_.setConfig(path);
-            configLabel_->setText(QDir::toNativeSeparators(path));
-            configLabel_->setToolTip(QDir::toNativeSeparators(path));
+            rig_ = {};
+            if (rigMemory_) rigMemory_->rememberLocal();
+            useDocument(doc, QDir::toNativeSeparators(path));
+            fillRigs();
+        }
+
+        // The rig's config, fetched off the UI thread as the Config window does.
+        void connectRig(const LevelsScopeRigSearch::FoundTarget& target)
+        {
+            if (rigThread_ || target.address.isEmpty()) return;
+            const QString name = target.label.section(QStringLiteral(" ("), 0, 0);
+            configLabel_->setText(QStringLiteral("Reading the config from %1…").arg(name));
+            auto result = std::make_shared<LevelsScopeSources::RigConfig>();
+            const QString host = target.address;
+            const quint16 port = target.port;
+            rigThread_ = QThread::create([result, host, port] { LevelsScopeSources::FetchRigConfig(host, port, *result); });
+            rigThread_->setParent(this);
+            QThread* worker = rigThread_;
+            connect(worker, &QThread::finished, this, [this, worker, target, name, result] {
+                rigThread_ = nullptr;
+                worker->deleteLater();
+                if (!result->ok)
+                {
+                    configLabel_->setText(QStringLiteral("Could not read the config from %1: %2")
+                        .arg(name, QString::fromUtf8(result->error)));
+                    fillRigs();
+                    return;
+                }
+                rig_ = target;
+                if (rigMemory_) rigMemory_->remember(target.instanceId, target.label, target.address, target.port);
+                fillRigs();
+                useDocument(LevelsScopeSources::RigDocument(*result),
+                    QStringLiteral("%1: %2").arg(name, QDir::toNativeSeparators(QString::fromUtf8(result->path))));
+            });
+            worker->start();
+            fillRigs();
+        }
+
+        // A typed rig address, host or host:port, read as the Config window reads it.
+        void enterAddress()
+        {
+            bool ok = false;
+            const QString typed = QInputDialog::getText(this, QStringLiteral("Rig address"),
+                QStringLiteral("The rig's address (host or host:port):"), QLineEdit::Normal,
+                rigMemory_ ? rigMemory_->manualHost() : QString(), &ok);
+            if (!ok) return;
+            QString host;
+            quint16 port = 0;
+            if (!LevelsScopeRigSearch::parseTargetAddress(typed, host, port))
+            {
+                configLabel_->setText(QStringLiteral("Not an address: %1").arg(typed));
+                return;
+            }
+            connectRig({ QString(), host, host, port });
+        }
+
+        // His network search; each PC searches for itself.
+        void startRigSearch()
+        {
+            search_ = std::make_unique<LevelsScopeRigSearch::LanTargetWatcher>();
+            search_->setResultsHandler([this](const QList<LevelsScopeRigSearch::FoundTarget>& found) {
+                found_ = found;
+                if (!rigs_->view()->isVisible()) fillRigs();
+                // The remembered rig, or the only one found when there is no config yet.
+                const QString remembered = rigMemory_ ? rigMemory_->selectedInstanceId() : QString();
+                const bool waiting = !rig_.address.isEmpty() ? false :
+                    remembered.isEmpty() ? !hasConfig_ :
+                    !remembered.startsWith(QStringLiteral("manual:")) && remembered != QStringLiteral("local");
+                if (!waiting || rigThread_) return waiting;
+                for (const auto& target : found_)
+                    if ((remembered.isEmpty() && found_.size() == 1) || target.instanceId == remembered)
+                    {
+                        const QString key = target.instanceId + u'|' + target.address;
+                        if (key != lastAutoAttempt_)
+                        {
+                            lastAutoAttempt_ = key;
+                            connectRig(target);
+                        }
+                        break;
+                    }
+                return waiting;
+            });
+            QTimer::singleShot(0, search_.get(), [this] { search_->scan(); });
+            fillRigs();
+        }
+
+        // The choice shows where the config came from; the rigs found and
+        // "Enter address…" switch to one of them.
+        void fillRigs()
+        {
+            const QSignalBlocker block(rigs_);
+            rigs_->clear();
+            const QString remembered = rigMemory_ ? rigMemory_->selectedLabel() : QString();
+            rigs_->addItem(!rig_.address.isEmpty() ? rig_.label :
+                hasConfig_ && !configPath_.isEmpty() ? QStringLiteral("A config file on this PC") :
+                rigThread_ ? QStringLiteral("Reading…") :
+                !remembered.isEmpty() && remembered != QStringLiteral("This computer") ? QStringLiteral("Looking for %1…").arg(remembered) :
+                found_.isEmpty() ? QStringLiteral("No rig found yet") : QStringLiteral("Choose a rig"));
+            for (int i = 0; i < found_.size(); ++i)
+                if (found_[i].instanceId != rig_.instanceId || rig_.instanceId.isEmpty())
+                    rigs_->addItem(found_[i].label, QStringLiteral("rig:%1").arg(i));
+            rigs_->addItem(QStringLiteral("Enter address…"), QStringLiteral("address"));
+            rigs_->setCurrentIndex(0);
+        }
+
+        // A config read (file or rig): its DTM profiles fill the picker.
+        void useDocument(const ConfigEditorCore::ConfigDocument& doc, const QString& source)
+        {
+            document_ = doc;
+            hasConfig_ = true;
+            configLabel_->setText(source);
+            configLabel_->setToolTip(source);
             const QString wanted = window_.profile();
             const QSignalBlocker block(profiles_);
             profiles_->clear();
@@ -393,8 +540,8 @@ namespace LevelsScopePanel
         void updateNote()
         {
             QString note;
-            if (configPath_.isEmpty())
-                note = QStringLiteral("Open a VideoProcessor.cfg to choose a DTM profile.");
+            if (!hasConfig_)
+                note = QStringLiteral("Choose a rig, or open a VideoProcessor.cfg, to choose a DTM profile.");
             else if (!placeError_.isEmpty())
                 note = QStringLiteral("The scope needs %1's libplacebo beside this program's folder: %2")
                     .arg(QString::fromWCharArray(ToneCurveRuntime::RendererName()), placeError_);
@@ -413,7 +560,17 @@ namespace LevelsScopePanel
 
         LevelsScopeSettings::Window window_;
         ConfigEditorCore::ConfigDocument document_;
-        QString configPath_, placeError_;
+        QString configPath_, placeError_;  // configPath_: the last config file opened on this PC
+        bool hasConfig_ = false;
+        // The rig: its memory (none in a snapshot run), the search, what it
+        // found, the one the config came from, and the fetch under way.
+        std::unique_ptr<LevelsScopeSettings::Rig> rigMemory_;
+        std::unique_ptr<LevelsScopeRigSearch::LanTargetWatcher> search_;
+        QList<LevelsScopeRigSearch::FoundTarget> found_;
+        LevelsScopeRigSearch::FoundTarget rig_;
+        QThread* rigThread_ = nullptr;
+        QString lastAutoAttempt_;
+        QComboBox* rigs_ = nullptr;
         ToneCurveProvider::Request request_;
         LevelsScopeData::Library library_;
         bool placed_ = false, syncing_ = false;
