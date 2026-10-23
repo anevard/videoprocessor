@@ -96,6 +96,7 @@
     <ClInclude Include="LevelsScopeView.h" />
     <ClInclude Include="..\VideoProcessor-Config\VpTheme.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\ChartStyle.h" />
+    <ClInclude Include="..\VideoProcessor-ChartCore\ChartViewport.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\LoggedScene.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\PqAxis.h" />
     <ClInclude Include="..\VideoProcessor-ChartCore\TimeSeries.h" />
