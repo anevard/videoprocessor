@@ -150,12 +150,10 @@ namespace LevelsScopeData
         bool measured = false;         // any log had detection lines
     };
 
-    // Logs: every file's samples merged and in time order (VpLogFiles), then
-    // built into sections.
-    inline Library Read(const QStringList& paths)
+    // Logs merged and in time order (VpLogFiles::Merge), built into sections.
+    inline Library FromLogs(const VpLogFiles::Logs& logs)
     {
         Library library;
-        const VpLogFiles::Logs logs = VpLogFiles::Read(paths);
         library.notes = logs.notes;
         library.measured = logs.measured;
         Builder builder(library.sections, false);
