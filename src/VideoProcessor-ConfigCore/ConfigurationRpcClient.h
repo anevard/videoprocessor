@@ -57,6 +57,14 @@ public:
 		SourceCapturePiece& piece, std::string& error) const;
 	bool ReleaseSourceCapture(uint64_t captureId, std::string& error) const;
 
+	// Review: begin a still, send its pieces in order, show it; Live ends review.
+	bool BeginReview(const SourceCaptureProtocol::ReviewStill& still,
+		uint64_t& stillId, std::string& error) const;
+	bool SendReviewPiece(uint64_t stillId, uint32_t offset, const uint8_t* bytes,
+		uint32_t length, std::string& error) const;
+	bool ShowReview(uint64_t stillId, std::string& error) const;
+	bool ReviewLive(std::string& error) const;
+
 private:
 	bool Request(uint16_t operation, const std::vector<uint8_t>& payload,
 		std::vector<uint8_t>& response, std::string& error) const;

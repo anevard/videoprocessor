@@ -442,3 +442,56 @@ bool ConfigurationRpcClient::ReleaseSourceCapture(uint64_t captureId,
 	}
 	return true;
 }
+
+bool ConfigurationRpcClient::BeginReview(
+	const SourceCaptureProtocol::ReviewStill& still, uint64_t& stillId,
+	std::string& error) const
+{
+	stillId = 0;
+	std::vector<uint8_t> response;
+	if (!Request(static_cast<uint16_t>(SourceCaptureProtocol::Operation::ReviewBegin),
+		SourceCaptureProtocol::ReviewBeginFields(still), response, error))
+		return false;
+	size_t cursor = 0;
+	if (!SourceCaptureProtocol::Read64At(response, cursor, stillId) ||
+		cursor != response.size())
+	{
+		error = "VP returned an invalid review response.";
+		return false;
+	}
+	return true;
+}
+
+namespace
+{
+	bool EmptyReviewResponse(const std::vector<uint8_t>& response, std::string& error)
+	{
+		if (response.empty()) return true;
+		error = "VP returned an invalid review response.";
+		return false;
+	}
+}
+
+bool ConfigurationRpcClient::SendReviewPiece(uint64_t stillId, uint32_t offset,
+	const uint8_t* bytes, uint32_t length, std::string& error) const
+{
+	std::vector<uint8_t> response;
+	return Request(static_cast<uint16_t>(SourceCaptureProtocol::Operation::ReviewPiece),
+		SourceCaptureProtocol::ReviewPieceFields(stillId, offset, bytes, length),
+		response, error) && EmptyReviewResponse(response, error);
+}
+
+bool ConfigurationRpcClient::ShowReview(uint64_t stillId, std::string& error) const
+{
+	std::vector<uint8_t> response;
+	return Request(static_cast<uint16_t>(SourceCaptureProtocol::Operation::ReviewShow),
+		SourceCaptureProtocol::ReleaseFields(stillId), response, error) &&
+		EmptyReviewResponse(response, error);
+}
+
+bool ConfigurationRpcClient::ReviewLive(std::string& error) const
+{
+	std::vector<uint8_t> response;
+	return Request(static_cast<uint16_t>(SourceCaptureProtocol::Operation::ReviewLive),
+		{}, response, error) && EmptyReviewResponse(response, error);
+}

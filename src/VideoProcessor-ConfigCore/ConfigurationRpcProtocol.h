@@ -36,7 +36,7 @@ namespace ConfigurationRpcProtocol
 	// Source capture's operations (SourceCaptureProtocol.h), numbered apart
 	// from the configuration operations above.
 	constexpr uint16_t FirstSourceCaptureOperation = 0x0100;
-	constexpr uint16_t LastSourceCaptureOperation = 0x0102;
+	constexpr uint16_t LastSourceCaptureOperation = 0x0106;
 
 	struct Frame
 	{
