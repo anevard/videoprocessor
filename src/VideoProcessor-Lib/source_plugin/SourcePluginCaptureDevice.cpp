@@ -511,7 +511,14 @@ void SourcePluginCaptureDevice::SendVideoState()
 		CaptureDeviceCardStateComPtr cardState = new CaptureDeviceCardState();
 		cardState->inputLocked = videoState->valid ? InputLocked::YES : InputLocked::NO;
 		cardState->inputDisplayMode = videoState->displayMode;
-		cardState->other.push_back(CString(TEXT("Source plugin: ")) + GetName());
+		if (videoState->valid)
+		{
+			// Both plugin encodings are 4:2:0. No hardware link to report:
+			// the GUI reads "other" as its PCIe rows, by position.
+			cardState->inputEncoding = ColorFormat::YCbCr420;
+			cardState->inputBitDepth = encoding == VideoFrameEncoding::P010 ?
+				BitDepth::BITDEPTH_10BIT : BitDepth::BITDEPTH_8BIT;
+		}
 		m_callback->OnCaptureDeviceCardStateChange(cardState);
 
 		m_callback->OnCaptureDeviceVideoStateChange(
