@@ -105,7 +105,7 @@ namespace LevelsScopeThumbnail
                 else if (encoding == QStringLiteral("R12B"))
                 {
                     // A last, partial block would read past the row.
-                    if ((x / PIXELS_PER_BLOCK + 1) * static_cast<int>(BYTES_PER_BLOCK) > rowBytes) continue;
+                    if ((x / static_cast<int>(PIXELS_PER_BLOCK) + 1) * static_cast<int>(BYTES_PER_BLOCK) > rowBytes) continue;
                     uint16_t block[PIXELS_PER_BLOCK * 3];
                     ConvertBlockScalar(row + static_cast<size_t>(x / PIXELS_PER_BLOCK) * BYTES_PER_BLOCK, block);
                     const uint16_t* p = block + (x % PIXELS_PER_BLOCK) * 3;
