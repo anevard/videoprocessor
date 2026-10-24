@@ -21,6 +21,10 @@ namespace SourceCaptureProtocol
 		Pull = 0x0101,     // captureId (u64), offset (u32), length (u32) -> see PullState
 		Release = 0x0102,  // captureId (u64) -> empty
 	};
+	// The frame codec refuses an operation outside its known range.
+	static_assert(static_cast<uint16_t>(Operation::Arm) == ConfigurationRpcProtocol::FirstSourceCaptureOperation &&
+		static_cast<uint16_t>(Operation::Release) == ConfigurationRpcProtocol::LastSourceCaptureOperation,
+		"source capture operations must match ConfigurationRpcProtocol's known range");
 
 	// Leaves room under MaximumPayloadBytes for the pull response's own fields.
 	constexpr uint32_t MaximumPieceBytes = 3 * 1024 * 1024;

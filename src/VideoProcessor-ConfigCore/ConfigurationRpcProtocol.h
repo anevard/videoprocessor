@@ -33,6 +33,11 @@ namespace ConfigurationRpcProtocol
         GetDisplayModes = 9
 	};
 
+	// Source capture's operations (SourceCaptureProtocol.h), numbered apart
+	// from the configuration operations above.
+	constexpr uint16_t FirstSourceCaptureOperation = 0x0100;
+	constexpr uint16_t LastSourceCaptureOperation = 0x0102;
+
 	struct Frame
 	{
 		uint16_t operation = 0;
@@ -68,7 +73,10 @@ namespace ConfigurationRpcProtocol
 
 	inline bool IsKnownOperation(uint16_t operation)
 	{
-		switch (operation & ~(ResponseFlag | ErrorFlag))
+		const uint16_t plain = operation & ~(ResponseFlag | ErrorFlag);
+		if (plain >= FirstSourceCaptureOperation && plain <= LastSourceCaptureOperation)
+			return true;
+		switch (plain)
 		{
 		case static_cast<uint16_t>(Operation::GetConfig):
 		case static_cast<uint16_t>(Operation::GetCapabilities):
