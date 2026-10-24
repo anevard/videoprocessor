@@ -3051,6 +3051,8 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleSourceCaptureRpc(
 	size_t cursor = 2;
 	Frame response;
 	response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+	if (operation >= static_cast<uint16_t>(CaptureOperation::ReviewBegin))
+		return HandleSourceReviewRpc(request, cursor, std::move(response));
 
 	if (operation == static_cast<uint16_t>(CaptureOperation::Arm))
 	{
@@ -3108,6 +3110,145 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleSourceCaptureRpc(
 	DebugLog::Log("Source capture released: capture_id=%llu",
 		static_cast<unsigned long long>(captureId));
 	return response;
+}
+
+ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleSourceReviewRpc(
+	const Frame& request, size_t cursor, Frame response)
+{
+	using namespace ConfigurationRpcProtocol;
+	using ReviewOperation = SourceCaptureProtocol::Operation;
+	const uint16_t operation = request.operation;
+	const std::vector<uint8_t>& payload = request.payload;
+	std::string error;
+
+	if (operation == static_cast<uint16_t>(ReviewOperation::ReviewBegin))
+	{
+		SourceCaptureProtocol::ReviewStill fields;
+		if (!SourceCaptureProtocol::ReadReviewBegin(payload, cursor, fields) ||
+			cursor != payload.size())
+			return ConfigurationRpcError(operation, "Invalid review request.");
+		uint64_t stillId = 0;
+		if (!m_sourceReview.Begin(fields, stillId, error))
+			return ConfigurationRpcError(operation, error);
+		SourceCaptureProtocol::Write64(response.payload, stillId);
+		return response;
+	}
+	if (operation == static_cast<uint16_t>(ReviewOperation::ReviewLive))
+	{
+		if (cursor != payload.size())
+			return ConfigurationRpcError(operation, "Invalid review request.");
+		if (!EndSourceReview(error))
+			return ConfigurationRpcError(operation, error);
+		return response;
+	}
+
+	uint64_t stillId = 0;
+	if (!SourceCaptureProtocol::Read64At(payload, cursor, stillId))
+		return ConfigurationRpcError(operation, "Invalid review request.");
+	if (operation == static_cast<uint16_t>(ReviewOperation::ReviewPiece))
+	{
+		uint32_t offset = 0, length = 0;
+		if (!SourceCaptureProtocol::Read32At(payload, cursor, offset) ||
+			!SourceCaptureProtocol::Read32At(payload, cursor, length) ||
+			length != payload.size() - cursor)
+			return ConfigurationRpcError(operation, "Invalid review request.");
+		if (!m_sourceReview.Piece(stillId, offset, payload.data() + cursor, length, error))
+			return ConfigurationRpcError(operation, error);
+		return response;
+	}
+	if (operation != static_cast<uint16_t>(ReviewOperation::ReviewShow) ||
+		cursor != payload.size())
+		return ConfigurationRpcError(operation, "Invalid review request.");
+	// The still takes the rate VP is running at: live, or the still already
+	// shown (which carries the live rate).
+	if (!m_captureDeviceVideoState || !m_captureDeviceVideoState->valid ||
+		!m_captureDeviceVideoState->displayMode)
+		return ConfigurationRpcError(operation,
+			"Review needs a source signal; start one (a paused player or a menu will do).");
+	const SourceReview::StillPtr still =
+		m_sourceReview.Finish(stillId, *m_captureDeviceVideoState->displayMode, error);
+	if (!still || !StartSourceReview(still, error))
+		return ConfigurationRpcError(operation, error);
+	return response;
+}
+
+// Publishes the still's state where the card's state goes; the publication
+// itself starts review, under the capture-state lock (SourceReview.h).
+bool CVideoProcessorDlg::StartSourceReview(const SourceReview::StillPtr& still,
+	std::string& error)
+{
+	ACaptureDevice* source = nullptr;
+	CaptureRunToken epoch = 0;
+	{
+		std::lock_guard<std::mutex> sourceLock(m_captureVideoStateNotificationMutex);
+		source = m_captureVideoStateSource;
+		epoch = m_captureVideoStateSourceEpoch;
+		if (!source)
+		{
+			error = "Review needs a running capture.";
+			return false;
+		}
+		m_sourceReview.PrepareEntry(still, m_lastPublishedValidCaptureVideoState);
+	}
+	const int previousTunnel = m_sourceReview.TunnelOverride();
+	m_sourceReview.SetTunnelOverride(still->dolbyVisionTunnel ? 1 : 0);
+	OnCaptureDeviceVideoStateChange(source, epoch, still->deviceState);
+	{
+		std::lock_guard<std::mutex> sourceLock(m_captureVideoStateNotificationMutex);
+		if (m_sourceReview.Active() != still)
+		{
+			m_sourceReview.CancelPending();
+			m_sourceReview.SetTunnelOverride(m_sourceReview.InReview() ? previousTunnel : -1);
+			error = "The capture restarted; show the still again.";
+			return false;
+		}
+	}
+	const VideoState& state = *still->deviceState;
+	DebugLog::Log("Source review showing: still_id=%llu %ux%u encoding=%s eotf=%s "
+		"colorspace=%s tunnel=%d hdr10=%d",
+		static_cast<unsigned long long>(still->id),
+		state.displayMode->FrameWidth(), state.displayMode->FrameHeight(),
+		CStringA(ToString(state.videoFrameEncoding)).GetString(),
+		CStringA(ToString(state.eotf)).GetString(),
+		CStringA(ToString(state.colorspace)).GetString(),
+		still->dolbyVisionTunnel ? 1 : 0, state.hdrData ? 1 : 0);
+	return true;
+}
+
+// Publishes the newest live state; its publication ends review.
+bool CVideoProcessorDlg::EndSourceReview(std::string& error)
+{
+	ACaptureDevice* source = nullptr;
+	CaptureRunToken epoch = 0;
+	VideoStateComPtr exitState;
+	{
+		std::lock_guard<std::mutex> sourceLock(m_captureVideoStateNotificationMutex);
+		if (!m_sourceReview.InReview())
+		{
+			m_sourceReview.CancelPending();
+			m_sourceReview.SetTunnelOverride(-1);
+			return true;
+		}
+		source = m_captureVideoStateSource;
+		epoch = m_captureVideoStateSourceEpoch;
+		exitState = m_sourceReview.PrepareExit();
+		if (!exitState || !source)
+		{
+			error = "VideoProcessor has no live signal state to return to yet.";
+			return false;
+		}
+	}
+	m_sourceReview.SetTunnelOverride(-1);
+	OnCaptureDeviceVideoStateChange(source, epoch, exitState);
+	{
+		// A stale capture run never ran the publication: drop review anyway;
+		// the new run publishes its own live state.
+		std::lock_guard<std::mutex> sourceLock(m_captureVideoStateNotificationMutex);
+		if (m_sourceReview.InReview())
+			m_sourceReview.CancelPending();
+	}
+	DebugLog::Log("Source review ended: back to live");
+	return true;
 }
 
 ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
@@ -8379,6 +8520,22 @@ void CVideoProcessorDlg::OnCaptureDeviceVideoStateChange(
 			m_captureVideoStateSource);
 		return;
 	}
+	// Review: a live state is held while a still is shown; a new capture run
+	// gets the still's state again (SourceReview.h).
+	VideoStateComPtr reviewState;
+	switch (m_sourceReview.OnStatePublication(videoState, captureRunToken, reviewState))
+	{
+	case SourceReview::Publication::Hold:
+		DebugLog::Log("Source review: live video state held until back to live");
+		return;
+	case SourceReview::Publication::PublishStill:
+		DebugLog::Log("Source review: capture run %llu restarted; publishing the still's state",
+			static_cast<unsigned long long>(captureRunToken));
+		videoState = reviewState;
+		break;
+	default:
+		break;
+	}
 
 	const CaptureVideoStateChangeClass changeClass =
 		ClassifyCaptureVideoStateChange(
@@ -8464,6 +8621,7 @@ void CVideoProcessorDlg::OnCaptureDeviceVideoFrame(
 	uint64_t recoveredTotalRejectedFrameCount = 0;
 	VideoStateComPtr sourceCaptureState;
 	uint64_t sourceCapturePublished = 0;
+	SourceReview::StillPtr reviewStill;
 	{
 		std::lock_guard<std::mutex> sourceLock(
 			m_captureVideoStateNotificationMutex);
@@ -8471,6 +8629,10 @@ void CVideoProcessorDlg::OnCaptureDeviceVideoFrame(
 			captureRunToken != m_captureVideoStateSourceEpoch)
 			return;
 		ingressLease = m_rendererIngressState->TryAcquire();
+		// Read under the same lock as every state publication: a frame
+		// admitted while review is on is always the still.
+		if (ingressLease)
+			reviewStill = m_sourceReview.Active();
 		if (ingressLease && m_sourceCapture.IsArmed())
 		{
 			sourceCaptureState = m_lastPublishedValidCaptureVideoState;
@@ -8555,13 +8717,22 @@ void CVideoProcessorDlg::OnCaptureDeviceVideoFrame(
 	assert(m_captureDeviceState == CaptureDeviceState::CAPTUREDEVICESTATE_CAPTURING);
 	assert(m_rendererState == RendererState::RENDERSTATE_RENDERING);
 
+	// Review: the still, with this live frame's counter and timing.
+	IUnknown* reviewLease = nullptr;
+	VideoFrame reviewFrame;
+	if (reviewStill)
+		reviewFrame = SourceReview::MakeFrame(reviewStill, videoFrame, reviewLease);
+	VideoFrame& admittedFrame = reviewStill ? reviewFrame : videoFrame;
+
 	if (sourceCaptureState)
 	{
 		SourceCaptureReportAccess reportAccess(renderer.get());
-		m_sourceCapture.OnAdmittedFrame(videoFrame, sourceCaptureState,
+		m_sourceCapture.OnAdmittedFrame(admittedFrame, sourceCaptureState,
 			sourceCapturePublished, &reportAccess);
 	}
-	renderer->OnVideoFrame(videoFrame);
+	renderer->OnVideoFrame(admittedFrame);
+	if (reviewLease)
+		reviewLease->Release();
 	if (renderer->HasPresentedLiveFrame() &&
 		!m_transitionRevealPosted.exchange(
 			true, std::memory_order_acq_rel))
@@ -11748,9 +11919,12 @@ bool CVideoProcessorDlg::BuildPushVideoState()
 	// metadata.  There is no exposed VSIF to prove this, so only apply the
 	// heuristic when explicitly enabled, the user selected both LLDV follow
 	// modes, and the candidate has remained stable for 1.5 seconds.
-	const bool enableDolbyVisionTunnel = m_profileDolbyVisionTunnelOverride >= 0
+	// In review the still's sidecar decides, never the live profile.
+	const int reviewTunnel = m_sourceReview.TunnelOverride();
+	const bool enableDolbyVisionTunnel = reviewTunnel >= 0 ? reviewTunnel != 0 :
+		m_profileDolbyVisionTunnelOverride >= 0
 		? m_profileDolbyVisionTunnelOverride != 0 : m_enableDolbyVisionTunnel;
-	const bool isHDFuryLLDV = m_profileDolbyVisionTunnelOverride != 1 &&
+	const bool isHDFuryLLDV = reviewTunnel < 0 && m_profileDolbyVisionTunnelOverride != 1 &&
 		(m_useNewLldvHeuristic
 			? (m_newLldvCandidateConfirmed && IsNewLldvModeSelected())
 			: isLegacyHDFuryLLDV);
