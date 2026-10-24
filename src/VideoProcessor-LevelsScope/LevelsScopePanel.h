@@ -199,7 +199,14 @@ namespace LevelsScopePanel
             });
             connect(capture_, &QPushButton::clicked, this, [this] { captureFrame(); });
             connect(captures, &QPushButton::clicked, this, [this] {
-                if (!bank_) bank_ = new LevelsScopeCaptureBank::Window(this);
+                if (!bank_) bank_ = new LevelsScopeCaptureBank::Window(this,
+                    [this](QString& host, quint16& port, QString& name) {
+                        if (rig_.address.isEmpty()) return false;
+                        host = rig_.address;
+                        port = rig_.port;
+                        name = rig_.label.section(QStringLiteral(" ("), 0, 0);
+                        return true;
+                    });
                 else bank_->reload();
                 bank_->show();
                 bank_->raise();

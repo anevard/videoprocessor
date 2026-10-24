@@ -1,6 +1,9 @@
 #pragma once
 #include "LevelsScopeCapture.h"
+#include "LevelsScopeReview.h"
 #include "LevelsScopeThumbnail.h"
+#include <functional>
+#include <memory>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDir>
@@ -66,14 +69,17 @@ namespace LevelsScopeCaptureBank
                 .value(QStringLiteral("encoding")).toString()),
             root.value(QStringLiteral("vp_state")).toObject().value(QStringLiteral("dolby_vision_tunnel")).toBool());
         lines << (thumbnailKind.isEmpty() ? QStringLiteral("No preview for this encoding") :
-            QStringLiteral("Preview: %1 code values, not tone mapped").arg(thumbnailKind));
+            QStringLiteral("Preview: %1, for picking, not judging").arg(thumbnailKind));
         return lines.join(u'\n');
     }
+
+    // The rig the scope is connected to: false when none.
+    using RigTarget = std::function<bool(QString& host, quint16& port, QString& name)>;
 
     class Window : public QDialog
     {
     public:
-        explicit Window(QWidget* parent) : QDialog(parent)
+        Window(QWidget* parent, RigTarget rig) : QDialog(parent), rig_(std::move(rig))
         {
             setWindowTitle(QStringLiteral("Captures"));
             resize(1100, 700);
@@ -89,13 +95,25 @@ namespace LevelsScopeCaptureBank
             empty_ = new QLabel;
             empty_->setProperty("help", true);
             layout->addWidget(empty_);
+            status_ = new QLabel;
+            status_->setWordWrap(true);
+            layout->addWidget(status_);
             auto* buttons = new QHBoxLayout;
+            show_ = new QPushButton(QStringLiteral("Show on rig"));
+            show_->setToolTip(QStringLiteral("Send the chosen still to the rig and show it in place of the live picture, through the live profile"));
+            live_ = new QPushButton(QStringLiteral("Back to live"));
+            live_->setToolTip(QStringLiteral("Show the live source on the rig again"));
             auto* open = new QPushButton(QStringLiteral("Open captures folder"));
             auto* close = new QPushButton(QStringLiteral("Close"));
-            buttons->addWidget(open);
+            buttons->addWidget(show_);
+            buttons->addWidget(live_);
             buttons->addStretch(1);
+            buttons->addWidget(open);
             buttons->addWidget(close);
             layout->addLayout(buttons);
+            connect(show_, &QPushButton::clicked, this, [this] { showOnRig(); });
+            connect(live_, &QPushButton::clicked, this, [this] { backToLive(); });
+            connect(list_, &QListWidget::itemDoubleClicked, this, [this] { showOnRig(); });
             connect(open, &QPushButton::clicked, this, [] {
                 QDir().mkpath(LevelsScopeCapture::Folder());
                 QDesktopServices::openUrl(QUrl::fromLocalFile(LevelsScopeCapture::Folder()));
@@ -123,6 +141,7 @@ namespace LevelsScopeCaptureBank
                 auto* item = new QListWidgetItem(Thumbnail(pixelPath, root), Caption(root));
                 item->setToolTip(Details(root, pixelPath));
                 item->setData(Qt::UserRole, pixelPath);
+                item->setData(Qt::UserRole + 1, root);
                 list_->addItem(item);
             }
             empty_->setText(list_->count() == 0 ?
@@ -132,6 +151,63 @@ namespace LevelsScopeCaptureBank
         }
 
     private:
+        // Network work off the window thread, one at a time.
+        void runOnRig(const QString& busy, std::function<void(const QString&, quint16, std::string&)> work,
+            std::function<QString()> done)
+        {
+            QString host, name;
+            quint16 port = 0;
+            if (worker_) return;
+            if (!rig_ || !rig_(host, port, name))
+            {
+                status_->setText(QStringLiteral("Connect a rig in the scope first."));
+                return;
+            }
+            status_->setText(busy.arg(name));
+            auto error = std::make_shared<std::string>();
+            worker_ = QThread::create([work, host, port, error] { work(host, port, *error); });
+            worker_->setParent(this);
+            QThread* worker = worker_;
+            connect(worker, &QThread::finished, this, [this, worker, name, error, done] {
+                worker_ = nullptr;
+                worker->deleteLater();
+                show_->setEnabled(true);
+                live_->setEnabled(true);
+                status_->setText(error->empty() ? done().arg(name) :
+                    QStringLiteral("%1: %2").arg(name, QString::fromStdString(*error)));
+            });
+            show_->setEnabled(false);
+            live_->setEnabled(false);
+            worker->start();
+        }
+
+        void showOnRig()
+        {
+            QListWidgetItem* item = list_->currentItem();
+            if (!item)
+            {
+                status_->setText(QStringLiteral("Choose a still first."));
+                return;
+            }
+            const QString pixelPath = item->data(Qt::UserRole).toString();
+            const QJsonObject root = item->data(Qt::UserRole + 1).toJsonObject();
+            const QString caption = item->text().section(u'\n', 0, 0);
+            runOnRig(QStringLiteral("Sending the still to %1…"),
+                [pixelPath, root](const QString& host, quint16 port, std::string& error) {
+                    LevelsScopeReview::Show(host, port, pixelPath, root, error);
+                },
+                [caption] { return QStringLiteral("%1 shows the still from ") + caption + QStringLiteral("."); });
+        }
+
+        void backToLive()
+        {
+            runOnRig(QStringLiteral("Returning %1 to live…"),
+                [](const QString& host, quint16 port, std::string& error) {
+                    LevelsScopeReview::Live(host, port, error);
+                },
+                [] { return QStringLiteral("%1 shows the live source."); });
+        }
+
         // The saved preview, or one made now from the pixels (and saved).
         static QIcon Thumbnail(const QString& pixelPath, const QJsonObject& root)
         {
@@ -153,7 +229,12 @@ namespace LevelsScopeCaptureBank
             return pixmap.isNull() ? QIcon() : QIcon(pixmap);
         }
 
+        RigTarget rig_;
         QListWidget* list_ = nullptr;
         QLabel* empty_ = nullptr;
+        QLabel* status_ = nullptr;
+        QPushButton* show_ = nullptr;
+        QPushButton* live_ = nullptr;
+        QThread* worker_ = nullptr;
     };
 }
