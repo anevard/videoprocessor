@@ -61,6 +61,7 @@
 #include <ConfigEditorCore.h>
 #include "ConfigurationRpcServer.h"
 #include "SourceCapture.h"
+#include "SourceReview.h"
 #include "ModernOperatorView.h"
 
 #include "resource.h"
@@ -511,6 +512,9 @@ protected:
 	ConfigurationRpcServer m_configurationRpcServer;
 	// Source frame held for the second PC to pull (SourceCapture.h).
 	SourceCapture m_sourceCapture;
+	// A still shown in place of the live frame (SourceReview.h). Its review
+	// state is guarded by m_captureVideoStateNotificationMutex.
+	SourceReview m_sourceReview;
 	std::map<std::string, std::map<std::string, std::string>>
 		m_configurationSnapshot;
 	struct StagedRuntimeSettings
@@ -1054,6 +1058,11 @@ protected:
 		const ConfigurationRpcProtocol::Frame& request);
 	ConfigurationRpcProtocol::Frame HandleSourceCaptureRpc(
 		const ConfigurationRpcProtocol::Frame& request);
+	ConfigurationRpcProtocol::Frame HandleSourceReviewRpc(
+		const ConfigurationRpcProtocol::Frame& request, size_t cursor,
+		ConfigurationRpcProtocol::Frame response);
+	bool StartSourceReview(const SourceReview::StillPtr& still, std::string& error);
+	bool EndSourceReview(std::string& error);
 	void UpdateActiveOutputSweep(ULONGLONG now);
 	bool StartActiveOutputSweep();
 	bool ApplyActiveOutputSweepCase(size_t index);
