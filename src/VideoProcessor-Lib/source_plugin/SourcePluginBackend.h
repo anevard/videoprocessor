@@ -42,6 +42,15 @@ namespace SourcePluginBackend
 	// The "keys ..." command line last set; empty before the first SetPlayerKeys.
 	const std::string& PlayerKeysCommand();
 
+	// GUI thread, before each capture start. The display VP is fullscreen on,
+	// whose desktop mode the Player's idle picture takes.
+	void SetFullscreenMonitor(HMONITOR monitor);
+
+	// That display's current desktop mode as "<w>x<h>@<num>/<den> sdr|pq",
+	// pq when Windows HDR is on for it; empty if it cannot be read (the
+	// plugin then uses its own fallback). why receives the reason if empty.
+	std::string DesktopModeFormat(std::string& why);
+
 	// For the configuration editor: plugin names and their inputs. Reads each
 	// plugin's function table only; never creates an instance.
 	void AppendDeviceNames(std::vector<std::wstring>& names);

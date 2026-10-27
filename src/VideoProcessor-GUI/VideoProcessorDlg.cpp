@@ -9238,6 +9238,10 @@ void CVideoProcessorDlg::CaptureStart()
 		captureRunToken = m_captureVideoStateSourceEpoch;
 	}
 
+	// The Player's idle picture takes this display's desktop mode, read as it starts.
+	if (SourcePluginBackend::IsSourcePluginDevice(m_captureDevice))
+		SourcePluginBackend::SetFullscreenMonitor(SelectFullscreenMonitor());
+
 	m_captureDevice->StartCapture(captureRunToken);
 
 	// Update GUI
