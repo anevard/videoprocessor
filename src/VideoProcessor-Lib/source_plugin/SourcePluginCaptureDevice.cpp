@@ -122,8 +122,9 @@ namespace
 	// "settings ..." line: "key=value" entries split by 0x1f. Indexed keys
 	// (folder.1, folder.2, ...) go as one repeated key in index order, since
 	// VP's parser keeps only the last of a repeated key. log_dir is VP's logs
-	// folder, never a setting.
-	std::string PlayerSettingsCommand(size_t& entries)
+	// folder and idle_format the fullscreen display's desktop mode, never
+	// settings. idle receives idle_format, or why it was left out.
+	std::string PlayerSettingsCommand(size_t& entries, std::string& idle)
 	{
 		entries = 0;
 		std::string line = "settings ";
@@ -143,7 +144,7 @@ namespace
 				if (dot != std::string::npos &&
 					ConfigFile::TryParseIndexedKey(key, key.substr(0, dot), index))
 					indexed[{ key.substr(0, dot), index }] = value;
-				else if (key != "log_dir")
+				else if (key != "log_dir" && key != "idle_format")
 				{
 					AppendSetting(line, key, value);
 					++entries;
@@ -166,6 +167,12 @@ namespace
 			dir.pop_back();
 		if (!dir.empty())
 			AppendSetting(line, "log_dir", dir);
+
+		std::string why;
+		const std::string format = SourcePluginBackend::DesktopModeFormat(why);
+		if (!format.empty())
+			AppendSetting(line, "idle_format", format);
+		idle = format.empty() ? "none (" + why + ")" : format;
 
 		if (line.back() == SETTINGS_SEPARATOR)
 			line.pop_back();
@@ -345,10 +352,11 @@ void SourcePluginCaptureDevice::StartCapture(CaptureRunToken captureRunToken)
 	// Before start: the plugin reads its settings as it starts. The line
 	// may carry the remote page's PIN, so never the line itself is logged.
 	size_t settingEntries = 0;
+	std::string idleFormat;
 	const int32_t settingsResult = m_api->send_command(
-		m_instance, PlayerSettingsCommand(settingEntries).c_str());
-	DEBUGLOG("Source plugin settings sent: name=%s [player] entries=%zu result=%d",
-		m_nameUtf8.c_str(), settingEntries, settingsResult);
+		m_instance, PlayerSettingsCommand(settingEntries, idleFormat).c_str());
+	DEBUGLOG("Source plugin settings sent: name=%s [player] entries=%zu idle_format=%s result=%d",
+		m_nameUtf8.c_str(), settingEntries, idleFormat.c_str(), settingsResult);
 
 	const int32_t started = m_api->start(m_instance);
 	if (started != VP_SOURCE_OK)
