@@ -243,11 +243,20 @@ void SourcePluginCaptureDevice::StartCapture(CaptureRunToken captureRunToken)
 	m_captureRunToken.store(captureRunToken, std::memory_order_release);
 	m_outputCaptureData.store(true, std::memory_order_release);
 
-	if (m_api->start(m_instance) != VP_SOURCE_OK)
+	const int32_t started = m_api->start(m_instance);
+	if (started != VP_SOURCE_OK)
 	{
+		// Not fatal: VP stays up with the input idle; the plugin logged why
+		// (e.g. mpv not found). The Dlg set Starting, so report Ready, its
+		// one stopped state that still lets the input be left or VP closed
+		// (Failed is never removed). The device itself never left Ready.
 		m_outputCaptureData.store(false, std::memory_order_release);
 		m_captureRunToken.store(0, std::memory_order_release);
-		throw std::runtime_error("Source plugin: start failed");
+		DEBUGLOG("Source plugin capture could not start: name=%s result=%d; input idle, VP continues",
+			m_nameUtf8.c_str(), started);
+		if (m_callback)
+			m_callback->OnCaptureDeviceState(CaptureDeviceState::CAPTUREDEVICESTATE_READY);
+		return;
 	}
 
 	m_readerThread = std::thread(&SourcePluginCaptureDevice::ReaderLoop, this);
