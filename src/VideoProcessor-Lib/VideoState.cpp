@@ -105,6 +105,16 @@ uint32_t VideoState::BytesPerRow() const
 	case VideoFrameEncoding::R12B:
 	case VideoFrameEncoding::R12L:
 		return ((displayMode->FrameWidth() * 36) / 8);
+
+	// Two planes: a full-height Y plane and a half-height CbCr plane of the
+	// same row size. This is the AVERAGE row (1.5 rows' worth), so that
+	// BytesPerFrame() = BytesPerRow() * height is the whole frame.
+	// Do not use it as a plane stride; the luma stride is width * 2 (P010) or width (NV12).
+	case VideoFrameEncoding::P010:
+		return displayMode->FrameWidth() * 3;
+
+	case VideoFrameEncoding::NV12:
+		return displayMode->FrameWidth() * 3 / 2;
 	}
 
 	throw std::runtime_error("Don't know how to calculate row bytes for given format");
