@@ -2405,6 +2405,7 @@ void CVideoProcessorDlg::ReloadConfiguredAccelerators()
 		DestroyAcceleratorTable(previous);
 	DebugLog::Log("Configuration shortcuts applied live");
 	StartGlobalShortcutObserver();
+	UpdateSourcePluginPlayerKeys();
 }
 
 void CVideoProcessorDlg::StartGlobalShortcutObserver()
@@ -4864,6 +4865,7 @@ bool CVideoProcessorDlg::ReplaceStagedAccelerators()
 	StartGlobalShortcutObserver();
 	DebugLog::Log("Shortcut focus policy applied live: foreground_only=%d",
 		m_shortcutsForegroundOnly ? 1 : 0);
+	UpdateSourcePluginPlayerKeys();
 	return true;
 }
 
@@ -8967,6 +8969,24 @@ void CVideoProcessorDlg::OnCommandPlayerTransport(UINT nID)
 
 	if (!SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command))
 		DebugLog::Log("Player key ignored: %s: the Player is not the active input", command);
+}
+
+// Gives the Player its transport keys as configured, for its remote page.
+void CVideoProcessorDlg::UpdateSourcePluginPlayerKeys()
+{
+	std::vector<SourcePluginBackend::PlayerKey> keys;
+	for (const auto& definition : SHORTCUT_DEFINITIONS)
+	{
+		if (definition.command < ID_COMMAND_PLAYER_PLAY_PAUSE ||
+			definition.command > ID_COMMAND_PLAYER_LAST)
+			continue;
+		SourcePluginBackend::PlayerKey key = { definition.configKey, {} };
+		for (const ACCEL& accelerator : m_configuredAccelerators)
+			if (accelerator.cmd == definition.command)
+				key.accelerator = accelerator;
+		keys.push_back(key);
+	}
+	SourcePluginBackend::SetPlayerKeys(keys, m_captureDevice);
 }
 
 void CVideoProcessorDlg::SelectCaptureDevice(int n)
@@ -13817,6 +13837,7 @@ BOOL CVideoProcessorDlg::OnInitDialog()
 	if (!m_accelerator)
 		FatalError(TEXT("Failed to create accelerator table"));
 	StartGlobalShortcutObserver();
+	UpdateSourcePluginPlayerKeys();
 	if (!m_hideUI && m_interfaceMode == ApplicationInterface::Mode::Modern)
 		StartConfigurationEditorInTray();
 

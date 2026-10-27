@@ -11,6 +11,7 @@
 #include <DebugLog.h>
 #include <CaptureCallbackBoundary.h>
 
+#include "SourcePluginBackend.h"
 #include "SourcePluginCaptureDevice.h"
 
 
@@ -267,6 +268,11 @@ void SourcePluginCaptureDevice::StartCapture(CaptureRunToken captureRunToken)
 			m_callback->OnCaptureDeviceState(CaptureDeviceState::CAPTUREDEVICESTATE_READY);
 		return;
 	}
+
+	// VP's Player shortcuts for the plugin's remote page.
+	const std::string& keys = SourcePluginBackend::PlayerKeysCommand();
+	if (!keys.empty())
+		SendCommand(keys.c_str());
 
 	m_readerThread = std::thread(&SourcePluginCaptureDevice::ReaderLoop, this);
 
