@@ -205,6 +205,15 @@ SourcePluginCaptureDevice::~SourcePluginCaptureDevice()
 }
 
 
+void SourcePluginCaptureDevice::SendCommand(const char* commandUtf8)
+{
+	const int32_t result = m_api->send_command(m_instance, commandUtf8);
+	if (result != VP_SOURCE_OK)
+		DEBUGLOG("Source plugin command rejected: name=%s command=\"%s\" result=%d",
+			m_nameUtf8.c_str(), commandUtf8, result);
+}
+
+
 //
 // ACaptureDevice
 //

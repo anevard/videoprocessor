@@ -24,6 +24,11 @@ namespace SourcePluginBackend
 	// True if the device is a source plugin's input (by type, not by name).
 	bool IsSourcePluginDevice(ACaptureDevice* device);
 
+	// GUI thread. Sends one player command line (e.g. "pause", "seek +10")
+	// to the device's plugin. False if the device is not a source plugin;
+	// a command the plugin rejects is logged and still returns true.
+	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8);
+
 	// For the configuration editor: plugin names and their inputs. Reads each
 	// plugin's function table only; never creates an instance.
 	void AppendDeviceNames(std::vector<std::wstring>& names);

@@ -581,6 +581,16 @@ const ShortcutDefinition SHORTCUT_DEFINITIONS[] =
 	{ "capture_3",             ID_COMMAND_CAPTURE_3,              '3',       FCONTROL },
 	{ "capture_4",             ID_COMMAND_CAPTURE_4,              '4',       FCONTROL },
 	{ "capture_player_toggle", ID_COMMAND_CAPTURE_PLAYER_TOGGLE,  '0',       FCONTROL | FALT },
+	{ "player_play_pause",     ID_COMMAND_PLAYER_PLAY_PAUSE,      'K',       FCONTROL | FALT },
+	{ "player_stop",           ID_COMMAND_PLAYER_STOP,            'X',       FCONTROL | FALT },
+	{ "player_previous",       ID_COMMAND_PLAYER_PREVIOUS,        'B',       FCONTROL | FALT },
+	{ "player_next",           ID_COMMAND_PLAYER_NEXT,            'N',       FCONTROL | FALT },
+	{ "player_back_10",        ID_COMMAND_PLAYER_BACK_10,         'J',       FCONTROL | FALT },
+	{ "player_forward_10",     ID_COMMAND_PLAYER_FORWARD_10,      'L',       FCONTROL | FALT },
+	{ "player_back_30",        ID_COMMAND_PLAYER_BACK_30,         'J',       FCONTROL | FALT | FSHIFT },
+	{ "player_forward_30",     ID_COMMAND_PLAYER_FORWARD_30,      'L',       FCONTROL | FALT | FSHIFT },
+	{ "player_audio_next",     ID_COMMAND_PLAYER_AUDIO_NEXT,      'A',       FCONTROL | FALT },
+	{ "player_subtitles_next", ID_COMMAND_PLAYER_SUBTITLES_NEXT,  'U',       FCONTROL | FALT },
 	{ "video_conversion_off",  ID_COMMAND_VC_NONE,                'V',       0 },
 	{ "video_conversion_p010", ID_COMMAND_VC_P010,                'V',       FSHIFT },
 	{ "config_editor",         ID_COMMAND_CONFIG_EDITOR,          'S',       FCONTROL | FSHIFT },
@@ -2106,6 +2116,7 @@ BEGIN_MESSAGE_MAP(CVideoProcessorDlg, CDialog)
 	ON_COMMAND_RANGE(ID_COMMAND_RENDERER_SELECT_FIRST, ID_COMMAND_RENDERER_SELECT_LAST, &CVideoProcessorDlg::OnCommandRendererSelect)
 	ON_COMMAND_RANGE(ID_COMMAND_CAPTURE_1, ID_COMMAND_CAPTURE_4, &CVideoProcessorDlg::OnSelectCaptureDevice)
 	ON_COMMAND(ID_COMMAND_CAPTURE_PLAYER_TOGGLE, &CVideoProcessorDlg::OnCommandCapturePlayerToggle)
+	ON_COMMAND_RANGE(ID_COMMAND_PLAYER_PLAY_PAUSE, ID_COMMAND_PLAYER_LAST, &CVideoProcessorDlg::OnCommandPlayerTransport)
 
 
 
@@ -8939,6 +8950,23 @@ void CVideoProcessorDlg::OnCommandCapturePlayerToggle()
 
 	m_captureDeviceCombo.SetCurSel(target);
 	OnCaptureDeviceSelected();
+}
+
+// Player transport and track keys: the same commands as the DJ page's buttons, sent
+// to the active input only when it is the Player.
+void CVideoProcessorDlg::OnCommandPlayerTransport(UINT nID)
+{
+	static const char* const commands[] =
+	{
+		"pause", "stop", "previous", "next", "seek -10", "seek +10", "seek -30", "seek +30",
+		"audio_next", "subtitles_next"
+	};
+	static_assert(std::size(commands) == ID_COMMAND_PLAYER_LAST - ID_COMMAND_PLAYER_PLAY_PAUSE + 1,
+		"one command per Player transport key");
+	const char* command = commands[nID - ID_COMMAND_PLAYER_PLAY_PAUSE];
+
+	if (!SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command))
+		DebugLog::Log("Player key ignored: %s: the Player is not the active input", command);
 }
 
 void CVideoProcessorDlg::SelectCaptureDevice(int n)

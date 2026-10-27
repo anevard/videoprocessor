@@ -298,6 +298,16 @@ namespace SourcePluginBackend
 		return dynamic_cast<SourcePluginCaptureDevice*>(device) != nullptr;
 	}
 
+	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8)
+	{
+		SourcePluginCaptureDevice* plugin = dynamic_cast<SourcePluginCaptureDevice*>(device);
+		if (!plugin)
+			return false;
+
+		plugin->SendCommand(commandUtf8);
+		return true;
+	}
+
 	void AppendDeviceNames(std::vector<std::wstring>& names)
 	{
 		std::vector<LoadedPlugin> plugins = LoadPlugins();
