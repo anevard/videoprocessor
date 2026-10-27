@@ -581,6 +581,7 @@ const ShortcutDefinition SHORTCUT_DEFINITIONS[] =
 	{ "capture_2",             ID_COMMAND_CAPTURE_2,              '2',       FCONTROL },
 	{ "capture_3",             ID_COMMAND_CAPTURE_3,              '3',       FCONTROL },
 	{ "capture_4",             ID_COMMAND_CAPTURE_4,              '4',       FCONTROL },
+	{ "capture_player_toggle", ID_COMMAND_CAPTURE_PLAYER_TOGGLE,  '0',       FCONTROL | FALT },
 	{ "video_conversion_off",  ID_COMMAND_VC_NONE,                'V',       0 },
 	{ "video_conversion_p010", ID_COMMAND_VC_P010,                'V',       FSHIFT },
 	{ "config_editor",         ID_COMMAND_CONFIG_EDITOR,          'S',       FCONTROL | FSHIFT },
@@ -2105,6 +2106,7 @@ BEGIN_MESSAGE_MAP(CVideoProcessorDlg, CDialog)
 	ON_COMMAND_RANGE(ID_COMMAND_UNIFIED_PROFILE_FIRST, ID_COMMAND_UNIFIED_PROFILE_LAST, &CVideoProcessorDlg::OnCommandDisplayRule)
 	ON_COMMAND_RANGE(ID_COMMAND_RENDERER_SELECT_FIRST, ID_COMMAND_RENDERER_SELECT_LAST, &CVideoProcessorDlg::OnCommandRendererSelect)
 	ON_COMMAND_RANGE(ID_COMMAND_CAPTURE_1, ID_COMMAND_CAPTURE_4, &CVideoProcessorDlg::OnSelectCaptureDevice)
+	ON_COMMAND(ID_COMMAND_CAPTURE_PLAYER_TOGGLE, &CVideoProcessorDlg::OnCommandCapturePlayerToggle)
 
 
 
@@ -2296,6 +2298,7 @@ CVideoProcessorDlg::CVideoProcessorDlg():
 	m_blackMagicDeviceDiscoverer = new BlackMagicDeckLinkCaptureDeviceDiscoverer(
 		*this, deckLinkFormatPreferences);
 	m_magewellDeviceDiscoverer = MagewellBackend::CreateDiscoverer(*this);
+	m_sourcePluginDeviceDiscoverer = SourcePluginBackend::CreateDiscoverer(*this);
 	
 	// Initialize stats overlay
 	m_statsOverlay = new StatsOverlayWindow();
@@ -8888,6 +8891,57 @@ void CVideoProcessorDlg::OnSelectCaptureDevice(UINT nID)
 	SelectCaptureDevice(deviceIndex);
 }
 
+// Switches between the card input and the Player. Matches the Player by
+// device type and the way back by exact name, never by SelectCaptureDevice's
+// regex, which selects entry 0 when nothing matches.
+void CVideoProcessorDlg::OnCommandCapturePlayerToggle()
+{
+	auto isPlayer = [this](int index)
+	{
+		return SourcePluginBackend::IsSourcePluginDevice(
+			static_cast<ACaptureDevice*>(m_captureDeviceCombo.GetItemDataPtr(index)));
+	};
+
+	const int current = m_captureDeviceCombo.GetCurSel();
+	const int itemCount = m_captureDeviceCombo.GetCount();
+	int target = -1;
+
+	if (current < 0 || !isPlayer(current))
+	{
+		for (int i = 0; i < itemCount && target < 0; ++i)
+			if (isPlayer(i))
+				target = i;
+		if (target < 0)
+		{
+			DebugLog::Log("Player input toggle: no Player input listed");
+			return;
+		}
+		m_playerToggleReturnDevice.Empty();
+		if (current >= 0)
+			m_captureDeviceCombo.GetLBText(current, m_playerToggleReturnDevice);
+	}
+	else
+	{
+		if (!m_playerToggleReturnDevice.IsEmpty())
+		{
+			const int remembered = m_captureDeviceCombo.FindStringExact(-1, m_playerToggleReturnDevice);
+			if (remembered >= 0 && !isPlayer(remembered))
+				target = remembered;
+		}
+		for (int i = 0; i < itemCount && target < 0; ++i)
+			if (!isPlayer(i))
+				target = i;
+		if (target < 0)
+		{
+			DebugLog::Log("Player input toggle: no other input listed");
+			return;
+		}
+	}
+
+	m_captureDeviceCombo.SetCurSel(target);
+	OnCaptureDeviceSelected();
+}
+
 void CVideoProcessorDlg::SelectCaptureDevice(int n)
 {
 	// Logic to select the capture device
@@ -13721,6 +13775,15 @@ BOOL CVideoProcessorDlg::OnInitDialog()
 		DebugLog::Log("Magewell discovery unavailable: %s", exception.what());
 	}
 
+	try
+	{
+		m_sourcePluginDeviceDiscoverer->Start();
+	}
+	catch (const std::exception& exception)
+	{
+		DebugLog::Log("Source plugin discovery unavailable: %s", exception.what());
+	}
+
 	const CString magewellUnavailable = MagewellBackend::UnavailableMessage(m_initialCaptureDevice);
 	if (!magewellUnavailable.IsEmpty())
     {
@@ -14856,6 +14919,19 @@ void CVideoProcessorDlg::OnClose()
 			// Never started because the runtime is absent. Nothing to unwind.
 		}
 		m_magewellDeviceDiscoverer.Release();
+	}
+
+	if (m_sourcePluginDeviceDiscoverer)
+	{
+		try
+		{
+			m_sourcePluginDeviceDiscoverer->Stop();
+		}
+		catch (const std::exception&)
+		{
+			// Never started. Nothing to unwind.
+		}
+		m_sourcePluginDeviceDiscoverer.Release();
 	}
 
 	UpdateState();
