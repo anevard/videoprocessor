@@ -283,6 +283,37 @@ namespace
 		// The owner assigns this to a CComPtr, which takes the first reference.
 		std::atomic<ULONG> m_refCount{0};
 	};
+
+	// GUI thread only.
+	std::string& PlayerKeysLine()
+	{
+		static std::string line;
+		return line;
+	}
+
+	// The chord as VP's shortcut parser spells it (Ctrl, Alt, Shift, key);
+	// empty for a cleared key. Covers the keys that parser accepts.
+	std::string ChordText(const ACCEL& accelerator)
+	{
+		const WORD key = accelerator.key;
+		std::string keyText;
+		if ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9'))
+			keyText = std::string(1, static_cast<char>(key));
+		else if (key >= VK_F1 && key <= VK_F24)
+			keyText = "F" + std::to_string(key - VK_F1 + 1);
+		else if (key == VK_ESCAPE)
+			keyText = "Esc";
+		else if (key == VK_RETURN)
+			keyText = "Enter";
+		else
+			return {};
+
+		std::string chord;
+		if (accelerator.fVirt & FCONTROL) chord += "Ctrl+";
+		if (accelerator.fVirt & FALT) chord += "Alt+";
+		if (accelerator.fVirt & FSHIFT) chord += "Shift+";
+		return chord + keyText;
+	}
 }
 
 
@@ -306,6 +337,24 @@ namespace SourcePluginBackend
 
 		plugin->SendCommand(commandUtf8);
 		return true;
+	}
+
+	void SetPlayerKeys(const std::vector<PlayerKey>& keys, ACaptureDevice* activeDevice)
+	{
+		std::string line = "keys ";
+		for (size_t i = 0; i < keys.size(); ++i)
+		{
+			if (i)
+				line += ';';
+			line += keys[i].name + '=' + ChordText(keys[i].accelerator);
+		}
+		PlayerKeysLine() = line;
+		SendSourcePluginCommand(activeDevice, line.c_str());
+	}
+
+	const std::string& PlayerKeysCommand()
+	{
+		return PlayerKeysLine();
 	}
 
 	void AppendDeviceNames(std::vector<std::wstring>& names)

@@ -29,6 +29,19 @@ namespace SourcePluginBackend
 	// a command the plugin rejects is logged and still returns true.
 	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8);
 
+	// GUI thread. VP's Player shortcuts as configured, for the plugin's own
+	// remote page (accelerator.key 0 = cleared). Kept, sent to the active
+	// device if it is a source plugin, and sent again at every capture start.
+	struct PlayerKey
+	{
+		std::string name;     // [shortcuts] key, e.g. "player_play_pause"
+		ACCEL accelerator;
+	};
+	void SetPlayerKeys(const std::vector<PlayerKey>& keys, ACaptureDevice* activeDevice);
+
+	// The "keys ..." command line last set; empty before the first SetPlayerKeys.
+	const std::string& PlayerKeysCommand();
+
 	// For the configuration editor: plugin names and their inputs. Reads each
 	// plugin's function table only; never creates an instance.
 	void AppendDeviceNames(std::vector<std::wstring>& names);
