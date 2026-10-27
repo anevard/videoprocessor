@@ -4,6 +4,7 @@
 #include <shellapi.h>
 #include <objbase.h>
 #include <atlbase.h>
+#include <mmdeviceapi.h>
 #include <dxgi1_2.h>
 
 #include "ConfigEditorWindow.h"
@@ -75,6 +76,12 @@
 #include <QListView>
 #include <QMenu>
 #include <QMessageBox>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
@@ -4334,6 +4341,7 @@ QWidget* ConfigEditorWindow::createShell()
         QStringLiteral("Configure smooth motion and field-aware deinterlacing. Changes apply after renderer restart."),
         QStringLiteral("vprenderer.motion")));
     const int displayPageIndex = pages_->addWidget(createDisplayPage());
+    const int playerPageIndex = pages_->addWidget(createPlayerPage());
     auto* navGroup = new QButtonGroup(root);
     navGroup->setExclusive(true);
     const auto addLeaf = [this, navLayout, navGroup](const QString& title, int page)
@@ -4348,6 +4356,7 @@ QWidget* ConfigEditorWindow::createShell()
     addLeaf(QStringLiteral("Display"), displayPageIndex);
     addLeaf(QStringLiteral("Queue"), 1);
     addLeaf(QStringLiteral("DV"), 5);
+    addLeaf(QStringLiteral("Player"), playerPageIndex);
     QPushButton* shadersNavigation = addLeaf(QStringLiteral("Shaders"), 14);
     addLeaf(QStringLiteral("Actions"), 7);
     QPushButton* shortcutsNavigation = addLeaf(QStringLiteral("Shortcuts"), 15);
@@ -10688,6 +10697,509 @@ QWidget* ConfigEditorWindow::createLogsPage()
 
     return createPage(QStringLiteral("Logs"),
         QStringLiteral("Control VideoProcessor log files and diagnostic detail."), content);
+}
+
+namespace
+{
+    // This computer's active playback devices as mpv's wasapi output names
+    // them (ao_wasapi_utils.c): "wasapi/" plus the endpoint id without its
+    // "{0.0.0.00000000}." prefix, described by the friendly name.
+    struct PlayerAudioDevice
+    {
+        QString description;
+        QString id;
+    };
+
+    std::vector<PlayerAudioDevice> playerAudioDevices()
+    {
+        // PKEY_Device_FriendlyName, defined here to avoid initguid in this unit.
+        static const PROPERTYKEY friendlyName = {
+            { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 14 };
+        std::vector<PlayerAudioDevice> devices;
+        const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        {
+            CComPtr<IMMDeviceEnumerator> enumerator;
+            CComPtr<IMMDeviceCollection> collection;
+            UINT count = 0;
+            if (SUCCEEDED(enumerator.CoCreateInstance(__uuidof(MMDeviceEnumerator))) &&
+                SUCCEEDED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection)) &&
+                SUCCEEDED(collection->GetCount(&count)))
+            {
+                for (UINT index = 0; index < count; ++index)
+                {
+                    CComPtr<IMMDevice> device;
+                    LPWSTR endpoint = nullptr;
+                    if (FAILED(collection->Item(index, &device)) || FAILED(device->GetId(&endpoint)))
+                        continue;
+                    QString id = QString::fromWCharArray(endpoint);
+                    CoTaskMemFree(endpoint);
+                    const QString prefix = QStringLiteral("{0.0.0.00000000}.");
+                    if (id.startsWith(prefix)) id = id.mid(prefix.size());
+                    QString description = id;
+                    CComPtr<IPropertyStore> properties;
+                    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &properties)))
+                    {
+                        PROPVARIANT value;
+                        PropVariantInit(&value);
+                        if (SUCCEEDED(properties->GetValue(friendlyName, &value)) &&
+                            value.vt == VT_LPWSTR && value.pwszVal)
+                            description = QString::fromWCharArray(value.pwszVal);
+                        PropVariantClear(&value);
+                    }
+                    devices.push_back({ description, QStringLiteral("wasapi/") + id });
+                }
+            }
+        }
+        if (SUCCEEDED(initialized)) CoUninitialize();
+        return devices;
+    }
+}
+
+// The media player source plugin. Its settings are [player]; the plugin
+// receives them when the Player starts. The film browser asks the running
+// Player's remote page, on the target VP's computer.
+QWidget* ConfigEditorWindow::createPlayerPage()
+{
+    const QString section = QStringLiteral("player");
+    auto* content = new QWidget;
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(12);
+
+    // Folders: folder.1, folder.2, ... as "Name|path", renumbered on every edit.
+    auto* folders = new QTableWidget(0, 2);
+    folders->setObjectName(QStringLiteral("config.player.folders"));
+    folders->setAccessibleName(QStringLiteral("Player folders"));
+    folders->setHorizontalHeaderLabels({ QStringLiteral("Name"), QStringLiteral("Path") });
+    folders->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    folders->horizontalHeader()->setStretchLastSection(true);
+    folders->verticalHeader()->setVisible(false);
+    folders->setSelectionBehavior(QAbstractItemView::SelectRows);
+    folders->setSelectionMode(QAbstractItemView::SingleSelection);
+    folders->setMinimumHeight(140);
+    if (document_)
+    {
+        std::vector<std::pair<unsigned long, QString>> entries;
+        for (const auto& setting : document_->SectionSettings(section.toStdString()))
+        {
+            const QString key = QString::fromStdString(setting.first).trimmed().toLower();
+            if (!key.startsWith(QStringLiteral("folder."))) continue;
+            bool numbered = false;
+            const unsigned long index = key.mid(7).toULong(&numbered);
+            if (numbered && index > 0)
+                entries.emplace_back(index, QString::fromLocal8Bit(
+                    ConfigEditorCore::ConfigDocument::StripComment(setting.second).c_str()).trimmed());
+        }
+        std::stable_sort(entries.begin(), entries.end(),
+            [](const auto& left, const auto& right) { return left.first < right.first; });
+        for (const auto& entry : entries)
+        {
+            const int bar = entry.second.indexOf(QLatin1Char('|'));
+            const int row = folders->rowCount();
+            folders->insertRow(row);
+            folders->setItem(row, 0, new QTableWidgetItem(bar < 0 ? QString() : entry.second.left(bar).trimmed()));
+            folders->setItem(row, 1, new QTableWidgetItem(bar < 0 ? entry.second : entry.second.mid(bar + 1).trimmed()));
+        }
+    }
+    const auto saveFolders = [this, folders, section]
+    {
+        if (!document_) return;
+        const std::string sectionText = section.toStdString();
+        for (const auto& setting : document_->SectionSettings(sectionText))
+            if (QString::fromStdString(setting.first).trimmed().toLower().startsWith(QStringLiteral("folder.")))
+                document_->RemoveKnown(sectionText, setting.first.c_str());
+        int index = 0;
+        for (int row = 0; row < folders->rowCount(); ++row)
+        {
+            const QString name = folders->item(row, 0) ? folders->item(row, 0)->text().trimmed() : QString();
+            const QString path = folders->item(row, 1) ? folders->item(row, 1)->text().trimmed() : QString();
+            if (path.isEmpty()) continue;
+            const QString entry = name.isEmpty() ? path : name + QStringLiteral("|") + path;
+            const std::string key = "folder." + std::to_string(++index);
+            document_->SetKnown(sectionText, key.c_str(), entry.toLocal8Bit().constData());
+        }
+        markDirty();
+    };
+    connect(folders, &QTableWidget::itemChanged, this, [saveFolders](QTableWidgetItem*) { saveFolders(); });
+    const auto moveFolder = [folders, saveFolders](int direction)
+    {
+        const int row = folders->currentRow();
+        const int target = row + direction;
+        if (row < 0 || target < 0 || target >= folders->rowCount()) return;
+        {
+            QSignalBlocker blocker(folders);
+            for (int column = 0; column < 2; ++column)
+            {
+                QTableWidgetItem* moving = folders->takeItem(row, column);
+                folders->setItem(row, column, folders->takeItem(target, column));
+                folders->setItem(target, column, moving);
+            }
+        }
+        folders->setCurrentCell(target, std::max(0, folders->currentColumn()));
+        saveFolders();
+    };
+    auto* folderActions = new QHBoxLayout;
+    auto* addFolder = new QPushButton(QStringLiteral("Add"));
+    auto* removeFolder = new QPushButton(QStringLiteral("Remove"));
+    auto* folderUp = new QPushButton(QStringLiteral("Up"));
+    auto* folderDown = new QPushButton(QStringLiteral("Down"));
+    for (QPushButton* button : { addFolder, removeFolder, folderUp, folderDown })
+        folderActions->addWidget(button);
+    folderActions->addStretch();
+    connect(addFolder, &QPushButton::clicked, this, [folders]
+    {
+        const int row = folders->rowCount();
+        {
+            QSignalBlocker blocker(folders);
+            folders->insertRow(row);
+            folders->setItem(row, 0, new QTableWidgetItem);
+            folders->setItem(row, 1, new QTableWidgetItem);
+        }
+        folders->setCurrentCell(row, 0);
+        folders->editItem(folders->item(row, 0));
+    });
+    connect(removeFolder, &QPushButton::clicked, this, [folders, saveFolders]
+    {
+        if (folders->currentRow() < 0) return;
+        folders->removeRow(folders->currentRow());
+        saveFolders();
+    });
+    connect(folderUp, &QPushButton::clicked, this, [moveFolder] { moveFolder(-1); });
+    connect(folderDown, &QPushButton::clicked, this, [moveFolder] { moveFolder(1); });
+    auto* folderBody = new QWidget;
+    auto* folderLayout = new QVBoxLayout(folderBody);
+    folderLayout->setContentsMargins(0, 0, 0, 0);
+    folderLayout->addWidget(folders);
+    folderLayout->addLayout(folderActions);
+    layout->addWidget(createCard(QStringLiteral("Folders"),
+        QStringLiteral("Full paths on the VP computer, such as V:\\Movies or \\\\server\\share\\Movies. "
+            "Config does not check them; the remote page shows a folder it cannot reach."), folderBody));
+
+    // Playback.
+    auto* playback = new QWidget;
+    auto* playbackLayout = new QVBoxLayout(playback);
+    playbackLayout->setContentsMargins(0, 0, 0, 0);
+    playbackLayout->setSpacing(10);
+    playbackLayout->addWidget(fieldWithHelp(QStringLiteral("Start-up file"),
+        bindTextField(section, QStringLiteral("file")),
+        QStringLiteral("Optional. A file to play when the Player starts.")));
+    playbackLayout->addWidget(bindCheckField(QStringLiteral("Autoplay the queue"),
+        section, QStringLiteral("autoplay"), true));
+    playbackLayout->addWidget(bindCheckField(QStringLiteral("Remove played entries from the queue"),
+        section, QStringLiteral("remove_played"), false));
+    // Audio device: "description|wasapi/{id}", as the remote page writes it.
+    // Only Config on the VP computer can list that computer's devices.
+    auto* audio = new QComboBox;
+    audio->setObjectName(controlName(section, QStringLiteral("audio_device")));
+    audio->setAccessibleName(QStringLiteral("Audio device"));
+    audio->setMinimumWidth(260);
+    audio->addItem(QStringLiteral("Windows default"), QString());
+    const QString storedAudio = value(section, QStringLiteral("audio_device"), QString()).trimmed();
+    const int audioBar = storedAudio.lastIndexOf(QLatin1Char('|'));
+    const QString storedName = (audioBar < 0 ? storedAudio : storedAudio.left(audioBar)).trimmed();
+    const QString storedId = (audioBar < 0 ? storedAudio : storedAudio.mid(audioBar + 1)).trimmed();
+    int audioIndex = storedAudio.isEmpty() ? 0 : -1;
+    if (!remoteClient_)
+        for (const PlayerAudioDevice& device : playerAudioDevices())
+        {
+            audio->addItem(device.description, device.description + QStringLiteral("|") + device.id);
+            if (audioIndex < 0 && !storedAudio.isEmpty() &&
+                (device.id == storedId || device.description == storedName))
+                audioIndex = audio->count() - 1;
+        }
+    if (audioIndex < 0)
+    {
+        audio->addItem((remoteClient_ ? QString() : QStringLiteral("(not found) ")) +
+            (storedName.isEmpty() ? storedId : storedName), storedAudio);
+        audioIndex = audio->count() - 1;
+    }
+    audio->setCurrentIndex(audioIndex);
+    audio->setEnabled(!remoteClient_);
+    connect(audio, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, audio, section](int index)
+    {
+        if (!document_ || index < 0) return;
+        document_->SetKnown(section.toStdString(), "audio_device",
+            audio->itemData(index).toString().toLocal8Bit().constData());
+        markDirty();
+    });
+    playbackLayout->addWidget(fieldWithHelp(QStringLiteral("Audio device"), audio, remoteClient_ ?
+        QStringLiteral("Config on another computer cannot list the VP computer's devices. Choose it in "
+            "Config on the VP computer, or in the remote page's Settings.") :
+        QStringLiteral("This computer's playback devices. A device not connected now shows as not found "
+            "and stays chosen.")));
+    layout->addWidget(createCard(QStringLiteral("Playback"), QString(), playback));
+
+    // Subtitles: the Player draws the chosen track into its frames.
+    const auto rangeField = [this, section](const QString& key, int minimum, int maximum, int fallback,
+        const QString& suffix)
+    {
+        auto* spin = new QSpinBox;
+        spin->setObjectName(controlName(section, key));
+        spin->setRange(minimum, maximum);
+        spin->setSuffix(suffix);
+        spin->setMaximumWidth(108);
+        spin->setAlignment(Qt::AlignRight);
+        bool valid = false;
+        const int configured = value(section, key, QString::number(fallback)).toInt(&valid);
+        spin->setValue(valid && configured >= minimum && configured <= maximum ? configured : fallback);
+        connect(spin, qOverload<int>(&QSpinBox::valueChanged), this, [this, section, key](int number)
+        {
+            if (!document_) return;
+            document_->SetKnown(section.toStdString(), key.toStdString().c_str(), std::to_string(number));
+            markDirty();
+        });
+        return spin;
+    };
+    auto* subtitles = new QWidget;
+    auto* subtitlesLayout = new QVBoxLayout(subtitles);
+    subtitlesLayout->setContentsMargins(0, 0, 0, 0);
+    subtitlesLayout->setSpacing(10);
+    subtitlesLayout->addWidget(bindCheckField(QStringLiteral("Show subtitles"),
+        section, QStringLiteral("sub_enabled"), false));
+    QLineEdit* languages = bindTextField(section, QStringLiteral("sub_languages"));
+    languages->setPlaceholderText(QStringLiteral("en,eng"));
+    languages->setMaximumWidth(180);
+    subtitlesLayout->addWidget(fieldWithHelp(QStringLiteral("Preferred languages"), languages,
+        QStringLiteral("Language codes, comma-separated. Empty: the film's default track.")));
+    subtitlesLayout->addWidget(bindCheckField(QStringLiteral("Forced subtitles only"),
+        section, QStringLiteral("sub_forced_only"), false));
+    subtitlesLayout->addWidget(fieldWithHelp(QStringLiteral("Size"),
+        rangeField(QStringLiteral("sub_scale"), 10, 400, 100, QStringLiteral(" %")),
+        QStringLiteral("Text subtitles only; picture subtitles keep their authored size. Default: 100 %.")));
+    subtitlesLayout->addWidget(fieldWithHelp(QStringLiteral("Position"),
+        rangeField(QStringLiteral("sub_position"), 0, 100, 100, QString()),
+        QStringLiteral("0 is the top of the picture, 100 the bottom. Default: 100.")));
+    subtitlesLayout->addWidget(fieldWithHelp(QStringLiteral("HDR brightness"),
+        rangeField(QStringLiteral("sub_nits"), 10, 1000, 50, QStringLiteral(" nits")),
+        QStringLiteral("The level subtitles are drawn at in HDR films. Default: 50 nits.")));
+    layout->addWidget(createCard(QStringLiteral("Subtitles"),
+        QStringLiteral("Choosing a track on the remote page shows it until the Player stops. "
+            "Changes take effect at the next Player start."), subtitles));
+
+    // Remote page.
+    auto* remote = new QWidget;
+    auto* remoteLayout = new QVBoxLayout(remote);
+    remoteLayout->setContentsMargins(0, 0, 0, 0);
+    remoteLayout->setSpacing(10);
+    remoteLayout->addWidget(bindCheckField(QStringLiteral("Enable the remote page"),
+        section, QStringLiteral("dj_enabled"), false));
+    auto* port = new QSpinBox;
+    port->setObjectName(QStringLiteral("config.player.dj_port"));
+    port->setRange(1, 65535);
+    port->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    port->setMaximumWidth(108);
+    port->setAlignment(Qt::AlignRight);
+    bool validPort = false;
+    const int configuredPort = value(section, QStringLiteral("dj_port"), QStringLiteral("18686")).toInt(&validPort);
+    port->setValue(validPort && configuredPort >= 1 && configuredPort <= 65535 ? configuredPort : 18686);
+    connect(port, qOverload<int>(&QSpinBox::valueChanged), this, [this](int number)
+    {
+        if (!document_) return;
+        document_->SetKnown("player", "dj_port", std::to_string(number));
+        markDirty();
+    });
+    remoteLayout->addWidget(fieldWithHelp(QStringLiteral("Port"), port, QStringLiteral("Default: 18686.")));
+    QLineEdit* pin = bindTextField(section, QStringLiteral("dj_pin"));
+    pin->setEchoMode(QLineEdit::Password);
+    pin->setMaximumWidth(180);
+    remoteLayout->addWidget(fieldWithHelp(QStringLiteral("PIN"), pin,
+        QStringLiteral("Optional. The remote page asks for it.")));
+    layout->addWidget(createCard(QStringLiteral("Remote page"),
+        QStringLiteral("Control the Player from a browser on another device."), remote));
+
+    // Diagnostics.
+    auto* diagnostics = new QWidget;
+    auto* diagnosticsLayout = new QVBoxLayout(diagnostics);
+    diagnosticsLayout->setContentsMargins(0, 0, 0, 0);
+    diagnosticsLayout->setSpacing(10);
+    diagnosticsLayout->addWidget(fieldWithHelp(QStringLiteral("mpv log level"),
+        bindChoiceField(section, QStringLiteral("mpv_log_level"),
+            { QStringLiteral("warn"), QStringLiteral("info"), QStringLiteral("v") },
+            { QStringLiteral("Warnings"), QStringLiteral("Info"), QStringLiteral("Verbose") }),
+        QStringLiteral("How much of mpv's log also goes into vp.log. mpv.log in the logs folder always has the full log.")));
+    QLineEdit* sinkName = bindTextField(section, QStringLiteral("sink_name"));
+    sinkName->setPlaceholderText(QStringLiteral("vpbridge"));
+    sinkName->setMaximumWidth(180);
+    diagnosticsLayout->addWidget(fieldWithHelp(QStringLiteral("Sink name"), sinkName,
+        QStringLiteral("Letters, digits, - and _ only. Leave empty unless asked to change it.")));
+    layout->addWidget(createCard(QStringLiteral("Diagnostics"), QString(), diagnostics));
+
+    // Play a film: a client of the running Player's remote page.
+    auto* browser = new QWidget;
+    auto* browserLayout = new QVBoxLayout(browser);
+    browserLayout->setContentsMargins(0, 0, 0, 0);
+    browserLayout->setSpacing(8);
+    auto* browserBar = new QHBoxLayout;
+    auto* folderChoice = new QComboBox;
+    folderChoice->setObjectName(QStringLiteral("config.player.browseFolder"));
+    folderChoice->setAccessibleName(QStringLiteral("Folder to browse"));
+    folderChoice->setMinimumWidth(180);
+    auto* refresh = new QPushButton(QStringLiteral("Refresh"));
+    browserBar->addWidget(folderChoice);
+    browserBar->addWidget(refresh);
+    browserBar->addStretch();
+    browserLayout->addLayout(browserBar);
+    auto* where = helpLabel(QString());
+    browserLayout->addWidget(where);
+    auto* films = new QListWidget;
+    films->setObjectName(QStringLiteral("config.player.films"));
+    films->setAccessibleName(QStringLiteral("Films"));
+    films->setMinimumHeight(180);
+    browserLayout->addWidget(films);
+    auto* playActions = new QHBoxLayout;
+    auto* play = new QPushButton(QStringLiteral("Play"));
+    play->setEnabled(false);
+    playActions->addWidget(play);
+    playActions->addStretch();
+    browserLayout->addLayout(playActions);
+    auto* status = helpLabel(QStringLiteral("Press Refresh to list the Player's folders."));
+    browserLayout->addWidget(status);
+
+    struct BrowseState { int folder = -1; QString path; };
+    auto state = std::make_shared<BrowseState>();
+    auto* network = new QNetworkAccessManager(browser);
+    const QString host = remoteClient_ ? remoteHost_ : QStringLiteral("127.0.0.1");
+    constexpr int kDirectoryRole = Qt::UserRole + 1;
+    const auto unreachable = [host, port]
+    {
+        return QStringLiteral("The Player's remote page does not answer at %1:%2. "
+            "Select the Player input with the remote page enabled, then press Refresh.").arg(host).arg(port->value());
+    };
+    // One request to the remote page; done(json) on success, else the reason shown.
+    const auto ask = [network, host, port, pin, status, unreachable](
+        bool post, const QString& path, const QList<QPair<QString, QString>>& query,
+        std::function<void(const QJsonObject&)> done)
+    {
+        // Every byte outside A-Z a-z 0-9 -._~ encoded: the page's server reads '+' as a space.
+        QByteArray encoded;
+        for (const auto& item : query)
+        {
+            if (!encoded.isEmpty()) encoded += '&';
+            encoded += QUrl::toPercentEncoding(item.first) + '=' + QUrl::toPercentEncoding(item.second);
+        }
+        QUrl url;
+        url.setScheme(QStringLiteral("http"));
+        url.setHost(host);
+        url.setPort(port->value());
+        url.setPath(path);
+        url.setQuery(QString::fromLatin1(encoded), QUrl::StrictMode);
+        QNetworkRequest request(url);
+        request.setTransferTimeout(3000);
+        if (!pin->text().isEmpty()) request.setRawHeader("X-DJ-PIN", pin->text().toUtf8());
+        QNetworkReply* reply = post ? network->post(request, QByteArray()) : network->get(request);
+        QObject::connect(reply, &QNetworkReply::finished, status, [reply, status, unreachable, done]
+        {
+            reply->deleteLater();
+            const QJsonObject json = QJsonDocument::fromJson(reply->readAll()).object();
+            const int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (code == 403 && json.value(QStringLiteral("error")).toString() == QStringLiteral("pin"))
+                status->setText(QStringLiteral("The remote page refused the PIN. Check the PIN above against the one the Player started with."));
+            else if (json.contains(QStringLiteral("error")))
+                status->setText(json.value(QStringLiteral("error")).toString());
+            else if (reply->error() != QNetworkReply::NoError || code == 0)
+                status->setText(unreachable());
+            else
+                done(json);
+        });
+    };
+    auto list = std::make_shared<std::function<void()>>();
+    *list = [ask, state, films, where, play, status, kDirectoryRole]
+    {
+        films->clear();
+        play->setEnabled(false);
+        if (state->folder < 0) return;
+        const QList<QPair<QString, QString>> query {
+            { QStringLiteral("folder"), QString::number(state->folder) },
+            { QStringLiteral("path"), state->path } };
+        ask(false, QStringLiteral("/api/list"), query, [state, films, where, status, kDirectoryRole](const QJsonObject& json)
+        {
+            films->clear();
+            where->setText(json.value(QStringLiteral("dir")).toString());
+            if (!state->path.isEmpty())
+            {
+                auto* up = new QListWidgetItem(QStringLiteral(".."), films);
+                up->setData(kDirectoryRole, true);
+            }
+            for (const QJsonValue& dir : json.value(QStringLiteral("dirs")).toArray())
+            {
+                auto* item = new QListWidgetItem(dir.toString() + QStringLiteral("\\"), films);
+                item->setData(Qt::UserRole, dir.toString());
+                item->setData(kDirectoryRole, true);
+            }
+            for (const QJsonValue& file : json.value(QStringLiteral("files")).toArray())
+            {
+                auto* item = new QListWidgetItem(file.toString(), films);
+                item->setData(Qt::UserRole, file.toString());
+            }
+            status->setText(films->count() ? QStringLiteral("Double-click a folder to open it; select a film and press Play.") :
+                QStringLiteral("This folder is empty."));
+        });
+    };
+    connect(refresh, &QPushButton::clicked, this, [ask, state, folderChoice, list, status]
+    {
+        status->setText(QStringLiteral("Asking the Player..."));
+        ask(false, QStringLiteral("/api/folders"), {}, [state, folderChoice, list, status](const QJsonObject& json)
+        {
+            const QJsonArray entries = json.value(QStringLiteral("folders")).toArray();
+            {
+                QSignalBlocker blocker(folderChoice);
+                folderChoice->clear();
+                for (const QJsonValue& entry : entries)
+                    folderChoice->addItem(entry.toObject().value(QStringLiteral("name")).toString());
+                if (state->folder >= folderChoice->count()) { state->folder = -1; state->path.clear(); }
+                if (state->folder < 0 && folderChoice->count()) state->folder = 0;
+                folderChoice->setCurrentIndex(state->folder);
+            }
+            if (entries.isEmpty())
+                status->setText(QStringLiteral("The running Player has no folders. Add them above; they apply at the next Player start."));
+            else
+                (*list)();
+        });
+    });
+    connect(folderChoice, qOverload<int>(&QComboBox::currentIndexChanged), this, [state, list](int index)
+    {
+        state->folder = index;
+        state->path.clear();
+        (*list)();
+    });
+    connect(films, &QListWidget::itemDoubleClicked, this, [state, list, kDirectoryRole](QListWidgetItem* item)
+    {
+        if (!item->data(kDirectoryRole).toBool()) return;
+        const QString name = item->data(Qt::UserRole).toString();
+        if (name.isEmpty())
+            state->path = state->path.left(std::max(0, static_cast<int>(state->path.lastIndexOf(QLatin1Char('/')))));
+        else
+            state->path = state->path.isEmpty() ? name : state->path + QStringLiteral("/") + name;
+        (*list)();
+    });
+    connect(films, &QListWidget::currentItemChanged, this, [play, kDirectoryRole](QListWidgetItem* item, QListWidgetItem*)
+    {
+        play->setEnabled(item && !item->data(kDirectoryRole).toBool());
+    });
+    connect(play, &QPushButton::clicked, this, [ask, state, films, status]
+    {
+        QListWidgetItem* item = films->currentItem();
+        if (!item || state->folder < 0) return;
+        const QString name = item->data(Qt::UserRole).toString();
+        const QList<QPair<QString, QString>> query {
+            { QStringLiteral("c"), QStringLiteral("playnow") },
+            { QStringLiteral("folder"), QString::number(state->folder) },
+            { QStringLiteral("path"), state->path.isEmpty() ? name : state->path + QStringLiteral("/") + name } };
+        ask(true, QStringLiteral("/api/cmd"), query, [status, name](const QJsonObject&)
+        {
+            status->setText(QStringLiteral("Playing %1.").arg(name));
+        });
+    });
+    layout->addWidget(createCard(QStringLiteral("Play a film"),
+        QStringLiteral("Starts a film on the Player now, first in its queue. Uses the remote page, so the Player "
+            "must be the active input with the remote page enabled."), browser));
+
+    layout->addWidget(helpLabel(QStringLiteral(
+        "The Player's transport keys are on the Shortcuts page. VP's shortcuts do not work while Config has focus.")));
+    layout->addStretch();
+
+    return createPage(QStringLiteral("Player"),
+        QStringLiteral("The media player input. Changes take effect the next time the Player starts."), content);
 }
 
 QWidget* ConfigEditorWindow::createShortcutsPage()
