@@ -10720,6 +10720,7 @@ QWidget* ConfigEditorWindow::createShortcutsPage()
         { "DeckLink input 2", "capture_2", "Ctrl+2" },
         { "DeckLink input 3", "capture_3", "Ctrl+3" },
         { "DeckLink input 4", "capture_4", "Ctrl+4" },
+        { "Player input toggle", "capture_player_toggle", "Ctrl+Alt+0" },
         { "Video conversion off", "video_conversion_off", "V" },
         { "V210 to P010 conversion", "video_conversion_p010", "Shift+V" }
     };
