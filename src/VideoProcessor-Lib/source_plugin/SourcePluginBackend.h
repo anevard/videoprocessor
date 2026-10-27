@@ -21,6 +21,9 @@ namespace SourcePluginBackend
 	// reports it as a capture device; Stop() reports each one lost.
 	CComPtr<ACaptureDeviceDiscoverer> CreateDiscoverer(ICaptureDeviceDiscovererCallback& callback);
 
+	// True if the device is a source plugin's input (by type, not by name).
+	bool IsSourcePluginDevice(ACaptureDevice* device);
+
 	// For the configuration editor: plugin names and their inputs. Reads each
 	// plugin's function table only; never creates an instance.
 	void AppendDeviceNames(std::vector<std::wstring>& names);
