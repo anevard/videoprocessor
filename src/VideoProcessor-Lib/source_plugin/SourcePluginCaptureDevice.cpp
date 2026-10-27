@@ -122,8 +122,8 @@ namespace
 	// "settings ..." line: "key=value" entries split by 0x1f. Indexed keys
 	// (folder.1, folder.2, ...) go as one repeated key in index order, since
 	// VP's parser keeps only the last of a repeated key. log_dir is VP's logs
-	// folder and idle_format the fullscreen display's desktop mode, never
-	// settings. idle receives idle_format, or why it was left out.
+	// folder, log_retention VP's [logging] count and idle_format the
+	// fullscreen display's desktop mode, never [player] settings. idle receives idle_format, or why it was left out.
 	std::string PlayerSettingsCommand(size_t& entries, std::string& idle)
 	{
 		entries = 0;
@@ -144,7 +144,7 @@ namespace
 				if (dot != std::string::npos &&
 					ConfigFile::TryParseIndexedKey(key, key.substr(0, dot), index))
 					indexed[{ key.substr(0, dot), index }] = value;
-				else if (key != "log_dir" && key != "idle_format")
+				else if (key != "log_dir" && key != "log_retention" && key != "idle_format")
 				{
 					AppendSetting(line, key, value);
 					++entries;
@@ -167,6 +167,12 @@ namespace
 			dir.pop_back();
 		if (!dir.empty())
 			AppendSetting(line, "log_dir", dir);
+
+		// VP's own log retention, so the plugin keeps its logs as deep.
+		std::string retention;
+		const bool hasRetention = config.TryGetString("logging", "debug_log_retention", retention);
+		AppendSetting(line, "log_retention", std::to_string(DebugLogRetention::ResolveSetting(
+			hasRetention ? &retention : nullptr, false, false).count));
 
 		std::string why;
 		const std::string format = SourcePluginBackend::DesktopModeFormat(why);
