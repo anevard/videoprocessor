@@ -58,7 +58,17 @@ enum class VideoFrameEncoding
 	R12L,
 
 	H265,
-	DNxHR
+	DNxHR,
+
+	// Source plugins only (source_plugin/vp_source_plugin.h); capture cards never deliver these.
+	// Appended so every existing value keeps its number.
+
+	// P010 4:2:0: Y plane, then interleaved CbCr plane at half height, tightly packed.
+	// 10 bits in the high bits of each little-endian 16-bit word.
+	P010,
+
+	// NV12 4:2:0: Y plane, then interleaved CbCr plane at half height, tightly packed. 8 bits.
+	NV12
 };
 
 
