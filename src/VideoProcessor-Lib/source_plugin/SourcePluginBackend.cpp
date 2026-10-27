@@ -293,6 +293,11 @@ namespace SourcePluginBackend
 		return CComPtr<ACaptureDeviceDiscoverer>(new SourcePluginCaptureDeviceDiscoverer(callback));
 	}
 
+	bool IsSourcePluginDevice(ACaptureDevice* device)
+	{
+		return dynamic_cast<SourcePluginCaptureDevice*>(device) != nullptr;
+	}
+
 	void AppendDeviceNames(std::vector<std::wstring>& names)
 	{
 		std::vector<LoadedPlugin> plugins = LoadPlugins();
