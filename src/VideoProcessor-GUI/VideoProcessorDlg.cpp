@@ -3119,6 +3119,21 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 		if (!ReadString(request.payload, cursor, name) || name.empty() ||
 			name.size() > 64 || cursor != request.payload.size())
 			return ConfigurationRpcError(operation, "Invalid action request.");
+		// Config's Apply of [player] settings: is the Player active, and
+		// restart it through the capture Restart, which re-sends [player].
+		if (name == "player.active" || name == "player.restart")
+		{
+			if (!SourcePluginBackend::IsSourcePluginDevice(m_captureDevice))
+				return ConfigurationRpcError(operation, "The Player is not the active input.");
+			if (name == "player.restart")
+			{
+				DebugLog::Log("Player restart requested by Config");
+				OnBnClickedCaptureRestart();
+			}
+			Frame response;
+			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+			return response;
+		}
 		UnifiedProfileRuntime::ActionInvocation invocation;
 		if (!m_profileRuntime.PrepareManualAction(name, invocation, error))
 			return ConfigurationRpcError(operation, error);

@@ -4044,6 +4044,8 @@ bool ConfigEditorWindow::saveChanges()
         savedSnapshot_, currentSnapshot);
     const auto action = ConfigurationApplyPolicy::ClassifyChanges(changed,
         snapshotUsesDirectShowRenderer(savedSnapshot_));
+    const bool playerChanged = std::any_of(changed.begin(), changed.end(),
+        [](const ConfigurationApplyPolicy::Change& change) { return _stricmp(change.section.c_str(), "player") == 0; });
     // Persist shortcut spelling in the same canonical form used by the
     // accelerator parser. Case is not a modifier: L and l are both L, while
     // Shift+L is the distinct shifted chord.
@@ -4133,6 +4135,7 @@ bool ConfigEditorWindow::saveChanges()
 			QStringLiteral("Saved on target; reset or restart requested");
 		setStatus(QStringLiteral("%1: %2.").arg(outcome,
 			QString::fromUtf8(applied.action)));
+		if (playerChanged) offerPlayerRestart();
 		return true;
 	}
     // Config is the interactive authority for this file. Save the user's
@@ -4193,6 +4196,7 @@ bool ConfigEditorWindow::saveChanges()
             QStringLiteral("Changes saved safely. %1 was requested.").arg(effect) :
             QStringLiteral("Changes saved safely. Takes effect when VideoProcessor next starts."), false);
     }
+    if (playerChanged) offerPlayerRestart();
     return true;
 }
 
@@ -11315,7 +11319,59 @@ QWidget* ConfigEditorWindow::createPlayerPage()
     layout->addStretch();
 
     return createPage(QStringLiteral("Player"),
-        QStringLiteral("The media player input. Changes take effect the next time the Player starts."), content);
+        QStringLiteral("The media player input. Applying a change to its settings offers to restart the Player, "
+            "which uses them from then on."), content);
+}
+
+// After a save that changed [player]: if the Player is the target VP's active
+// input, offer to restart it. VP answers player.active and player.restart only
+// for the Player; the restart is its capture Restart, which reads [player] again.
+void ConfigEditorWindow::offerPlayerRestart()
+{
+    if (noTarget_ || testMode_) return;
+    const QString host = remoteClient_ ? remoteHost_ : QStringLiteral("127.0.0.1");
+    const quint16 port = remoteClient_ ? remotePort_ : 41686;
+    // One action off the UI thread; done(success, error) back on it.
+    const auto run = [this, host, port](const char* action, std::function<void(bool, const QString&)> done)
+    {
+        struct Result { bool success = false; std::string error; };
+        const auto result = std::make_shared<Result>();
+        QThread* worker = QThread::create([result, host, port, action]
+        {
+            ConfigurationRpcClient client(host.toStdString(), port);
+            result->success = client.RunAction(action, result->error);
+        });
+        worker->setParent(this);
+        connect(worker, &QThread::finished, this, [worker, result, done]
+        {
+            worker->deleteLater();
+            done(result->success, QString::fromUtf8(result->error));
+        });
+        worker->start();
+    };
+    run("player.active", [this, run](bool active, const QString&)
+    {
+        // Not the active input: the saved settings are used at its next start.
+        if (!active) return;
+        QMessageBox box(QMessageBox::Question, QStringLiteral("Player settings saved"),
+            QStringLiteral("Restart the Player now to use them? A playing film stops and its queue is cleared."),
+            QMessageBox::NoButton, this);
+        QPushButton* restart = box.addButton(QStringLiteral("Restart now"), QMessageBox::AcceptRole);
+        box.addButton(QStringLiteral("Settings applied at next start"), QMessageBox::RejectRole);
+        box.setDefaultButton(restart);
+        box.exec();
+        if (box.clickedButton() != restart)
+        {
+            setStatus(QStringLiteral("Player settings saved; applied at the Player's next start."));
+            return;
+        }
+        setStatus(QStringLiteral("Restarting the Player..."));
+        run("player.restart", [this](bool restarted, const QString& error)
+        {
+            setStatus(restarted ? QStringLiteral("The Player is restarting with the new settings.") :
+                QStringLiteral("The Player could not be restarted: %1").arg(error), !restarted);
+        });
+    });
 }
 
 QWidget* ConfigEditorWindow::createShortcutsPage()
