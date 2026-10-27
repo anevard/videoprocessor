@@ -10721,6 +10721,18 @@ QWidget* ConfigEditorWindow::createShortcutsPage()
         { "Video conversion off", "video_conversion_off", "V" },
         { "V210 to P010 conversion", "video_conversion_p010", "Shift+V" }
     };
+    const ShortcutField playerFields[] = {
+        { "Play or pause", "player_play_pause", "Ctrl+Alt+K" },
+        { "Stop", "player_stop", "Ctrl+Alt+X" },
+        { "Previous", "player_previous", "Ctrl+Alt+B" },
+        { "Next", "player_next", "Ctrl+Alt+N" },
+        { "Back 10 s", "player_back_10", "Ctrl+Alt+J" },
+        { "Forward 10 s", "player_forward_10", "Ctrl+Alt+L" },
+        { "Back 30 s", "player_back_30", "Ctrl+Alt+Shift+J" },
+        { "Forward 30 s", "player_forward_30", "Ctrl+Alt+Shift+L" },
+        { "Next audio track", "player_audio_next", "Ctrl+Alt+A" },
+        { "Next subtitles (then Off)", "player_subtitles_next", "Ctrl+Alt+U" }
+    };
 
     auto makeEditor = [this](const QString& key, const QString& defaultValue)
     {
@@ -10803,8 +10815,12 @@ QWidget* ConfigEditorWindow::createShortcutsPage()
     auto* captureCard = createCard(QStringLiteral("Capture & renderer"),
         QStringLiteral("Capture selection, renderer control, and active-renderer conversion."),
         makeForm(captureFields, std::size(captureFields)));
+    auto* playerCard = createCard(QStringLiteral("Player"),
+        QStringLiteral("Player transport and tracks, sent only while the Player is the active input."),
+        makeForm(playerFields, std::size(playerFields)));
     fixedShortcuts->addCard(applicationCard);
     fixedShortcuts->addCard(captureCard);
+    fixedShortcuts->addCard(playerCard);
     layout->addWidget(fixedShortcuts);
 
     const QStringList& renderers = allRenderers_;
