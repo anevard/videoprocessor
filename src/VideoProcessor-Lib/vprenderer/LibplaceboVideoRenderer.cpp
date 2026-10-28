@@ -24671,6 +24671,7 @@ void LibplaceboVideoRenderer::ConversionLoop()
 					throw std::runtime_error("frame conversion failed");
 				converted->contract = m_impl->formatter->GetOutputContract();
 				converted->dolby = m_impl->formatter->GetDolbyVisionTunnelMetadata();
+				converted->cues = m_impl->formatter->GetSourceCues();
 			}
 			converted->conversionCpuMs = std::chrono::duration<double, std::milli>(
 				SteadyClock::now() - started).count();
