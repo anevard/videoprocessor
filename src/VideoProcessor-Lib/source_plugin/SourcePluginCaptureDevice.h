@@ -10,11 +10,13 @@
 
 
 #include <atomic>
+#include <memory>
 #include <string>
 #include <thread>
 
 #include <ACaptureDevice.h>
 #include <ITimingClock.h>
+#include <SourceCue.h>
 #include <source_plugin/vp_source_plugin.h>
 
 
@@ -106,11 +108,20 @@ private:
 
 	// Reader thread only.
 	uint32_t m_frameBytes = 0;          // 0 while the state is not valid
+	uint32_t m_frameWidth = 0;
+	uint32_t m_frameHeight = 0;
 	uint64_t m_rejectedFrames = 0;
+	uint64_t m_rejectedCues = 0;
+	std::shared_ptr<const SourceCue> m_lastSubtitleCue;
+	std::shared_ptr<const SourceCue> m_lastMessageCue;
 
 	void ReaderLoop();
 	void SendVideoState();
 	void DeliverFrame(const vp_source_frame& frame);
+	// The cue for one frame: the last one again if its id is unchanged,
+	// else a checked copy of the plugin's image.
+	std::shared_ptr<const SourceCue> TakeCue(const vp_source_cue& in,
+		std::shared_ptr<const SourceCue>& last, const char* kind);
 	void UpdateState(CaptureDeviceState state);
 
 	static void HostLog(void* context, uint32_t level, const char* messageUtf8);
