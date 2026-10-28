@@ -4682,6 +4682,15 @@ struct LibplaceboVideoRenderer::Impl
 	pl_tex statsOverlayTexture = nullptr;
 	pl_tex sweepOverlayTexture = nullptr;
 	pl_tex profileOverlayTexture = nullptr;
+	// Source-plugin cues (SourceCue.h), uploaded once per cue id.
+	pl_tex sourceSubtitleTexture = nullptr;
+	pl_tex sourceMessageTexture = nullptr;
+	pl_tex sourceCuePanelTexture = nullptr;
+	pl_tex sourceCueBorderTexture = nullptr;
+	uint64_t appliedSourceSubtitleId = 0;
+	uint64_t appliedSourceMessageId = 0;
+	uint32_t appliedSourceCuePanelColor = 0;
+	uint32_t appliedSourceCueBorderColor = 0;
 	std::mutex statsOverlayMutex;
 	std::vector<uint8_t> statsOverlayPixels;
 	std::atomic_bool statsOverlayVisible{ false };
@@ -5590,6 +5599,10 @@ struct LibplaceboVideoRenderer::Impl
 				pl_tex_destroy(d3d11->gpu, &statsOverlayTexture);
 				pl_tex_destroy(d3d11->gpu, &sweepOverlayTexture);
 				pl_tex_destroy(d3d11->gpu, &profileOverlayTexture);
+				pl_tex_destroy(d3d11->gpu, &sourceSubtitleTexture);
+				pl_tex_destroy(d3d11->gpu, &sourceMessageTexture);
+				pl_tex_destroy(d3d11->gpu, &sourceCuePanelTexture);
+				pl_tex_destroy(d3d11->gpu, &sourceCueBorderTexture);
 				for (pl_tex& texture : textures)
 					pl_tex_destroy(d3d11->gpu, &texture);
 			}
@@ -19135,9 +19148,96 @@ releaseDriftBaseRetention =
 			}
 			appliedProfileOverlaySerial = profileSerial;
 		}
-		struct pl_overlay overlays[4]{};
+		// Source-plugin cues ride with the frame; a new id (or a texture lost
+		// with the device) uploads, an unchanged one draws the texture again.
+		// A natively uploaded frame (P010) has no converted payload, so its
+		// cues are read from the frame's source buffer here.
+		const SourceCues sourceCues = convertedPayload ? convertedPayload->cues :
+			ReadSourceCues(videoFrame.GetSourceBuffer());
+		const auto uploadSourceCue = [&](const std::shared_ptr<const SourceCue>& cue,
+			pl_tex& texture, uint64_t& appliedId, const char* kind)
+		{
+			if (!cue)
+				return;
+			if (texture && appliedId == cue->id)
+				return;
+			struct pl_plane_data plane{};
+			plane.type = PL_FMT_UNORM;
+			plane.width = static_cast<int>(cue->width);
+			plane.height = static_cast<int>(cue->height);
+			plane.pixel_stride = 4;
+			plane.row_stride = static_cast<size_t>(cue->width) * 4;
+			plane.pixels = cue->pixels.data();
+			uint64_t masks[4] = {
+				0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000
+			};
+			pl_plane_data_from_mask(&plane, masks);
+			frameGpuTiming.BeginStage(
+				AlphaD3D11FrameGpuTimer::Stage::OverlayUpload);
+			const bool uploaded = pl_upload_plane(
+				d3d11->gpu, nullptr, &texture, &plane);
+			frameGpuTiming.EndStage();
+			if (!uploaded)
+			{
+				DebugLog::Log("Source cue %s texture upload failed: id=%llu %ux%u",
+					kind, static_cast<unsigned long long>(cue->id), cue->width, cue->height);
+				pl_tex_destroy(d3d11->gpu, &texture);
+				appliedId = 0;
+				return;
+			}
+			appliedId = cue->id;
+		};
+		uploadSourceCue(sourceCues.subtitle, sourceSubtitleTexture,
+			appliedSourceSubtitleId, "subtitle");
+		uploadSourceCue(sourceCues.message, sourceMessageTexture,
+			appliedSourceMessageId, "message");
+		// His Move background and border as 1x1 textures (RGBA, sRGB-encoded).
+		const auto uploadSourceCueColor = [&](const std::array<float, 3>& linear,
+			float opacity, pl_tex& texture, uint32_t& appliedColor)
+		{
+			const auto encode = [](float c) {
+				c = (std::max)(0.0f, (std::min)(1.0f, c));
+				const float v = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+				return static_cast<uint8_t>(std::lround(v * 255.0f));
+			};
+			const uint8_t rgba[4] = { encode(linear[0]), encode(linear[1]), encode(linear[2]),
+				static_cast<uint8_t>(std::lround((std::max)(0.0f, (std::min)(1.0f, opacity)) * 255.0f)) };
+			const uint32_t color = rgba[0] | (rgba[1] << 8) | (rgba[2] << 16) |
+				(static_cast<uint32_t>(rgba[3]) << 24);
+			if (texture && appliedColor == color)
+				return;
+			struct pl_plane_data plane{};
+			plane.type = PL_FMT_UNORM; plane.width = plane.height = 1;
+			plane.pixel_stride = plane.row_stride = 4; plane.pixels = rgba;
+			uint64_t masks[4] = { 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000 };
+			pl_plane_data_from_mask(&plane, masks);
+			if (!pl_upload_plane(d3d11->gpu, nullptr, &texture, &plane))
+			{
+				DebugLog::Log("Source cue panel texture upload failed");
+				pl_tex_destroy(d3d11->gpu, &texture);
+				return;
+			}
+			appliedColor = color;
+		};
+		// Background 3 is his black backing, 5 his generated-gray style.
+		const auto& cueStyle = activeSettings.subtitleGeneratedGray;
+		if (sourceCues.subtitle && subtitleCutPasteTest)
+		{
+			if (subtitleCutPasteBackground == 5)
+				uploadSourceCueColor(cueStyle.color, cueStyle.opacity,
+					sourceCuePanelTexture, appliedSourceCuePanelColor);
+			else
+				uploadSourceCueColor({ 0.0f, 0.0f, 0.0f }, 1.0f,
+					sourceCuePanelTexture, appliedSourceCuePanelColor);
+			if (subtitleCutPasteBackground == 5 && cueStyle.borderWidth > 0.0f)
+				uploadSourceCueColor(cueStyle.borderColor, cueStyle.borderOpacity,
+					sourceCueBorderTexture, appliedSourceCueBorderColor);
+		}
+		struct pl_overlay overlays[8]{};
 		struct pl_overlay_part subtitleBoxParts[4]{};
 		struct pl_overlay_part overlayParts[3]{};
+		struct pl_overlay_part sourceCuePanelPart{}, sourceCueBorderParts[4]{};
+		struct pl_overlay_part sourceSubtitlePart{}, sourceMessagePart{};
 		int overlayCount = 0;
 		auto assembleOverlays = [&]()
 		{
@@ -19415,6 +19515,131 @@ releaseDriftBaseRetention =
                 overlay.parts=subtitleBoxParts; overlay.num_parts=4;
             }
         }
+		// Source-plugin cues: drawn over the output after tone mapping, white
+		// at the cue's level. Under a configured screen a subtitle in the bars
+		// takes his Move placement (pure geometry, none of his detection state)
+		// and the message sits at the top of the visible picture; otherwise
+		// both keep the source's own position. Mapped from source to output
+		// linearly, as his debug box is.
+		if (sourceSubtitleTexture || sourceMessageTexture)
+		{
+			const float sx = (target.crop.x1 - target.crop.x0) / width;
+			const float sy = (target.crop.y1 - target.crop.y0) / height;
+			const auto toOutput = [&](float l, float t, float r, float b) {
+				return pl_rect2df{ target.crop.x0 + l * sx, target.crop.y0 + t * sy,
+					target.crop.x0 + r * sx, target.crop.y0 + b * sy };
+			};
+			SubtitleBoxRect visible{ 0, 0, width, height };
+			if (configuredScreenActive && nlsGeometryAvailable &&
+				nlsGeometrySourceGeneration == frameGeneration)
+				visible = { nlsGeometry.left, nlsGeometry.top, nlsGeometry.right, nlsGeometry.bottom };
+			else if (validScreenRect(overlayScreen) && sx > 0.0f && sy > 0.0f)
+			{
+				const auto toSource = [](double v, float origin, float scale, int limit) {
+					return (std::max)(0, (std::min)(limit,
+						static_cast<int>(std::lround((v - origin) / scale))));
+				};
+				visible = { toSource(overlayScreen.rect.left, target.crop.x0, sx, width),
+					toSource(overlayScreen.rect.top, target.crop.y0, sy, height),
+					toSource(overlayScreen.rect.right, target.crop.x0, sx, width),
+					toSource(overlayScreen.rect.bottom, target.crop.y0, sy, height) };
+			}
+			const bool placeInPicture = configuredScreenActive && visible.Valid();
+			const auto cueOverlay = [&](pl_tex texture, pl_overlay_part& part, const pl_rect2df& dst) {
+				part.src = { 0.0f, 0.0f, static_cast<float>(texture->params.w),
+					static_cast<float>(texture->params.h) };
+				part.dst = dst;
+				auto& overlay = overlays[overlayCount++];
+				overlay.tex = texture;
+				overlay.mode = PL_OVERLAY_NORMAL;
+				overlay.coords = PL_OVERLAY_COORDS_DST_FRAME;
+				overlay.repr = pl_color_repr_rgb;
+				overlay.repr.levels = PL_COLOR_LEVELS_FULL;
+				overlay.repr.alpha = PL_ALPHA_PREMULTIPLIED;
+				overlay.color = pl_color_space_srgb;
+				overlay.color.hdr.max_luma = sourceCues.whiteNits;
+				overlay.parts = &part;
+				overlay.num_parts = 1;
+			};
+			if (sourceSubtitleTexture && sourceCues.subtitle)
+			{
+				const auto& cue = *sourceCues.subtitle;
+				const SubtitleBoxRect bounds{ cue.x, cue.y,
+					cue.x + static_cast<int>(cue.width), cue.y + static_cast<int>(cue.height) };
+				SubtitleCutPasteGeometry move;
+				if (subtitleCutPasteTest && placeInPicture)
+				{
+					move = ComputeSubtitleCutPaste(bounds, width, height, visible.top, visible.bottom,
+						activeSettings.subtitleBoxPadding, activeSettings.subtitleMoveInset);
+					move = ApplySubtitleTextReduction(FitSubtitleToVisiblePicture(move,
+						visible, activeSettings.subtitleMoveInset),
+						activeSettings.subtitleTextReductionPercent, activeSettings.subtitleBoxPadding,
+						activeSettings.subtitleRoundedCorners, activeSettings.subtitleFloatBackground);
+				}
+				pl_rect2df glyphs = toOutput(static_cast<float>(bounds.left), static_cast<float>(bounds.top),
+					static_cast<float>(bounds.right), static_cast<float>(bounds.bottom));
+				if (move.valid)
+				{
+					const auto& d = move.destination;
+					if (sourceCuePanelTexture)
+					{
+						sourceCuePanelPart.src = { 0.0f, 0.0f, 1.0f, 1.0f };
+						sourceCuePanelPart.dst = toOutput(static_cast<float>(d.left), static_cast<float>(d.top),
+							static_cast<float>(d.right), static_cast<float>(d.bottom));
+						auto& panel = overlays[overlayCount++];
+						panel.tex = sourceCuePanelTexture; panel.mode = PL_OVERLAY_NORMAL;
+						panel.coords = PL_OVERLAY_COORDS_DST_FRAME;
+						panel.repr = pl_color_repr_rgb; panel.repr.levels = PL_COLOR_LEVELS_FULL;
+						panel.repr.alpha = PL_ALPHA_INDEPENDENT;
+						panel.color = pl_color_space_srgb;
+						panel.color.hdr.max_luma = sourceCues.whiteNits;
+						panel.parts = &sourceCuePanelPart; panel.num_parts = 1;
+					}
+					if (sourceCueBorderTexture && subtitleCutPasteBackground == 5 && cueStyle.borderWidth > 0.0f)
+					{
+						const auto p = toOutput(static_cast<float>(d.left), static_cast<float>(d.top),
+							static_cast<float>(d.right), static_cast<float>(d.bottom));
+						const float bx = cueStyle.borderWidth * sx, by = cueStyle.borderWidth * sy;
+						const pl_rect2df edges[4] = {
+							{ p.x0, p.y0, p.x1, (std::min)(p.y1, p.y0 + by) },
+							{ p.x0, (std::max)(p.y0, p.y1 - by), p.x1, p.y1 },
+							{ p.x0, p.y0, (std::min)(p.x1, p.x0 + bx), p.y1 },
+							{ (std::max)(p.x0, p.x1 - bx), p.y0, p.x1, p.y1 } };
+						for (int i = 0; i < 4; ++i) { sourceCueBorderParts[i].src = { 0, 0, 1, 1 }; sourceCueBorderParts[i].dst = edges[i]; }
+						auto& border = overlays[overlayCount++];
+						border.tex = sourceCueBorderTexture; border.mode = PL_OVERLAY_NORMAL;
+						border.coords = PL_OVERLAY_COORDS_DST_FRAME;
+						border.repr = pl_color_repr_rgb; border.repr.levels = PL_COLOR_LEVELS_FULL;
+						border.repr.alpha = PL_ALPHA_INDEPENDENT;
+						border.color = pl_color_space_srgb;
+						border.color.hdr.max_luma = sourceCues.whiteNits;
+						border.parts = sourceCueBorderParts; border.num_parts = 4;
+					}
+					// His glyph mapping: scaled about the panel when reduced,
+					// else moved with the panel.
+					const float scale = move.centeredGlyphMapping ? move.glyphScale : 1.0f;
+					const float tx = move.centeredGlyphMapping ? move.glyphTranslateX
+						: static_cast<float>(d.left - move.source.left);
+					const float ty = move.centeredGlyphMapping ? move.glyphTranslateY
+						: static_cast<float>(d.top - move.source.top);
+					glyphs = toOutput(scale * bounds.left + tx, scale * bounds.top + ty,
+						scale * bounds.right + tx, scale * bounds.bottom + ty);
+				}
+				cueOverlay(sourceSubtitleTexture, sourceSubtitlePart, glyphs);
+			}
+			if (sourceMessageTexture && sourceCues.message)
+			{
+				const auto& cue = *sourceCues.message;
+				float left = static_cast<float>(cue.x), top = static_cast<float>(cue.y);
+				if (placeInPicture)
+				{
+					left = (visible.left + visible.right - static_cast<float>(cue.width)) * 0.5f;
+					top = static_cast<float>(visible.top + activeSettings.subtitleMoveInset);
+				}
+				cueOverlay(sourceMessageTexture, sourceMessagePart, toOutput(left, top,
+					left + cue.width, top + cue.height));
+			}
+		}
 		if (overlayCount > 0)
 		{
 			target.overlays = overlays;
