@@ -191,10 +191,11 @@ namespace
  * One frame lent by the plugin. Created with one reference, which the
  * reader thread drops when the frame callback returns; VP's consumers take
  * their own (VideoFrame::SourceBufferAddRef). The final Release returns
- * the frame to the plugin, from whichever thread that is.
+ * the frame to the plugin, from whichever thread that is. It also carries
+ * the frame's cues, which outlive the plugin's memory.
  */
 class SourcePluginFrameBuffer:
-	public IUnknown
+	public ISourceCueCarrier
 {
 public:
 
@@ -210,15 +211,20 @@ public:
 			return E_INVALIDARG;
 
 		*ppv = nullptr;
-		if (iid == IID_IUnknown)
+		if (iid == IID_IUnknown || iid == __uuidof(ISourceCueCarrier))
 		{
-			*ppv = this;
+			*ppv = static_cast<ISourceCueCarrier*>(this);
 			AddRef();
 			return S_OK;
 		}
 
 		return E_NOINTERFACE;
 	}
+
+	// Reader thread, before the frame is handed on; read-only after.
+	void SetSourceCues(SourceCues cues) { m_cues = std::move(cues); }
+
+	SourceCues GetSourceCues() const override { return m_cues; }
 
 	ULONG AddRef() override
 	{
@@ -240,6 +246,7 @@ public:
 private:
 	CComPtr<SourcePluginCaptureDevice> m_device;
 	void* const m_handle;
+	SourceCues m_cues;
 	std::atomic<ULONG> m_refCount{1};
 };
 
@@ -349,7 +356,11 @@ void SourcePluginCaptureDevice::StartCapture(CaptureRunToken captureRunToken)
 		throw std::runtime_error("Set input with SetCaptureInput() before calling StartCapture()");
 
 	m_frameBytes = 0;
+	m_frameWidth = m_frameHeight = 0;
 	m_rejectedFrames = 0;
+	m_rejectedCues = 0;
+	m_lastSubtitleCue.reset();
+	m_lastMessageCue.reset();
 
 	// From here on out data can egress
 	m_captureRunToken.store(captureRunToken, std::memory_order_release);
@@ -576,6 +587,9 @@ void SourcePluginCaptureDevice::SendVideoState()
 	VideoStateComPtr videoState = new VideoState();
 	videoState->valid = false;
 	m_frameBytes = 0;
+	m_frameWidth = m_frameHeight = 0;
+	m_lastSubtitleCue.reset();
+	m_lastMessageCue.reset();
 
 	VideoFrameEncoding encoding = VideoFrameEncoding::UNKNOWN;
 	EOTF eotf = EOTF::UNKNOWN;
@@ -641,6 +655,8 @@ void SourcePluginCaptureDevice::SendVideoState()
 		}
 
 		m_frameBytes = videoState->BytesPerFrame();
+		m_frameWidth = state.width;
+		m_frameHeight = state.height;
 	}
 	else
 	{
@@ -693,6 +709,11 @@ void SourcePluginCaptureDevice::DeliverFrame(const vp_source_frame& frame)
 	if (captureRunToken == 0 || !m_callback)
 		return;
 
+	SourceCues cues;
+	cues.subtitle = TakeCue(frame.subtitle, m_lastSubtitleCue, "subtitle");
+	cues.message = TakeCue(frame.message, m_lastMessageCue, "message");
+	buffer->SetSourceCues(std::move(cues));
+
 	VideoFrame vpVideoFrame(
 		frame.data, frame.counter,
 		frame.timestamp + m_frameOffsetTicks.load(std::memory_order_acquire),
@@ -701,6 +722,50 @@ void SourcePluginCaptureDevice::DeliverFrame(const vp_source_frame& frame)
 		(frame.flags & VP_SOURCE_FRAME_DISCONTINUITY) != 0);
 
 	m_callback->OnCaptureDeviceVideoFrame(this, captureRunToken, vpVideoFrame);
+}
+
+
+std::shared_ptr<const SourceCue> SourcePluginCaptureDevice::TakeCue(
+	const vp_source_cue& in, std::shared_ptr<const SourceCue>& last,
+	const char* kind)
+{
+	if (in.id == 0)
+		return nullptr;
+	if (last && last->id == in.id)
+		return last;  // unchanged: share the copy already made
+
+	// Refuse a cue that does not lie inside the frame or cannot be read.
+	const uint64_t rowBytes = static_cast<uint64_t>(in.width) * 4;
+	if (!in.pixels || in.width == 0 || in.height == 0 || in.stride < rowBytes ||
+		in.x < 0 || in.y < 0 ||
+		static_cast<uint64_t>(in.x) + in.width > m_frameWidth ||
+		static_cast<uint64_t>(in.y) + in.height > m_frameHeight)
+	{
+		++m_rejectedCues;
+		if ((m_rejectedCues & (m_rejectedCues - 1)) == 0)
+			DEBUGLOG("Source plugin %s: %s cue rejected: count=%llu id=%llu x=%d y=%d w=%u h=%u stride=%u frame=%ux%u",
+				m_nameUtf8.c_str(), kind,
+				static_cast<unsigned long long>(m_rejectedCues),
+				static_cast<unsigned long long>(in.id), in.x, in.y,
+				in.width, in.height, in.stride, m_frameWidth, m_frameHeight);
+		last.reset();
+		return nullptr;
+	}
+
+	auto cue = std::make_shared<SourceCue>();
+	cue->id = in.id;
+	cue->x = in.x;
+	cue->y = in.y;
+	cue->width = in.width;
+	cue->height = in.height;
+	cue->pixels.resize(static_cast<size_t>(rowBytes * in.height));
+	const uint8_t* src = static_cast<const uint8_t*>(in.pixels);
+	for (uint32_t row = 0; row < in.height; ++row)
+		memcpy(cue->pixels.data() + row * rowBytes, src + static_cast<size_t>(row) * in.stride,
+			static_cast<size_t>(rowBytes));
+
+	last = cue;
+	return last;
 }
 
 
