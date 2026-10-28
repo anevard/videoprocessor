@@ -34,6 +34,7 @@ public:
 	bool FormatVideoFrame(const VideoFrame& inFrame, BYTE* outBuffer) override;
 	LONG GetOutFrameSize() const override;
 	VideoFrameFormatterOutputContract GetOutputContract() const override;
+	SourceCues GetSourceCues() const override { return m_cues; }
 
 	void GetConversionPerformance(double& currentUs, double& avg10s, double& max10s) const override
 	{
@@ -50,6 +51,7 @@ private:
 	uint32_t m_width = 0;
 	uint32_t m_height = 0;
 	uint64_t m_framesFormatted = 0;
+	SourceCues m_cues;      // of the last formatted frame
 
 	// Rolling window performance tracking (for stats overlay)
 	struct RollingPerformanceWindow
