@@ -11012,8 +11012,8 @@ QWidget* ConfigEditorWindow::createPlayerPage()
         rangeField(QStringLiteral("sub_scale"), 10, 400, 100, QStringLiteral(" %")),
         QStringLiteral("Text subtitles only; picture subtitles keep their authored size. Default: 100 %.")));
     subtitlesLayout->addWidget(fieldWithHelp(QStringLiteral("Position"),
-        rangeField(QStringLiteral("sub_position"), 0, 100, 100, QString()),
-        QStringLiteral("0 is the top of the picture, 100 the bottom. Default: 100.")));
+        rangeField(QStringLiteral("sub_position"), 0, 150, 100, QString()),
+        QStringLiteral("100 keeps subtitles where the film or text style places them; lower moves them up, higher moves them down. Default: 100.")));
     subtitlesLayout->addWidget(fieldWithHelp(QStringLiteral("HDR brightness"),
         rangeField(QStringLiteral("sub_nits"), 10, 1000, 50, QStringLiteral(" nits")),
         QStringLiteral("The level subtitles are drawn at in HDR films. Default: 50 nits.")));
