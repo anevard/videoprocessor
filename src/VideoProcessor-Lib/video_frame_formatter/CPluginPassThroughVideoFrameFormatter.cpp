@@ -71,19 +71,6 @@ bool CPluginPassThroughVideoFrameFormatter::FormatVideoFrame(
 
 	const auto startTime = GetWallClockTime();
 
-	// The frame's cues ride on its source buffer.
-	m_cues = {};
-	if (IUnknown* sourceBuffer = inFrame.GetSourceBuffer())
-	{
-		ISourceCueCarrier* carrier = nullptr;
-		if (SUCCEEDED(sourceBuffer->QueryInterface(__uuidof(ISourceCueCarrier),
-			reinterpret_cast<void**>(&carrier))))
-		{
-			m_cues = carrier->GetSourceCues();
-			carrier->Release();
-		}
-	}
-
 	// Y rows plus half as many CbCr rows, each width samples wide.
 	const size_t samples = static_cast<size_t>(m_width) * m_height * 3 / 2;
 
