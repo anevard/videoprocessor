@@ -604,7 +604,6 @@ protected:
 	CComPtr<ACaptureDeviceDiscoverer> m_sourcePluginDeviceDiscoverer;
 
 	std::set<ACaptureDeviceComPtr> m_captureDevices;
-	CString m_playerToggleReturnDevice; // input list text to return to from the Player
 	CComPtr<ACaptureDevice>	m_captureDevice;
 	CaptureInputId m_currentCaptureInputId = INVALID_CAPTURE_INPUT_ID;
 	CaptureDeviceState m_captureDeviceState = CaptureDeviceState::CAPTUREDEVICESTATE_UNKNOWN;
@@ -983,7 +982,7 @@ protected:
 	void RefreshCaptureDeviceList();
 
 	afx_msg void OnSelectCaptureDevice(UINT nID); // Handler for ON_COMMAND_RANGE
-	afx_msg void OnCommandCapturePlayerToggle();
+	afx_msg void OnCommandCapturePlayer();
 	afx_msg void OnCommandPlayerTransport(UINT nID);
 	void UpdateSourcePluginPlayerKeys();
 
