@@ -13,8 +13,6 @@
 
 #include <Windows.h>
 
-#include <SourceCue.h>
-
 // Keep conversion kernel declarations independent of ATL startup initializers.
 class VideoFrame;
 class VideoState;
@@ -101,13 +99,6 @@ public:
     {
         return {};
     }
-
-	// Subtitle and message images the last formatted frame carried, to draw
-	// over the output (source plugins only).
-	virtual SourceCues GetSourceCues() const
-	{
-		return {};
-	}
 	
 	// Get conversion performance metrics (optional, default implementation returns no data)
 	// currentUs: Latest frame conversion time in microseconds

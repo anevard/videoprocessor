@@ -53,3 +53,19 @@ ISourceCueCarrier: public IUnknown
 {
 	virtual SourceCues GetSourceCues() const = 0;
 };
+
+
+// The cues a frame's source buffer carries, or none. Read by the renderer for
+// every formatter, so a frame keeps its cues whichever formatter converts it.
+inline SourceCues ReadSourceCues(IUnknown* sourceBuffer)
+{
+	SourceCues cues;
+	ISourceCueCarrier* carrier = nullptr;
+	if (sourceBuffer && SUCCEEDED(sourceBuffer->QueryInterface(
+		__uuidof(ISourceCueCarrier), reinterpret_cast<void**>(&carrier))))
+	{
+		cues = carrier->GetSourceCues();
+		carrier->Release();
+	}
+	return cues;
+}

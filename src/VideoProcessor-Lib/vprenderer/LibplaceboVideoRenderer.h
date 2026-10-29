@@ -16,6 +16,7 @@
 #include <vprenderer/AsyncOutwardWindow.h>
 #include <vprenderer/AlphaConversionTimingWindow.h>
 #include <video_frame_formatter/IVideoFrameFormatter.h>
+#include <SourceCue.h>
 
 #include <array>
 #include <atomic>
