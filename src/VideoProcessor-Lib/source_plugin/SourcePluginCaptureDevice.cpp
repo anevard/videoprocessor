@@ -47,6 +47,7 @@ namespace
 		{
 		case VP_SOURCE_ENCODING_P010: out = VideoFrameEncoding::P010; return true;
 		case VP_SOURCE_ENCODING_NV12: out = VideoFrameEncoding::NV12; return true;
+		case VP_SOURCE_ENCODING_BGRA8: out = VideoFrameEncoding::BGRA_8BIT; return true;
 		}
 		return false;
 	}
@@ -629,7 +630,7 @@ void SourcePluginCaptureDevice::SendVideoState()
 		refusal = "unknown colorspace";
 	else if (state.width == 0 || state.height == 0 ||
 		(state.width % 2) != 0 || (state.height % 2) != 0)
-		refusal = "4:2:0 needs an even, non-zero frame size";
+		refusal = "the frame size must be even and non-zero";
 	else if (state.time_scale == 0 || state.frame_duration == 0)
 		refusal = "no frame rate";
 
@@ -685,9 +686,11 @@ void SourcePluginCaptureDevice::SendVideoState()
 		cardState->inputDisplayMode = videoState->displayMode;
 		if (videoState->valid)
 		{
-			// Both plugin encodings are 4:2:0. No hardware link to report:
-			// the GUI reads "other" as its PCIe rows, by position.
-			cardState->inputEncoding = ColorFormat::YCbCr420;
+			// P010 and NV12 are 4:2:0; BGRA8 is RGB as a capture card
+			// reports it. No hardware link to report: the GUI reads "other"
+			// as its PCIe rows, by position.
+			cardState->inputEncoding = encoding == VideoFrameEncoding::BGRA_8BIT ?
+				ColorFormat::RGB444 : ColorFormat::YCbCr420;
 			cardState->inputBitDepth = encoding == VideoFrameEncoding::P010 ?
 				BitDepth::BITDEPTH_10BIT : BitDepth::BITDEPTH_8BIT;
 		}

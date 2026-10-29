@@ -36,7 +36,12 @@
  *         each little-endian 16-bit word; low 6 bits zero.
  *   NV12: Y plane (width bytes x height rows), then interleaved CbCr
  *         (width bytes x height / 2 rows).
- *   Both are limited range. A plugin must not declare a frame it cannot
+ *   BGRA8: one plane, bytes B, G, R, A (width * 4 bytes x height rows),
+ *         delivered exactly as an HDMI RGB capture would deliver it. It is
+ *         how a plugin sends a TV-led Dolby Vision picture: declare it SDR,
+ *         Rec.709, and VP's Dolby Vision tunnel setting decides, as for a
+ *         capture card.
+ *   P010 and NV12 are limited range. A plugin must not declare a frame it cannot
  *   deliver in this layout; it converts nothing else (no chroma
  *   resampling, no range or bit-depth change).
  *
@@ -83,6 +88,7 @@ extern "C" {
 #define VP_SOURCE_ENCODING_NONE   0u
 #define VP_SOURCE_ENCODING_P010   1u
 #define VP_SOURCE_ENCODING_NV12   2u
+#define VP_SOURCE_ENCODING_BGRA8  3u
 
 /* Transfer functions and colour spaces. Our own numbers, not VP's enum
  * values: the adapter maps each one by name, so VP can reorder its enums
