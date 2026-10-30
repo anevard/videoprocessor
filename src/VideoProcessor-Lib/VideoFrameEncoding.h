@@ -65,7 +65,11 @@ enum class VideoFrameEncoding
 	P210,
 
     // Native 10-bit 4:2:0, appended without renumbering existing encodings.
-    P010
+    P010,
+
+	// Source plugins only (source_plugin/vp_source_plugin.h); capture cards never deliver it.
+	// NV12 4:2:0: Y plane, then interleaved CbCr plane at half height, tightly packed. 8 bits.
+	NV12
 };
 
 

@@ -59,6 +59,9 @@ const TCHAR* ToString(const VideoFrameEncoding videoFrameEncoding)
 
 	case VideoFrameEncoding::DNxHR:
 		return TEXT("DNxHR Encoded");
+
+	case VideoFrameEncoding::NV12:
+		return TEXT("YUV 8-bit 4:2:0 (NV12)");
 	}
 
 	throw std::runtime_error("VideoFrameEncoding ToString() failed, value not recognized");
