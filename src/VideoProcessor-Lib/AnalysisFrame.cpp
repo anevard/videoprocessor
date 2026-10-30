@@ -161,6 +161,21 @@ PreparedAnalysisFrame PrepareAnalysisFrame(const AnalysisFrameInput& input)
             result.rgbBitAlignment = input.dolby.rgbBitAlignment;
         }
     }
+    else if (input.encoding == VideoFrameEncoding::NV12)
+    {
+        // Source plugins only. The pass-through formatter's P010 is the
+        // captured raster (NV12 widened into the high byte), so it stands
+        // in for a native adapter; no other encoding takes this.
+        if (!input.convertedOwner)
+            return result;
+        backing = converted(AnalysisLumaFormat::P010);
+        result.domain = AnalysisFrameDomain::ConvertedP010;
+        result.sourceOwner = input.convertedOwner;
+        result.sampleRange = input.convertedContract.sampleRange;
+        result.colorDepth = input.convertedContract.colorDepth;
+        result.bitShift = input.convertedContract.bitShift;
+        result.usesConverted = true;
+    }
     else
     {
         // Analysis describes the captured source raster, not whichever

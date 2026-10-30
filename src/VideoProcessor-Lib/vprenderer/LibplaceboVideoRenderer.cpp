@@ -83,6 +83,7 @@
 #include <vprenderer/LibplaceboRenderParameters.h>
 #include <video_frame_formatter/CARGBtoP010VideoFrameFormatter.h>
 #include <video_frame_formatter/CDeckLinkRGBToP010VideoFrameFormatter.h>
+#include <video_frame_formatter/CPluginPassThroughVideoFrameFormatter.h>
 #include <video_frame_formatter/CRGBDolbyVisionTunnelFormatter.h>
 #include <DolbyVisionTunnelInput.h>
 #include <video_frame_formatter/CUYVYtoP010VideoFrameFormatter.h>
@@ -842,6 +843,10 @@ namespace
 		case VideoFrameEncoding::R12B:
 		case VideoFrameEncoding::R12L:
 			return std::unique_ptr<IVideoFrameFormatter>(new CDeckLinkRGBToP010VideoFrameFormatter());
+		case VideoFrameEncoding::NV12:
+			// Source plugins only: already 4:2:0, so nothing is converted.
+			return std::unique_ptr<IVideoFrameFormatter>(
+				new CPluginPassThroughVideoFrameFormatter());
 		default:
 			throw std::runtime_error(
 				"libplacebo does not support this capture format");
