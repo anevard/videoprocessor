@@ -19150,7 +19150,10 @@ releaseDriftBaseRetention =
 		}
 		// Source-plugin cues ride with the frame; a new id (or a texture lost
 		// with the device) uploads, an unchanged one draws the texture again.
-		const SourceCues sourceCues = convertedPayload ? convertedPayload->cues : SourceCues{};
+		// A natively uploaded frame (P010) has no converted payload, so its
+		// cues are read from the frame's source buffer here.
+		const SourceCues sourceCues = convertedPayload ? convertedPayload->cues :
+			ReadSourceCues(videoFrame.GetSourceBuffer());
 		const auto uploadSourceCue = [&](const std::shared_ptr<const SourceCue>& cue,
 			pl_tex& texture, uint64_t& appliedId, const char* kind)
 		{
