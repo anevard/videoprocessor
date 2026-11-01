@@ -4686,6 +4686,13 @@ struct LibplaceboVideoRenderer::Impl
 	uint64_t appliedSourceMessageId = 0;
 	uint32_t appliedSourceCuePanelColor = 0;
 	uint32_t appliedSourceCueBorderColor = 0;
+	// Cue white as a fraction of the profile's SDR white (1/1024 steps),
+	// applied to the cue pixels on an SDR-declared target; see the upload.
+	uint32_t appliedSourceSubtitleScale = 0;
+	uint32_t appliedSourceMessageScale = 0;
+	std::array<uint8_t, 256> sourceCueScaleLut{};
+	uint32_t sourceCueScaleLutKey = 0;
+	std::vector<uint8_t> sourceCueScaled;
 	std::mutex statsOverlayMutex;
 	std::vector<uint8_t> statsOverlayPixels;
 	std::atomic_bool statsOverlayVisible{ false };
@@ -19191,12 +19198,40 @@ releaseDriftBaseRetention =
 		// cues are read from the frame's source buffer here.
 		const SourceCues sourceCues = convertedPayload ? convertedPayload->cues :
 			ReadSourceCues(videoFrame.GetSourceBuffer());
+		// The cue's white level. On an HDR-declared target the overlay
+		// carries it as max_luma and libplacebo honours it. On an
+		// SDR-declared target libplacebo draws an sRGB overlay at target
+		// white whatever its max_luma (pl_color_space_infer_map copies an
+		// SDR source's luminance to the target), so the level is applied to
+		// the cue's pixels instead, in linear light, as a fraction of the
+		// profile's SDR white: an SDR title and an HDR title mapped to SDR
+		// then show the same subtitle brightness. Once per new cue or new
+		// fraction, never per frame.
+		const bool cueTargetHdr = pl_color_space_is_hdr(&target.color);
+		const float cueScale = cueTargetHdr ? 1.0f : (std::max)(0.0f, (std::min)(1.0f,
+			sourceCues.whiteNits / static_cast<float>((std::max)(1.0, sdrTargetNits))));
+		const uint32_t cueScaleKey = static_cast<uint32_t>(std::lround(cueScale * 1024.0f));
+		if (cueScaleKey != 1024 && cueScaleKey != sourceCueScaleLutKey)
+		{
+			const float k = cueScaleKey / 1024.0f;
+			for (int u = 0; u < 256; ++u)
+			{
+				const float c = u / 255.0f;
+				const float linear = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+				const float scaled = linear * k;
+				const float v = scaled <= 0.0031308f ? 12.92f * scaled
+					: 1.055f * std::pow(scaled, 1.0f / 2.4f) - 0.055f;
+				sourceCueScaleLut[u] = static_cast<uint8_t>(std::lround(
+					(std::max)(0.0f, (std::min)(1.0f, v)) * 255.0f));
+			}
+			sourceCueScaleLutKey = cueScaleKey;
+		}
 		const auto uploadSourceCue = [&](const std::shared_ptr<const SourceCue>& cue,
-			pl_tex& texture, uint64_t& appliedId, const char* kind)
+			pl_tex& texture, uint64_t& appliedId, uint32_t& appliedScale, const char* kind)
 		{
 			if (!cue)
 				return;
-			if (texture && appliedId == cue->id)
+			if (texture && appliedId == cue->id && appliedScale == cueScaleKey)
 				return;
 			struct pl_plane_data plane{};
 			plane.type = PL_FMT_UNORM;
@@ -19205,6 +19240,27 @@ releaseDriftBaseRetention =
 			plane.pixel_stride = 4;
 			plane.row_stride = static_cast<size_t>(cue->width) * 4;
 			plane.pixels = cue->pixels.data();
+			if (cueScaleKey != 1024)
+			{
+				// Premultiplied BGRA: scale the un-premultiplied colour,
+				// premultiply again; alpha and chromaticity are kept.
+				sourceCueScaled.resize(cue->pixels.size());
+				const size_t count = cue->pixels.size() / 4;
+				for (size_t i = 0; i < count; ++i)
+				{
+					const uint8_t* s = &cue->pixels[i * 4];
+					uint8_t* d = &sourceCueScaled[i * 4];
+					const unsigned a = s[3];
+					d[3] = s[3];
+					for (int c = 0; c < 3; ++c)
+					{
+						if (a == 0) { d[c] = 0; continue; }
+						const unsigned u = (std::min)(255u, (s[c] * 255u + a / 2) / a);
+						d[c] = static_cast<uint8_t>((sourceCueScaleLut[u] * a + 127u) / 255u);
+					}
+				}
+				plane.pixels = sourceCueScaled.data();
+			}
 			uint64_t masks[4] = {
 				0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000
 			};
@@ -19223,11 +19279,12 @@ releaseDriftBaseRetention =
 				return;
 			}
 			appliedId = cue->id;
+			appliedScale = cueScaleKey;
 		};
 		uploadSourceCue(sourceCues.subtitle, sourceSubtitleTexture,
-			appliedSourceSubtitleId, "subtitle");
+			appliedSourceSubtitleId, appliedSourceSubtitleScale, "subtitle");
 		uploadSourceCue(sourceCues.message, sourceMessageTexture,
-			appliedSourceMessageId, "message");
+			appliedSourceMessageId, appliedSourceMessageScale, "message");
 		// His Move background and border as 1x1 textures (RGBA, sRGB-encoded).
 		const auto uploadSourceCueColor = [&](const std::array<float, 3>& linear,
 			float opacity, pl_tex& texture, uint32_t& appliedColor)
@@ -19258,16 +19315,21 @@ releaseDriftBaseRetention =
 		};
 		// Background 3 is his black backing, 5 his generated-gray style.
 		const auto& cueStyle = activeSettings.subtitleGeneratedGray;
+		// Panel and border follow the cue's white level (linear colours).
+		const auto cueLevel = [&](const std::array<float, 3>& linear) {
+			return std::array<float, 3>{ linear[0] * cueScale, linear[1] * cueScale,
+				linear[2] * cueScale };
+		};
 		if (sourceCues.subtitle && subtitleCutPasteTest)
 		{
 			if (subtitleCutPasteBackground == 5)
-				uploadSourceCueColor(cueStyle.color, cueStyle.opacity,
+				uploadSourceCueColor(cueLevel(cueStyle.color), cueStyle.opacity,
 					sourceCuePanelTexture, appliedSourceCuePanelColor);
 			else
 				uploadSourceCueColor({ 0.0f, 0.0f, 0.0f }, 1.0f,
 					sourceCuePanelTexture, appliedSourceCuePanelColor);
 			if (subtitleCutPasteBackground == 5 && cueStyle.borderWidth > 0.0f)
-				uploadSourceCueColor(cueStyle.borderColor, cueStyle.borderOpacity,
+				uploadSourceCueColor(cueLevel(cueStyle.borderColor), cueStyle.borderOpacity,
 					sourceCueBorderTexture, appliedSourceCueBorderColor);
 		}
 		struct pl_overlay overlays[8]{};
@@ -19596,7 +19658,9 @@ releaseDriftBaseRetention =
 				overlay.repr.levels = PL_COLOR_LEVELS_FULL;
 				overlay.repr.alpha = PL_ALPHA_PREMULTIPLIED;
 				overlay.color = pl_color_space_srgb;
-				overlay.color.hdr.max_luma = sourceCues.whiteNits;
+				// Nits on an HDR-declared target; on an SDR-declared one the
+				// level is in the pixels (see the upload) and the tag is sRGB.
+				overlay.color.hdr.max_luma = cueTargetHdr ? sourceCues.whiteNits : 0.0f;
 				overlay.parts = &part;
 				overlay.num_parts = 1;
 			};
@@ -19647,7 +19711,7 @@ releaseDriftBaseRetention =
 						panel.repr = pl_color_repr_rgb; panel.repr.levels = PL_COLOR_LEVELS_FULL;
 						panel.repr.alpha = PL_ALPHA_INDEPENDENT;
 						panel.color = pl_color_space_srgb;
-						panel.color.hdr.max_luma = sourceCues.whiteNits;
+						panel.color.hdr.max_luma = cueTargetHdr ? sourceCues.whiteNits : 0.0f;
 						panel.parts = &sourceCuePanelPart; panel.num_parts = 1;
 					}
 					if (sourceCueBorderTexture && subtitleCutPasteBackground == 5 && cueStyle.borderWidth > 0.0f)
@@ -19668,7 +19732,7 @@ releaseDriftBaseRetention =
 						border.repr = pl_color_repr_rgb; border.repr.levels = PL_COLOR_LEVELS_FULL;
 						border.repr.alpha = PL_ALPHA_INDEPENDENT;
 						border.color = pl_color_space_srgb;
-						border.color.hdr.max_luma = sourceCues.whiteNits;
+						border.color.hdr.max_luma = cueTargetHdr ? sourceCues.whiteNits : 0.0f;
 						border.parts = sourceCueBorderParts; border.num_parts = 4;
 					}
 					// His glyph mapping: scaled about the panel when reduced,
