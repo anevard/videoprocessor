@@ -172,7 +172,10 @@ typedef struct vp_source_state {
 } vp_source_state;
 
 /* One cue image on a frame (see Cues at the top). id == 0: none; ignore
- * the rest. The bounds lie inside the frame. */
+ * the rest. x and width lie inside the frame. y may run up to a frame's
+ * height above or below it (a subtitle in a film's bars): -H <= y and
+ * y + height <= 2H, where H is the frame height. VP draws such rows in
+ * the bars around the picture. */
 typedef struct vp_source_cue {
     uint64_t    id;             /* unique to one image; repeats while it is
                                    unchanged */
