@@ -10972,7 +10972,7 @@ QWidget* ConfigEditorWindow::createPlayerPage()
     });
     playbackLayout->addWidget(fieldWithHelp(QStringLiteral("Audio device"), audio, remoteClient_ ?
         QStringLiteral("Config on another computer cannot list the VP computer's devices. Choose it in "
-            "Config on the VP computer, or in the remote page's Settings.") :
+            "this list in Config on the VP computer.") :
         QStringLiteral("This computer's playback devices. A device not connected now shows as not found "
             "and stays chosen.")));
     layout->addWidget(collapsibleCard(QStringLiteral("Playback"), QString(), playback, false));
