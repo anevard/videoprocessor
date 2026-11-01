@@ -825,12 +825,15 @@ std::shared_ptr<const SourceCue> SourcePluginCaptureDevice::TakeCue(
 	if (last && last->id == in.id)
 		return last;  // unchanged: share the copy already made
 
-	// Refuse a cue that does not lie inside the frame or cannot be read.
+	// Refuse a cue that cannot be read, or lies outside the frame's width or
+	// more than a frame's height above or below it (a subtitle in a film's
+	// bars lies outside the frame; anything farther is a plugin fault).
 	const uint64_t rowBytes = static_cast<uint64_t>(in.width) * 4;
+	const int64_t frameHeight = static_cast<int64_t>(m_frameHeight);
 	if (!in.pixels || in.width == 0 || in.height == 0 || in.stride < rowBytes ||
-		in.x < 0 || in.y < 0 ||
-		static_cast<uint64_t>(in.x) + in.width > m_frameWidth ||
-		static_cast<uint64_t>(in.y) + in.height > m_frameHeight)
+		in.x < 0 || static_cast<uint64_t>(in.x) + in.width > m_frameWidth ||
+		in.y < -frameHeight ||
+		static_cast<int64_t>(in.y) + in.height > 2 * frameHeight)
 	{
 		++m_rejectedCues;
 		if ((m_rejectedCues & (m_rejectedCues - 1)) == 0)

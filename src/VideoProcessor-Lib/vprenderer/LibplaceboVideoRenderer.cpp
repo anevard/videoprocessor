@@ -19553,18 +19553,20 @@ releaseDriftBaseRetention =
             }
         }
 		// Source-plugin cues: drawn over the output after tone mapping, white
-		// at the cue's level. Under a configured screen a subtitle in the bars
-		// takes his Move placement (pure geometry, none of his detection state)
-		// and the message sits at the top of the visible picture; otherwise
-		// both keep the source's own position. Mapped from source to output
-		// linearly, as his debug box is.
+		// at the cue's level, placed in the source frame's own pixels
+		// (PL_OVERLAY_COORDS_SRC_FRAME), so libplacebo crops and scales them
+		// with the picture. A cue may lie above or below the frame, up to a
+		// frame's height either way (a subtitle in a film's bars): it then
+		// lands in the output's bars. Under a configured screen a subtitle in
+		// the bars takes his Move placement (pure geometry, none of his
+		// detection state) and the message sits at the top of the visible
+		// picture; otherwise both keep the source's own position.
 		if (sourceSubtitleTexture || sourceMessageTexture)
 		{
 			const float sx = (target.crop.x1 - target.crop.x0) / width;
 			const float sy = (target.crop.y1 - target.crop.y0) / height;
-			const auto toOutput = [&](float l, float t, float r, float b) {
-				return pl_rect2df{ target.crop.x0 + l * sx, target.crop.y0 + t * sy,
-					target.crop.x0 + r * sx, target.crop.y0 + b * sy };
+			const auto rect = [](float l, float t, float r, float b) {
+				return pl_rect2df{ l, t, r, b };
 			};
 			SubtitleBoxRect visible{ 0, 0, width, height };
 			if (configuredScreenActive && nlsGeometryAvailable &&
@@ -19589,7 +19591,7 @@ releaseDriftBaseRetention =
 				auto& overlay = overlays[overlayCount++];
 				overlay.tex = texture;
 				overlay.mode = PL_OVERLAY_NORMAL;
-				overlay.coords = PL_OVERLAY_COORDS_DST_FRAME;
+				overlay.coords = PL_OVERLAY_COORDS_SRC_FRAME;
 				overlay.repr = pl_color_repr_rgb;
 				overlay.repr.levels = PL_COLOR_LEVELS_FULL;
 				overlay.repr.alpha = PL_ALPHA_PREMULTIPLIED;
@@ -19603,17 +19605,33 @@ releaseDriftBaseRetention =
 				const auto& cue = *sourceCues.subtitle;
 				const SubtitleBoxRect bounds{ cue.x, cue.y,
 					cue.x + static_cast<int>(cue.width), cue.y + static_cast<int>(cue.height) };
+				// His cut-paste expects a cue inside its raster and a bar it
+				// can see, so it runs in the frame padded by the rows the cue
+				// lies above or below it: a bar subtitle on a frame without
+				// stored bars (a bars-cropped scope film) is then placed as one
+				// with bars stored. Its results come back in padded rows;
+				// inFrame takes them back to frame rows.
+				const int padTop = (std::max)(0, -bounds.top);
+				const int padBottom = (std::max)(0, bounds.bottom - height);
+				const SubtitleBoxRect padded{ bounds.left, bounds.top + padTop,
+					bounds.right, bounds.bottom + padTop };
+				const auto inFrame = [&](float l, float t, float r, float b) {
+					return pl_rect2df{ l, t - padTop, r, b - padTop };
+				};
 				SubtitleCutPasteGeometry move;
 				if (subtitleCutPasteTest && placeInPicture)
 				{
-					move = ComputeSubtitleCutPaste(bounds, width, height, visible.top, visible.bottom,
+					const SubtitleBoxRect visiblePadded{ visible.left, visible.top + padTop,
+						visible.right, visible.bottom + padTop };
+					move = ComputeSubtitleCutPaste(padded, width, height + padTop + padBottom,
+						visiblePadded.top, visiblePadded.bottom,
 						activeSettings.subtitleBoxPadding, activeSettings.subtitleMoveInset);
 					move = ApplySubtitleTextReduction(FitSubtitleToVisiblePicture(move,
-						visible, activeSettings.subtitleMoveInset),
+						visiblePadded, activeSettings.subtitleMoveInset),
 						activeSettings.subtitleTextReductionPercent, activeSettings.subtitleBoxPadding,
 						activeSettings.subtitleRoundedCorners, activeSettings.subtitleFloatBackground);
 				}
-				pl_rect2df glyphs = toOutput(static_cast<float>(bounds.left), static_cast<float>(bounds.top),
+				pl_rect2df glyphs = rect(static_cast<float>(bounds.left), static_cast<float>(bounds.top),
 					static_cast<float>(bounds.right), static_cast<float>(bounds.bottom));
 				if (move.valid)
 				{
@@ -19621,11 +19639,11 @@ releaseDriftBaseRetention =
 					if (sourceCuePanelTexture)
 					{
 						sourceCuePanelPart.src = { 0.0f, 0.0f, 1.0f, 1.0f };
-						sourceCuePanelPart.dst = toOutput(static_cast<float>(d.left), static_cast<float>(d.top),
+						sourceCuePanelPart.dst = inFrame(static_cast<float>(d.left), static_cast<float>(d.top),
 							static_cast<float>(d.right), static_cast<float>(d.bottom));
 						auto& panel = overlays[overlayCount++];
 						panel.tex = sourceCuePanelTexture; panel.mode = PL_OVERLAY_NORMAL;
-						panel.coords = PL_OVERLAY_COORDS_DST_FRAME;
+						panel.coords = PL_OVERLAY_COORDS_SRC_FRAME;
 						panel.repr = pl_color_repr_rgb; panel.repr.levels = PL_COLOR_LEVELS_FULL;
 						panel.repr.alpha = PL_ALPHA_INDEPENDENT;
 						panel.color = pl_color_space_srgb;
@@ -19634,9 +19652,10 @@ releaseDriftBaseRetention =
 					}
 					if (sourceCueBorderTexture && subtitleCutPasteBackground == 5 && cueStyle.borderWidth > 0.0f)
 					{
-						const auto p = toOutput(static_cast<float>(d.left), static_cast<float>(d.top),
+						const auto p = inFrame(static_cast<float>(d.left), static_cast<float>(d.top),
 							static_cast<float>(d.right), static_cast<float>(d.bottom));
-						const float bx = cueStyle.borderWidth * sx, by = cueStyle.borderWidth * sy;
+						// Source pixels, as the rest of the rectangle is.
+						const float bx = cueStyle.borderWidth, by = cueStyle.borderWidth;
 						const pl_rect2df edges[4] = {
 							{ p.x0, p.y0, p.x1, (std::min)(p.y1, p.y0 + by) },
 							{ p.x0, (std::max)(p.y0, p.y1 - by), p.x1, p.y1 },
@@ -19645,7 +19664,7 @@ releaseDriftBaseRetention =
 						for (int i = 0; i < 4; ++i) { sourceCueBorderParts[i].src = { 0, 0, 1, 1 }; sourceCueBorderParts[i].dst = edges[i]; }
 						auto& border = overlays[overlayCount++];
 						border.tex = sourceCueBorderTexture; border.mode = PL_OVERLAY_NORMAL;
-						border.coords = PL_OVERLAY_COORDS_DST_FRAME;
+						border.coords = PL_OVERLAY_COORDS_SRC_FRAME;
 						border.repr = pl_color_repr_rgb; border.repr.levels = PL_COLOR_LEVELS_FULL;
 						border.repr.alpha = PL_ALPHA_INDEPENDENT;
 						border.color = pl_color_space_srgb;
@@ -19653,14 +19672,15 @@ releaseDriftBaseRetention =
 						border.parts = sourceCueBorderParts; border.num_parts = 4;
 					}
 					// His glyph mapping: scaled about the panel when reduced,
-					// else moved with the panel.
+					// else moved with the panel. In padded rows, as his
+					// results are.
 					const float scale = move.centeredGlyphMapping ? move.glyphScale : 1.0f;
 					const float tx = move.centeredGlyphMapping ? move.glyphTranslateX
 						: static_cast<float>(d.left - move.source.left);
 					const float ty = move.centeredGlyphMapping ? move.glyphTranslateY
 						: static_cast<float>(d.top - move.source.top);
-					glyphs = toOutput(scale * bounds.left + tx, scale * bounds.top + ty,
-						scale * bounds.right + tx, scale * bounds.bottom + ty);
+					glyphs = inFrame(scale * padded.left + tx, scale * padded.top + ty,
+						scale * padded.right + tx, scale * padded.bottom + ty);
 				}
 				cueOverlay(sourceSubtitleTexture, sourceSubtitlePart, glyphs);
 			}
@@ -19673,7 +19693,7 @@ releaseDriftBaseRetention =
 					left = (visible.left + visible.right - static_cast<float>(cue.width)) * 0.5f;
 					top = static_cast<float>(visible.top + activeSettings.subtitleMoveInset);
 				}
-				cueOverlay(sourceMessageTexture, sourceMessagePart, toOutput(left, top,
+				cueOverlay(sourceMessageTexture, sourceMessagePart, rect(left, top,
 					left + cue.width, top + cue.height));
 			}
 		}
