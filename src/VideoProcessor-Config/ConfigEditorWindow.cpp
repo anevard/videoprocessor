@@ -11019,7 +11019,9 @@ QWidget* ConfigEditorWindow::createPlayerPage()
         QStringLiteral("100 keeps subtitles where the film or text style places them; lower moves them up, higher moves them down. Default: 100.")));
     subtitlesLayout->addWidget(fieldWithHelp(QStringLiteral("HDR brightness"),
         rangeField(QStringLiteral("sub_nits"), 10, 1000, 50, QStringLiteral(" nits")),
-        QStringLiteral("The level subtitles are drawn at in HDR films. Default: 50 nits.")));
+        QStringLiteral("Subtitle white, in nits. On an SDR output it is taken against the profile's Target nits "
+            "(Tone mapping), so SDR and HDR films show subtitles at the same level; at or above Target nits "
+            "they are drawn at full white. Default: 50 nits.")));
     layout->addWidget(collapsibleCard(QStringLiteral("Subtitles"),
         QStringLiteral("What each film starts with. The track keys and the remote page change the track "
             "while a film plays."), subtitles, false));
