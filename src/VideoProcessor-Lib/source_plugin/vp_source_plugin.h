@@ -11,9 +11,14 @@
  * memory is freed by whoever allocated it.
  *
  * Entry point: the plugin exports one function, vp_source_plugin_get_api,
- * which returns its function table. VP refuses the plugin when the table's
- * abi_version differs from VP_SOURCE_PLUGIN_ABI_VERSION or its struct_size
- * is smaller than the table VP was built with.
+ * which returns its function table. VP asks for VP_SOURCE_PLUGIN_ABI_VERSION
+ * first, then for each older version down to
+ * VP_SOURCE_PLUGIN_ABI_VERSION_OLDEST, so a plugin built for an older
+ * version keeps loading without a rebuild. VP refuses the plugin when the
+ * table's abi_version differs from the version it answered, or its
+ * struct_size is smaller than the table VP was built with. A newer version
+ * only adds to this interface; it never changes an older version's
+ * structures.
  *
  * Threads (VP keeps all of its own threading; the plugin never calls VP
  * except through vp_source_host):
@@ -30,10 +35,17 @@
  * Timing: the plugin is the input's clock, as a capture card is. Every
  * frame timestamp is on that clock, in clock_ticks_per_second ticks.
  *
- * Frames: one block of tightly packed planes, no row padding.
+ * Frames: one block of tightly packed planes, no row padding (R10L only
+ * pads its rows, as below).
  *   P010: Y plane (width * 2 bytes x height rows), then interleaved CbCr
  *         (width * 2 bytes x height / 2 rows). 10 bits in the high bits of
  *         each little-endian 16-bit word; low 6 bits zero.
+ *   R10L (version 3): one plane, one little-endian 32-bit word per pixel,
+ *         R in bits 31-22, G in 21-12, B in 11-2, bits 1-0 zero; RGB 4:4:4
+ *         at limited range (64-940). Each row is VP's R10l row,
+ *         ((width + 63) / 64) * 256 bytes: padded to a multiple of 64
+ *         pixels, padding ignored. An 8-bit source may be carried by an
+ *         exact shift (value << 2), declared with bit_depth 8.
  *   BGRA8: one plane, bytes B, G, R, A (width * 4 bytes x height rows),
  *         delivered exactly as an HDMI RGB capture would deliver it. It is
  *         how a plugin sends a TV-led Dolby Vision picture: declare it SDR,
@@ -62,7 +74,8 @@
 extern "C" {
 #endif
 
-#define VP_SOURCE_PLUGIN_ABI_VERSION    2u
+#define VP_SOURCE_PLUGIN_ABI_VERSION        3u
+#define VP_SOURCE_PLUGIN_ABI_VERSION_OLDEST 2u   /* oldest VP still loads */
 
 #if defined(_WIN32)
 #define VP_SOURCE_PLUGIN_EXPORT __declspec(dllexport)
@@ -90,6 +103,7 @@ extern "C" {
 #define VP_SOURCE_ENCODING_P010   1u
 /* 2 is not used. */
 #define VP_SOURCE_ENCODING_BGRA8  3u
+#define VP_SOURCE_ENCODING_R10L   4u   /* version 3 */
 
 /* Transfer functions and colour spaces. Our own numbers, not VP's enum
  * values: the adapter maps each one by name, so VP can reorder its enums
@@ -166,7 +180,8 @@ typedef struct vp_source_state {
     uint32_t eotf;              /* VP_SOURCE_EOTF_* */
     uint32_t colorspace;        /* VP_SOURCE_COLORSPACE_* */
     uint32_t bit_depth;         /* the source's bits per sample: 8 or 10 (P010
-                                   only); 0 = the encoding's own depth */
+                                   and R10L only); 0 = the encoding's own
+                                   depth */
     vp_source_hdr10    hdr10;
     vp_source_raw_tags raw;
 } vp_source_state;
@@ -205,7 +220,7 @@ typedef struct vp_source_frame {
 
 /* Services VP offers the plugin. Valid from create until destroy returns. */
 typedef struct vp_source_host {
-    uint32_t abi_version;       /* VP_SOURCE_PLUGIN_ABI_VERSION */
+    uint32_t abi_version;       /* the version this plugin answered */
     uint32_t struct_size;
     void*    context;           /* pass back unchanged */
     const char* plugin_dir;     /* UTF-8; the folder holding the plugin DLL */
