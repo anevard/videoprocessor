@@ -64,12 +64,19 @@ namespace
 		return result;
 	}
 
-	bool TranslateEncoding(uint32_t encoding, VideoFrameEncoding& out)
+	// abiVersion: the version the plugin answered; it may declare only the
+	// encodings that version knows.
+	bool TranslateEncoding(uint32_t encoding, uint32_t abiVersion, VideoFrameEncoding& out)
 	{
 		switch (encoding)
 		{
 		case VP_SOURCE_ENCODING_P010: out = VideoFrameEncoding::P010; return true;
 		case VP_SOURCE_ENCODING_BGRA8: out = VideoFrameEncoding::BGRA_8BIT; return true;
+		case VP_SOURCE_ENCODING_R10L:
+			if (abiVersion < 3)
+				return false;
+			out = VideoFrameEncoding::R10l;
+			return true;
 		}
 		return false;
 	}
@@ -307,7 +314,7 @@ SourcePluginCaptureDevice::SourcePluginCaptureDevice(
 	if (m_nameUtf8.empty())
 		throw std::runtime_error("Source plugin: no name");
 
-	m_host.abi_version = VP_SOURCE_PLUGIN_ABI_VERSION;
+	m_host.abi_version = m_api->abi_version;
 	m_host.struct_size = sizeof(m_host);
 	m_host.context = this;
 	m_host.plugin_dir = m_pluginDirUtf8.c_str();
@@ -327,8 +334,8 @@ SourcePluginCaptureDevice::SourcePluginCaptureDevice(
 	// Owned from here on.
 	m_module = module;
 
-	DEBUGLOG("Source plugin loaded: name=%s dir=%s clock_hz=%lld",
-		m_nameUtf8.c_str(), m_pluginDirUtf8.c_str(),
+	DEBUGLOG("Source plugin loaded: name=%s abi=%u dir=%s clock_hz=%lld",
+		m_nameUtf8.c_str(), m_api->abi_version, m_pluginDirUtf8.c_str(),
 		static_cast<long long>(m_ticksPerSecond));
 }
 
@@ -642,18 +649,21 @@ void SourcePluginCaptureDevice::SendVideoState()
 	EOTF eotf = EOTF::UNKNOWN;
 	ColorSpace colorspace = ColorSpace::UNKNOWN;
 
-	// The source's own depth (0: the encoding's); P010 may carry 8-bit values.
+	// The source's own depth (0: the encoding's); P010 and R10L may carry
+	// 8-bit values.
+	const bool tenBitEncoding = state.encoding == VP_SOURCE_ENCODING_P010 ||
+		state.encoding == VP_SOURCE_ENCODING_R10L;
 	const uint32_t bitDepth = state.bit_depth != 0 ? state.bit_depth :
-		(state.encoding == VP_SOURCE_ENCODING_P010 ? 10u : 8u);
+		(tenBitEncoding ? 10u : 8u);
 
 	const char* refusal = nullptr;
 	if (result != VP_SOURCE_OK)
 		refusal = "get_state failed";
 	else if (!state.valid)
 		refusal = "no signal";
-	else if (!TranslateEncoding(state.encoding, encoding))
+	else if (!TranslateEncoding(state.encoding, m_api->abi_version, encoding))
 		refusal = "unknown encoding";
-	else if (bitDepth != 8 && !(bitDepth == 10 && encoding == VideoFrameEncoding::P010))
+	else if (bitDepth != 8 && !(bitDepth == 10 && tenBitEncoding))
 		refusal = "bit depth does not fit the encoding";
 	else if (!TranslateEotf(state.eotf, eotf))
 		refusal = "unknown eotf";
@@ -719,11 +729,11 @@ void SourcePluginCaptureDevice::SendVideoState()
 		cardState->inputDisplayMode = videoState->displayMode;
 		if (videoState->valid)
 		{
-			// P010 is 4:2:0; BGRA8 is RGB as a capture card
+			// P010 is 4:2:0; BGRA8 and R10L are RGB as a capture card
 			// reports it. No hardware link to report: the GUI reads "other"
 			// as its PCIe rows, by position.
-			cardState->inputEncoding = encoding == VideoFrameEncoding::BGRA_8BIT ?
-				ColorFormat::RGB444 : ColorFormat::YCbCr420;
+			cardState->inputEncoding = encoding == VideoFrameEncoding::P010 ?
+				ColorFormat::YCbCr420 : ColorFormat::RGB444;
 			cardState->inputBitDepth = bitDepth == 10 ?
 				BitDepth::BITDEPTH_10BIT : BitDepth::BITDEPTH_8BIT;
 		}
