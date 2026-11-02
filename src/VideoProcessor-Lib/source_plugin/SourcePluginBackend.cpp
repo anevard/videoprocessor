@@ -98,11 +98,11 @@ namespace
 		return std::wstring();
 	}
 
-	const char* RefusalReason(const vp_source_plugin_api* api)
+	const char* RefusalReason(const vp_source_plugin_api* api, uint32_t version)
 	{
 		if (!api)
-			return "get_api returned no table";
-		if (api->abi_version != VP_SOURCE_PLUGIN_ABI_VERSION)
+			return "get_api returned no table for any supported ABI version";
+		if (api->abi_version != version)
 			return "ABI version differs";
 		if (api->struct_size < sizeof(vp_source_plugin_api))
 			return "function table too small";
@@ -163,9 +163,15 @@ namespace
 
 			const auto getApi = reinterpret_cast<vp_source_plugin_get_api_fn>(
 				GetProcAddress(plugin.module, VP_SOURCE_PLUGIN_ENTRY_NAME));
-			plugin.api = getApi ? getApi(VP_SOURCE_PLUGIN_ABI_VERSION) : nullptr;
+			// Newest version first: a plugin built for an older one answers
+			// only its own, and keeps loading without a rebuild.
+			uint32_t version = VP_SOURCE_PLUGIN_ABI_VERSION;
+			if (getApi)
+				for (; version >= VP_SOURCE_PLUGIN_ABI_VERSION_OLDEST; --version)
+					if ((plugin.api = getApi(version)) != nullptr)
+						break;
 
-			const char* refusal = getApi ? RefusalReason(plugin.api) :
+			const char* refusal = getApi ? RefusalReason(plugin.api, version) :
 				"no " VP_SOURCE_PLUGIN_ENTRY_NAME " export";
 			if (!refusal)
 			{
