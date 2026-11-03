@@ -11415,8 +11415,10 @@ QWidget* ConfigEditorWindow::createPatternPage()
     const ChartGroup groups[] =
     {
         { "Clipping", { { "Black, colour", "clip_black" }, { "Black, grey", "clip_black_grey" },
-            { "White, colour", "clip_white" }, { "White, grey", "clip_white_grey" } } },
-        { "Greyscale", { { "Steps", "grey_steps" }, { "Ramp", "grey_ramp" } } },
+            { "White, colour", "clip_white" }, { "White, grey", "clip_white_grey" },
+            { "Colour, 72-100 %", "clip_colour" } } },
+        { "Greyscale", { { "Steps", "grey_steps" }, { "Ramp", "grey_ramp" },
+            { "Gamma check 2.2 / 2.4", "gamma_check" } } },
         { "Colour ramps", { { "BT.709", "ramp_709" }, { "BT.2020 SDR", "ramp_2020_sdr" },
             { "BT.2020 PQ", "ramp_2020_pq" }, { "P3 in BT.2020 SDR", "ramp_p3_sdr" },
             { "P3 in BT.2020 PQ", "ramp_p3_pq" } } },
