@@ -117,6 +117,14 @@ private:
     QWidget* createLogsPage();
     QWidget* createPlayerPage();
     void offerPlayerRestart();
+    QWidget* createPatternPage();
+    // After a save that changed a source plugin's section ("player" or
+    // "pattern"): if that plugin's input is the target VP's active input,
+    // offer to restart it. warning: what a restart interrupts, or empty.
+    void offerSourcePluginRestart(const QString& section, const QString& title, const QString& warning);
+    // One RunAction on the target VP, off the UI thread; done(success,
+    // error) back on it.
+    void runTargetAction(const QString& action, std::function<void(bool, const QString&)> done);
     QWidget* createProfilePage(const QString& title, const QString& description,
         const QString& sectionPrefix);
     QWidget* createCard(const QString& title, const QString& description, QWidget* content);
