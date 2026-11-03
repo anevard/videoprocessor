@@ -74,7 +74,7 @@
 extern "C" {
 #endif
 
-#define VP_SOURCE_PLUGIN_ABI_VERSION        3u
+#define VP_SOURCE_PLUGIN_ABI_VERSION        4u
 #define VP_SOURCE_PLUGIN_ABI_VERSION_OLDEST 2u   /* oldest VP still loads */
 
 #if defined(_WIN32)
@@ -131,6 +131,18 @@ extern "C" {
                                                        estimate. Independent
                                                        of DISCONTINUITY */
 
+/* vp_source_state.flags (version 4) */
+#define VP_SOURCE_STATE_EXACT_SIGNAL    (1u << 0)   /* the plugin generates
+                                                       this signal and states
+                                                       it exactly (a pattern
+                                                       generator): VP takes
+                                                       it as declared, with
+                                                       no LLDV inference and
+                                                       no Dolby Vision
+                                                       tunnel. A player of
+                                                       decoded files leaves
+                                                       it clear */
+
 /* Log levels for host->log. */
 #define VP_SOURCE_LOG_ERROR   0u
 #define VP_SOURCE_LOG_WARNING 1u
@@ -184,6 +196,7 @@ typedef struct vp_source_state {
                                    depth */
     vp_source_hdr10    hdr10;
     vp_source_raw_tags raw;
+    uint32_t flags;             /* VP_SOURCE_STATE_* (version 4) */
 } vp_source_state;
 
 /* One cue image on a frame (see Cues at the top). id == 0: none; ignore
