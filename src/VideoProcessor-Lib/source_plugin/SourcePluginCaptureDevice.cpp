@@ -118,6 +118,15 @@ namespace
 
 	constexpr char SETTINGS_SEPARATOR = '\x1f';
 	constexpr const char* PLAYER_SECTION = "player";
+	constexpr const char* PATTERN_SECTION = "pattern";
+
+	// Each plugin's own cfg section: the pattern generator's is [pattern],
+	// every other plugin's [player]. A plugin never receives another's
+	// section (the Player's may carry its remote page's PIN).
+	const char* SettingsSection(const std::string& nameUtf8)
+	{
+		return nameUtf8 == SourcePluginBackend::PATTERN_PLUGIN_NAME ? PATTERN_SECTION : PLAYER_SECTION;
+	}
 
 	// VP's Config writes cfg values in the ANSI code page (toLocal8Bit); the
 	// plugin reads UTF-8.
@@ -148,20 +157,21 @@ namespace
 		line += SETTINGS_SEPARATOR;
 	}
 
-	// VP's [player] section, re-read at each start, as the plugin's
-	// "settings ..." line: "key=value" entries split by 0x1f. Indexed keys
-	// (folder.1, folder.2, ...) go as one repeated key in index order, since
-	// VP's parser keeps only the last of a repeated key. log_dir is VP's logs
-	// folder, log_retention VP's [logging] count and idle_format the
-	// fullscreen display's desktop mode, never [player] settings. idle receives idle_format, or why it was left out.
-	std::string PlayerSettingsCommand(size_t& entries, std::string& idle)
+	// The plugin's own section (SettingsSection), re-read at each start, as
+	// the plugin's "settings ..." line: "key=value" entries split by 0x1f.
+	// Indexed keys (folder.1, folder.2, ...) go as one repeated key in index
+	// order, since VP's parser keeps only the last of a repeated key. log_dir
+	// is VP's logs folder, log_retention VP's [logging] count and idle_format
+	// the fullscreen display's desktop mode, never section settings. idle
+	// receives idle_format, or why it was left out.
+	std::string PlayerSettingsCommand(const char* section, size_t& entries, std::string& idle)
 	{
 		entries = 0;
 		std::string line = "settings ";
 
 		ConfigFile config;
 		const std::map<std::string, std::string>* values =
-			config.Load() ? config.GetSectionValues(PLAYER_SECTION) : nullptr;
+			config.Load() ? config.GetSectionValues(section) : nullptr;
 		if (values)
 		{
 			std::map<std::pair<std::string, unsigned int>, std::string> indexed;
@@ -365,12 +375,13 @@ SourcePluginCaptureDevice::~SourcePluginCaptureDevice()
 }
 
 
-void SourcePluginCaptureDevice::SendCommand(const char* commandUtf8)
+int32_t SourcePluginCaptureDevice::SendCommand(const char* commandUtf8)
 {
 	const int32_t result = m_api->send_command(m_instance, commandUtf8);
 	if (result != VP_SOURCE_OK)
 		DEBUGLOG("Source plugin command rejected: name=%s command=\"%s\" result=%d",
 			m_nameUtf8.c_str(), commandUtf8, result);
+	return result;
 }
 
 
@@ -421,10 +432,11 @@ void SourcePluginCaptureDevice::StartCapture(CaptureRunToken captureRunToken)
 	// may carry the remote page's PIN, so never the line itself is logged.
 	size_t settingEntries = 0;
 	std::string idleFormat;
+	const char* section = SettingsSection(m_nameUtf8);
 	const int32_t settingsResult = m_api->send_command(
-		m_instance, PlayerSettingsCommand(settingEntries, idleFormat).c_str());
-	DEBUGLOG("Source plugin settings sent: name=%s [player] entries=%zu idle_format=%s result=%d",
-		m_nameUtf8.c_str(), settingEntries, idleFormat.c_str(), settingsResult);
+		m_instance, PlayerSettingsCommand(section, settingEntries, idleFormat).c_str());
+	DEBUGLOG("Source plugin settings sent: name=%s [%s] entries=%zu idle_format=%s result=%d",
+		m_nameUtf8.c_str(), section, settingEntries, idleFormat.c_str(), settingsResult);
 
 	const int32_t started = m_api->start(m_instance);
 	if (started != VP_SOURCE_OK)

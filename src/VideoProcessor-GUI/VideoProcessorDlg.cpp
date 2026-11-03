@@ -583,6 +583,7 @@ const ShortcutDefinition SHORTCUT_DEFINITIONS[] =
 	{ "capture_3",             ID_COMMAND_CAPTURE_3,              '3',       FCONTROL },
 	{ "capture_4",             ID_COMMAND_CAPTURE_4,              '4',       FCONTROL },
 	{ "capture_player",        ID_COMMAND_CAPTURE_PLAYER,         '0',       FCONTROL | FALT },
+	{ "capture_pattern",       ID_COMMAND_CAPTURE_PATTERN,        'T',       FCONTROL | FALT },
 	{ "player_play_pause",     ID_COMMAND_PLAYER_PLAY_PAUSE,      'K',       FCONTROL | FALT },
 	{ "player_stop",           ID_COMMAND_PLAYER_STOP,            'X',       FCONTROL | FALT },
 	{ "player_previous",       ID_COMMAND_PLAYER_PREVIOUS,        'B',       FCONTROL | FALT },
@@ -2118,6 +2119,7 @@ BEGIN_MESSAGE_MAP(CVideoProcessorDlg, CDialog)
 	ON_COMMAND_RANGE(ID_COMMAND_RENDERER_SELECT_FIRST, ID_COMMAND_RENDERER_SELECT_LAST, &CVideoProcessorDlg::OnCommandRendererSelect)
 	ON_COMMAND_RANGE(ID_COMMAND_CAPTURE_1, ID_COMMAND_CAPTURE_4, &CVideoProcessorDlg::OnSelectCaptureDevice)
 	ON_COMMAND(ID_COMMAND_CAPTURE_PLAYER, &CVideoProcessorDlg::OnCommandCapturePlayer)
+	ON_COMMAND(ID_COMMAND_CAPTURE_PATTERN, &CVideoProcessorDlg::OnCommandCapturePattern)
 	ON_COMMAND_RANGE(ID_COMMAND_PLAYER_PLAY_PAUSE, ID_COMMAND_PLAYER_LAST, &CVideoProcessorDlg::OnCommandPlayerTransport)
 
 
@@ -3121,17 +3123,39 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 		if (!ReadString(request.payload, cursor, name) || name.empty() ||
 			name.size() > 64 || cursor != request.payload.size())
 			return ConfigurationRpcError(operation, "Invalid action request.");
-		// Config's Apply of [player] settings: is the Player active, and
-		// restart it through the capture Restart, which re-sends [player].
-		if (name == "player.active" || name == "player.restart")
+		// Config's Apply of [player] or [pattern] settings: is that plugin's
+		// input active, and restart it through the capture Restart, which
+		// re-sends its section.
+		if (name == "player.active" || name == "player.restart" ||
+			name == "pattern.active" || name == "pattern.restart")
 		{
-			if (!SourcePluginBackend::IsSourcePluginDevice(m_captureDevice))
-				return ConfigurationRpcError(operation, "The Player is not the active input.");
-			if (name == "player.restart")
+			const bool player = name.rfind("player.", 0) == 0;
+			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, player ?
+				SourcePluginBackend::PLAYER_PLUGIN_NAME : SourcePluginBackend::PATTERN_PLUGIN_NAME))
+				return ConfigurationRpcError(operation, player ? "The Player is not the active input." :
+					"The pattern generator is not the active input.");
+			if (name == "player.restart" || name == "pattern.restart")
 			{
-				DebugLog::Log("Player restart requested by Config");
+				DebugLog::Log("%s restart requested by Config", player ? "Player" : "Pattern generator");
 				OnBnClickedCaptureRestart();
 			}
+			Frame response;
+			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+			return response;
+		}
+		// Config's Pattern page, live: "pattern.<command>" goes to the
+		// pattern generator as "<command>" (e.g. "pattern.chart grey_steps").
+		if (name.rfind("pattern.", 0) == 0)
+		{
+			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
+				SourcePluginBackend::PATTERN_PLUGIN_NAME))
+				return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
+			const std::string command = name.substr(8);
+			int32_t result = 0;
+			SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command.c_str(), &result);
+			if (result != 0)
+				return ConfigurationRpcError(operation, "The pattern generator refused \"" + command +
+					"\" (" + std::to_string(result) + "); vp.log says why.");
 			Frame response;
 			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 			return response;
@@ -8920,24 +8944,38 @@ void CVideoProcessorDlg::OnSelectCaptureDevice(UINT nID)
 	SelectCaptureDevice(deviceIndex);
 }
 
-// Selects the Player. Matches it by device type, never by SelectCaptureDevice's
-// regex, which selects entry 0 when nothing matches.
-void CVideoProcessorDlg::OnCommandCapturePlayer()
+// Selects a source plugin's input by its plugin's name, never by device type
+// (several plugins may be listed, in file-name order) nor by
+// SelectCaptureDevice's regex, which selects entry 0 when nothing matches.
+bool CVideoProcessorDlg::SelectSourcePluginInput(const char* nameUtf8)
 {
 	const int itemCount = m_captureDeviceCombo.GetCount();
 	for (int i = 0; i < itemCount; ++i)
 	{
-		if (!SourcePluginBackend::IsSourcePluginDevice(
-			static_cast<ACaptureDevice*>(m_captureDeviceCombo.GetItemDataPtr(i))))
+		if (!SourcePluginBackend::IsSourcePluginNamed(
+			static_cast<ACaptureDevice*>(m_captureDeviceCombo.GetItemDataPtr(i)), nameUtf8))
 			continue;
 		if (i != m_captureDeviceCombo.GetCurSel())
 		{
 			m_captureDeviceCombo.SetCurSel(i);
 			OnCaptureDeviceSelected();
 		}
-		return;
+		return true;
 	}
-	DebugLog::Log("Player input key: no Player input listed");
+	return false;
+}
+
+void CVideoProcessorDlg::OnCommandCapturePlayer()
+{
+	if (!SelectSourcePluginInput(SourcePluginBackend::PLAYER_PLUGIN_NAME))
+		DebugLog::Log("Player input key: no Player input listed");
+}
+
+void CVideoProcessorDlg::OnCommandCapturePattern()
+{
+	if (!SelectSourcePluginInput(SourcePluginBackend::PATTERN_PLUGIN_NAME))
+		DebugLog::Log("Pattern generator input key: no %s input listed",
+			SourcePluginBackend::PATTERN_PLUGIN_NAME);
 }
 
 // Player transport and track keys: the same commands as the DJ page's buttons, sent
@@ -8953,7 +8991,8 @@ void CVideoProcessorDlg::OnCommandPlayerTransport(UINT nID)
 		"one command per Player transport key");
 	const char* command = commands[nID - ID_COMMAND_PLAYER_PLAY_PAUSE];
 
-	if (!SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command))
+	if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, SourcePluginBackend::PLAYER_PLUGIN_NAME) ||
+		!SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command))
 		DebugLog::Log("Player key ignored: %s: the Player is not the active input", command);
 }
 
