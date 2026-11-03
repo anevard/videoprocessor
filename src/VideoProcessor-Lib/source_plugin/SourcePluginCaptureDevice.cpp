@@ -639,13 +639,15 @@ void SourcePluginCaptureDevice::SendVideoState()
 
 	DEBUGLOG("Source plugin state: name=%s result=%d valid=%u size=%ux%u rate=%u/%u "
 		"encoding=%u bit_depth=%u eotf=%u colorspace=%u mastering=%u light_level=%u "
-		"raw_set=%u primaries=%d transfer=%d matrix=%d range=%d chroma_location=%d sar=%u:%u",
+		"raw_set=%u primaries=%d transfer=%d matrix=%d range=%d chroma_location=%d sar=%u:%u "
+		"flags=%u",
 		m_nameUtf8.c_str(), result, state.valid, state.width, state.height,
 		state.time_scale, state.frame_duration,
 		state.encoding, state.bit_depth, state.eotf, state.colorspace,
 		state.hdr10.has_mastering, state.hdr10.has_light_level,
 		state.raw.set, state.raw.primaries, state.raw.transfer, state.raw.matrix,
-		state.raw.range, state.raw.chroma_location, state.raw.sar_num, state.raw.sar_den);
+		state.raw.range, state.raw.chroma_location, state.raw.sar_num, state.raw.sar_den,
+		state.flags);
 
 	VideoStateComPtr videoState = new VideoState();
 	videoState->valid = false;
@@ -695,6 +697,9 @@ void SourcePluginCaptureDevice::SendVideoState()
 		videoState->videoFrameEncoding = encoding;
 		videoState->eotf = eotf;
 		videoState->colorspace = colorspace;
+		// A plugin older than version 4 has no flags; VP zeroed the field.
+		videoState->exactSignal = m_api->abi_version >= 4 &&
+			(state.flags & VP_SOURCE_STATE_EXACT_SIGNAL) != 0;
 
 		if (state.hdr10.has_mastering)
 		{
