@@ -3997,6 +3997,12 @@ bool ConfigEditorWindow::saveChanges()
         snapshotUsesDirectShowRenderer(savedSnapshot_));
     const bool playerChanged = std::any_of(changed.begin(), changed.end(),
         [](const ConfigurationApplyPolicy::Change& change) { return _stricmp(change.section.c_str(), "player") == 0; });
+    const bool patternChanged = std::any_of(changed.begin(), changed.end(),
+        [](const ConfigurationApplyPolicy::Change& change) { return _stricmp(change.section.c_str(), "pattern") == 0; });
+    const auto offerPatternRestart = [this]
+    {
+        offerSourcePluginRestart(QStringLiteral("pattern"), QStringLiteral("pattern generator"), QString());
+    };
     // Persist shortcut spelling in the same canonical form used by the
     // accelerator parser. Case is not a modifier: L and l are both L, while
     // Shift+L is the distinct shifted chord.
@@ -4087,6 +4093,7 @@ bool ConfigEditorWindow::saveChanges()
 		setStatus(QStringLiteral("%1: %2.").arg(outcome,
 			QString::fromUtf8(applied.action)));
 		if (playerChanged) offerPlayerRestart();
+		if (patternChanged) offerPatternRestart();
 		return true;
 	}
     // Config is the interactive authority for this file. Save the user's
@@ -4148,6 +4155,7 @@ bool ConfigEditorWindow::saveChanges()
             QStringLiteral("Changes saved safely. Takes effect when VideoProcessor next starts."), false);
     }
     if (playerChanged) offerPlayerRestart();
+    if (patternChanged) offerPatternRestart();
     return true;
 }
 
@@ -4297,6 +4305,7 @@ QWidget* ConfigEditorWindow::createShell()
         QStringLiteral("vprenderer.motion")));
     const int displayPageIndex = pages_->addWidget(createDisplayPage());
     const int playerPageIndex = pages_->addWidget(createPlayerPage());
+    const int patternPageIndex = pages_->addWidget(createPatternPage());
     auto* navGroup = new QButtonGroup(root);
     navGroup->setExclusive(true);
     const auto addLeaf = [this, navLayout, navGroup](const QString& title, int page)
@@ -4312,6 +4321,7 @@ QWidget* ConfigEditorWindow::createShell()
     addLeaf(QStringLiteral("Queue"), 1);
     addLeaf(QStringLiteral("DV"), 5);
     addLeaf(QStringLiteral("Player"), playerPageIndex);
+    addLeaf(QStringLiteral("Patterns"), patternPageIndex);
     QPushButton* shadersNavigation = addLeaf(QStringLiteral("Shaders"), 14);
     addLeaf(QStringLiteral("Actions"), 7);
     QPushButton* shortcutsNavigation = addLeaf(QStringLiteral("Shortcuts"), 15);
@@ -11271,38 +11281,48 @@ QWidget* ConfigEditorWindow::createPlayerPage()
             "which uses them from then on."), content);
 }
 
+void ConfigEditorWindow::runTargetAction(const QString& action, std::function<void(bool, const QString&)> done)
+{
+    const QString host = remoteClient_ ? remoteHost_ : QStringLiteral("127.0.0.1");
+    const quint16 port = remoteClient_ ? remotePort_ : 41686;
+    struct Result { bool success = false; std::string error; };
+    const auto result = std::make_shared<Result>();
+    const std::string name = action.toLocal8Bit().toStdString();
+    QThread* worker = QThread::create([result, host, port, name]
+    {
+        ConfigurationRpcClient client(host.toStdString(), port);
+        result->success = client.RunAction(name, result->error);
+    });
+    worker->setParent(this);
+    connect(worker, &QThread::finished, this, [worker, result, done]
+    {
+        worker->deleteLater();
+        done(result->success, QString::fromUtf8(result->error));
+    });
+    worker->start();
+}
+
 // After a save that changed [player]: if the Player is the target VP's active
 // input, offer to restart it. VP answers player.active and player.restart only
 // for the Player; the restart is its capture Restart, which reads [player] again.
 void ConfigEditorWindow::offerPlayerRestart()
 {
+    offerSourcePluginRestart(QStringLiteral("player"), QStringLiteral("Player"),
+        QStringLiteral("A playing film stops and its queue is cleared."));
+}
+
+void ConfigEditorWindow::offerSourcePluginRestart(const QString& section, const QString& title,
+    const QString& warning)
+{
     if (noTarget_ || testMode_) return;
-    const QString host = remoteClient_ ? remoteHost_ : QStringLiteral("127.0.0.1");
-    const quint16 port = remoteClient_ ? remotePort_ : 41686;
-    // One action off the UI thread; done(success, error) back on it.
-    const auto run = [this, host, port](const char* action, std::function<void(bool, const QString&)> done)
-    {
-        struct Result { bool success = false; std::string error; };
-        const auto result = std::make_shared<Result>();
-        QThread* worker = QThread::create([result, host, port, action]
-        {
-            ConfigurationRpcClient client(host.toStdString(), port);
-            result->success = client.RunAction(action, result->error);
-        });
-        worker->setParent(this);
-        connect(worker, &QThread::finished, this, [worker, result, done]
-        {
-            worker->deleteLater();
-            done(result->success, QString::fromUtf8(result->error));
-        });
-        worker->start();
-    };
-    run("player.active", [this, run](bool active, const QString&)
+    const QString heading = title.left(1).toUpper() + title.mid(1);
+    runTargetAction(section + QStringLiteral(".active"), [this, section, title, heading, warning](bool active, const QString&)
     {
         // Not the active input: the saved settings are used at its next start.
         if (!active) return;
-        QMessageBox box(QMessageBox::Question, QStringLiteral("Player settings saved"),
-            QStringLiteral("Restart the Player now to use them? A playing film stops and its queue is cleared."),
+        QMessageBox box(QMessageBox::Question, QStringLiteral("%1 settings saved").arg(heading),
+            QStringLiteral("Restart the %1 now to use them?%2").arg(title,
+                warning.isEmpty() ? QString() : QStringLiteral(" ") + warning),
             QMessageBox::NoButton, this);
         QPushButton* restart = box.addButton(QStringLiteral("Restart now"), QMessageBox::AcceptRole);
         box.addButton(QStringLiteral("Settings applied at next start"), QMessageBox::RejectRole);
@@ -11310,16 +11330,195 @@ void ConfigEditorWindow::offerPlayerRestart()
         box.exec();
         if (box.clickedButton() != restart)
         {
-            setStatus(QStringLiteral("Player settings saved; applied at the Player's next start."));
+            setStatus(QStringLiteral("%1 settings saved; applied at the %2's next start.").arg(heading, title));
             return;
         }
-        setStatus(QStringLiteral("Restarting the Player..."));
-        run("player.restart", [this](bool restarted, const QString& error)
+        setStatus(QStringLiteral("Restarting the %1...").arg(title));
+        runTargetAction(section + QStringLiteral(".restart"), [this, title, heading](bool restarted, const QString& error)
         {
-            setStatus(restarted ? QStringLiteral("The Player is restarting with the new settings.") :
-                QStringLiteral("The Player could not be restarted: %1").arg(error), !restarted);
+            setStatus(restarted ? QStringLiteral("The %1 is restarting with the new settings.").arg(title) :
+                QStringLiteral("The %1 could not be restarted: %2").arg(title, error), !restarted);
         });
     });
+}
+
+
+// The pattern generator source plugin, VP TPG. Its settings are [pattern];
+// the plugin receives them when its input starts. Charts are shown at once on
+// the target VP, through its RunAction "pattern.<command>", while VP TPG is
+// the active input. The chart list mirrors the plugin's (vp-patgen
+// src/charts.cpp): picked by group, never one long list.
+QWidget* ConfigEditorWindow::createPatternPage()
+{
+    const QString section = QStringLiteral("pattern");
+    auto* content = new QWidget;
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(12);
+
+    // Parented from the start: showing a parentless label opens a window.
+    auto* status = helpLabel(QStringLiteral("Select the VP TPG input on the target VP, then pick a chart."));
+    status->setObjectName(QStringLiteral("config.pattern.status"));
+    // Sends one command to the pattern generator now; the answer shows under the charts.
+    const auto send = [this, status](const QString& command)
+    {
+        if (noTarget_ || testMode_)
+        {
+            status->setText(QStringLiteral("No target VP to send %1 to.").arg(command));
+            return;
+        }
+        status->setText(QStringLiteral("Sending %1...").arg(command));
+        runTargetAction(QStringLiteral("pattern.") + command, [status, command](bool sent, const QString& error)
+        {
+            status->setText(sent ? QStringLiteral("Sent: %1").arg(command) : error);
+        });
+    };
+
+    // ColourSpace and the signal: used from the input's next start.
+    auto* signal = new QWidget;
+    auto* signalLayout = new QVBoxLayout(signal);
+    signalLayout->setContentsMargins(0, 0, 0, 0);
+    signalLayout->setSpacing(10);
+    QLineEdit* host = bindTextField(section, QStringLiteral("cs_host"));
+    host->setPlaceholderText(QStringLiteral("found on the network"));
+    host->setMaximumWidth(220);
+    signalLayout->addWidget(fieldWithHelp(QStringLiteral("ColourSpace address"), host,
+        QStringLiteral("Empty: the pattern generator connects to the ColourSpace that announces itself on the network.")));
+    QLineEdit* port = bindTextField(section, QStringLiteral("cs_port"));
+    port->setPlaceholderText(QStringLiteral("20002"));
+    port->setMaximumWidth(108);
+    signalLayout->addWidget(fieldWithHelp(QStringLiteral("Port"), port, QStringLiteral("Default: 20002.")));
+    signalLayout->addWidget(fieldWithHelp(QStringLiteral("Signal"),
+        bindChoiceField(section, QStringLiteral("mode"),
+            { QStringLiteral("r10l_legal_10"), QStringLiteral("r10l_legal_8"), QStringLiteral("bgra8_full_8") },
+            { QStringLiteral("RGB 10-bit, limited range"), QStringLiteral("RGB 8-bit, limited range"),
+              QStringLiteral("RGB 8-bit, full range") }),
+        QStringLiteral("Set ColourSpace to the same depth and range; a patch at another depth is refused. "
+            "The charts need a limited-range signal.")));
+    signalLayout->addWidget(fieldWithHelp(QStringLiteral("Gamut"),
+        bindChoiceField(section, QStringLiteral("gamut"), { QStringLiteral("bt709"), QStringLiteral("bt2020") },
+            { QStringLiteral("BT.709"), QStringLiteral("BT.2020") }),
+        QStringLiteral("What VP is told ColourSpace's patches are.")));
+    QLineEdit* window = bindTextField(section, QStringLiteral("window_area"));
+    window->setPlaceholderText(QStringLiteral("0"));
+    window->setMaximumWidth(108);
+    signalLayout->addWidget(fieldWithHelp(QStringLiteral("Window size, %"), window,
+        QStringLiteral("0: patches as ColourSpace sends them. A percentage: every patch as a centred window of that area.")));
+    signalLayout->addWidget(bindCheckField(QStringLiteral("Log every ColourSpace message"), section,
+        QStringLiteral("log_messages")));
+    layout->addWidget(collapsibleCard(QStringLiteral("ColourSpace"),
+        QStringLiteral("Used when the VP TPG input starts."), signal, true));
+
+    // The charts, by group.
+    struct ChartButton { const char* label; const char* id; };
+    struct ChartGroup { const char* title; std::vector<ChartButton> charts; };
+    const ChartGroup groups[] =
+    {
+        { "Clipping", { { "Black, colour", "clip_black" }, { "Black, grey", "clip_black_grey" },
+            { "White, colour", "clip_white" }, { "White, grey", "clip_white_grey" } } },
+        { "Greyscale", { { "Steps", "grey_steps" }, { "Ramp", "grey_ramp" } } },
+        { "Colour ramps", { { "BT.709", "ramp_709" }, { "BT.2020 SDR", "ramp_2020_sdr" },
+            { "BT.2020 PQ", "ramp_2020_pq" }, { "P3 in BT.2020 SDR", "ramp_p3_sdr" },
+            { "P3 in BT.2020 PQ", "ramp_p3_pq" } } },
+        { "Sharpness", { { "Resolution", "resolution" }, { "Focus, white", "focus_white" },
+            { "Focus, green", "focus_green" } } },
+        { "Aspect", { { "1.33", "aspect_1.33" }, { "1.78", "aspect_1.78" }, { "1.85", "aspect_1.85" },
+            { "1.896 (4096x2160)", "aspect_1.896" }, { "2.00", "aspect_2.00" }, { "2.39", "aspect_2.39" } } },
+    };
+    for (const ChartGroup& group : groups)
+    {
+        auto* body = new QWidget;
+        auto* bodyLayout = new QVBoxLayout(body);
+        bodyLayout->setContentsMargins(0, 0, 0, 0);
+        bodyLayout->setSpacing(10);
+        auto* buttons = new QGridLayout;
+        buttons->setHorizontalSpacing(8);
+        buttons->setVerticalSpacing(8);
+        int index = 0;
+        for (const ChartButton& chart : group.charts)
+        {
+            auto* button = new QPushButton(QString::fromUtf8(chart.label));
+            button->setObjectName(QStringLiteral("config.pattern.chart.%1").arg(QString::fromUtf8(chart.id)));
+            const QString command = QStringLiteral("chart %1").arg(QString::fromUtf8(chart.id));
+            connect(button, &QPushButton::clicked, this, [send, command] { send(command); });
+            buttons->addWidget(button, index / 3, index % 3);
+            ++index;
+        }
+        bodyLayout->addLayout(buttons);
+
+        const QString title = QString::fromUtf8(group.title);
+        if (title == QStringLiteral("Clipping"))
+        {
+            QCheckBox* flash = bindCheckField(QStringLiteral("Flash the bars (1.5 s on, 1.5 s off)"),
+                section, QStringLiteral("flash"));
+            connect(flash, &QCheckBox::toggled, this, [send](bool on)
+            {
+                send(on ? QStringLiteral("flash on") : QStringLiteral("flash off"));
+            });
+            bodyLayout->addWidget(flash);
+        }
+        else if (title == QStringLiteral("Colour ramps"))
+        {
+            QStringList gammas;
+            for (int tenths = 20; tenths <= 26; ++tenths)
+                gammas << QString::number(tenths / 10.0, 'f', 1);
+            QComboBox* gamma = bindChoiceField(section, QStringLiteral("sdr_gamma"), gammas);
+            if (value(section, QStringLiteral("sdr_gamma")).isEmpty())
+            {
+                const QSignalBlocker blocker(gamma);
+                gamma->setCurrentIndex(gamma->findData(QStringLiteral("2.4")));
+            }
+            connect(gamma, qOverload<int>(&QComboBox::currentIndexChanged), this, [send, gamma](int)
+            {
+                send(QStringLiteral("gamma %1").arg(gamma->currentData().toString()));
+            });
+            bodyLayout->addWidget(fieldWithHelp(QStringLiteral("SDR gamma"), gamma,
+                QStringLiteral("The P3 SDR ramp's power gamma. Default 2.4; set it to match the VP profile.")));
+            QComboBox* block = bindChoiceField(section, QStringLiteral("hdr10"),
+                { QStringLiteral("p3"), QStringLiteral("bt2020"), QStringLiteral("none") },
+                { QStringLiteral("P3-D65 primaries"), QStringLiteral("BT.2020 primaries"), QStringLiteral("No HDR10 block") });
+            connect(block, qOverload<int>(&QComboBox::currentIndexChanged), this, [send, block](int)
+            {
+                send(QStringLiteral("hdr10 %1").arg(block->currentData().toString()));
+            });
+            bodyLayout->addWidget(fieldWithHelp(QStringLiteral("HDR10 block"), block,
+                QStringLiteral("What the PQ ramps carry. No MaxCLL or MaxFALL.")));
+            for (const auto& luminance : { std::make_pair("hdr10_peak", "1000"), std::make_pair("hdr10_min", "0.0001") })
+            {
+                const QString key = QString::fromUtf8(luminance.first);
+                QLineEdit* field = bindTextField(section, key);
+                field->setPlaceholderText(QString::fromUtf8(luminance.second));
+                field->setMaximumWidth(108);
+                connect(field, &QLineEdit::editingFinished, this, [send, field, key]
+                {
+                    const QString text = field->text().trimmed();
+                    send(QStringLiteral("%1 %2").arg(key, text.isEmpty() ? field->placeholderText() : text));
+                });
+                bodyLayout->addWidget(fieldWithHelp(key == QStringLiteral("hdr10_peak") ?
+                    QStringLiteral("Peak mastering luminance, cd/m2") : QStringLiteral("Minimum mastering luminance, cd/m2"),
+                    field, key == QStringLiteral("hdr10_peak") ? QStringLiteral("Default: 1000.") :
+                    QStringLiteral("Default: 0.0001.")));
+            }
+        }
+        layout->addWidget(collapsibleCard(title, QString(), body, title == QStringLiteral("Clipping")));
+    }
+
+    auto* off = new QPushButton(QStringLiteral("Charts off"));
+    off->setObjectName(QStringLiteral("config.pattern.chart.off"));
+    connect(off, &QPushButton::clicked, this, [send] { send(QStringLiteral("chart off")); });
+    auto* offRow = new QHBoxLayout;
+    offRow->addWidget(off);
+    offRow->addStretch();
+    layout->addLayout(offRow);
+    layout->addWidget(status);
+    layout->addWidget(helpLabel(QStringLiteral(
+        "Charts are drawn at VP's output resolution. A ColourSpace patch replaces the chart on screen. "
+        "The switch key to the VP TPG input is on the Shortcuts page.")));
+    layout->addStretch();
+
+    return createPage(QStringLiteral("Pattern generator"),
+        QStringLiteral("The VP TPG input: ColourSpace's patches and built-in charts. Applying a change to its "
+            "settings offers to restart the input, which uses them from then on."), content);
 }
 
 QWidget* ConfigEditorWindow::createShortcutsPage()
@@ -11350,6 +11549,7 @@ QWidget* ConfigEditorWindow::createShortcutsPage()
         { "DeckLink input 3", "capture_3", "Ctrl+3" },
         { "DeckLink input 4", "capture_4", "Ctrl+4" },
         { "Player input", "capture_player", "Ctrl+Alt+0" },
+        { "Pattern generator input", "capture_pattern", "Ctrl+Alt+T" },
         { "Video conversion off", "video_conversion_off", "V" },
         { "V210 to P010 conversion", "video_conversion_p010", "Shift+V" }
     };
