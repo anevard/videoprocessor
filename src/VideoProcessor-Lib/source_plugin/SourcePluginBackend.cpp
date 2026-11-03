@@ -406,13 +406,21 @@ namespace SourcePluginBackend
 		return dynamic_cast<SourcePluginCaptureDevice*>(device) != nullptr;
 	}
 
-	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8)
+	bool IsSourcePluginNamed(ACaptureDevice* device, const char* nameUtf8)
+	{
+		SourcePluginCaptureDevice* plugin = dynamic_cast<SourcePluginCaptureDevice*>(device);
+		return plugin && plugin->NameUtf8() == nameUtf8;
+	}
+
+	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8, int32_t* result)
 	{
 		SourcePluginCaptureDevice* plugin = dynamic_cast<SourcePluginCaptureDevice*>(device);
 		if (!plugin)
 			return false;
 
-		plugin->SendCommand(commandUtf8);
+		const int32_t sent = plugin->SendCommand(commandUtf8);
+		if (result)
+			*result = sent;
 		return true;
 	}
 
