@@ -24,10 +24,20 @@ namespace SourcePluginBackend
 	// True if the device is a source plugin's input (by type, not by name).
 	bool IsSourcePluginDevice(ACaptureDevice* device);
 
+	// The source plugins VP's own keys and Config act on, by the name in
+	// their function table: the media player and the pattern generator.
+	constexpr const char* PLAYER_PLUGIN_NAME = "VP Player";
+	constexpr const char* PATTERN_PLUGIN_NAME = "VP TPG";
+
+	// True if the device is the input of the source plugin of that name.
+	bool IsSourcePluginNamed(ACaptureDevice* device, const char* nameUtf8);
+
 	// GUI thread. Sends one player command line (e.g. "pause", "seek +10")
 	// to the device's plugin. False if the device is not a source plugin;
 	// a command the plugin rejects is logged and still returns true.
-	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8);
+	// result, if given, receives the plugin's result.
+	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8,
+		int32_t* result = nullptr);
 
 	// GUI thread. VP's Player shortcuts as configured, for the plugin's own
 	// remote page (accelerator.key 0 = cleared). Kept, sent to the active
