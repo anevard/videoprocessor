@@ -41,6 +41,7 @@ namespace MainConfigSchema
 			section == "decklink" ||
 			section == "shortcuts" ||
 			section == "player" ||
+			section == "pattern" ||
 			section == "p010_conversion" ||
 			section == "ppm_correction" ||
 			section == "display_refresh_rate_override" ||
