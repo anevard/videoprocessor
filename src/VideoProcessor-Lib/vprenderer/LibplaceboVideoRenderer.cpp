@@ -4693,6 +4693,8 @@ struct LibplaceboVideoRenderer::Impl
 	std::array<uint8_t, 256> sourceCueScaleLut{};
 	uint32_t sourceCueScaleLutKey = 0;
 	std::vector<uint8_t> sourceCueScaled;
+	// Packed 10-bit RGB words shifted for upload; see AlphaNativeRgbIngress.h.
+	std::vector<uint32_t> nativeRgbRepack;
 	std::mutex statsOverlayMutex;
 	std::vector<uint8_t> statsOverlayPixels;
 	std::atomic_bool statsOverlayVisible{ false };
@@ -13871,15 +13873,33 @@ struct LibplaceboVideoRenderer::Impl
         if (!sourceUploadReused) {
         if (nativeRgbUpload)
 		{
+			// A 10-bit RGB word with its pad at the bottom matches no D3D11
+			// texture format; shift it down first (AlphaNativeRgbIngress.h).
+			const int nativeRgbLowPad = AlphaNativeRgbLowPadBits(nativeRgbLayout);
+			// Not const: pl_plane_data_from_mask takes a mutable mask array.
+			AlphaNativeRgbLayout uploadLayout =
+				AlphaNativeRgbUploadLayout(nativeRgbLayout);
+			const void* uploadPixels = videoFrame.GetData();
+			if (nativeRgbLowPad > 0)
+			{
+				const size_t words = static_cast<size_t>(state.BytesPerRow()) /
+					sizeof(uint32_t) * static_cast<size_t>(height);
+				nativeRgbRepack.resize(words);
+				AlphaRepackNativeRgbWords(
+					static_cast<const uint8_t*>(videoFrame.GetData()),
+					nativeRgbRepack.data(), words, nativeRgbLayout.swapped,
+					nativeRgbLowPad);
+				uploadPixels = nativeRgbRepack.data();
+			}
 			struct pl_plane_data plane{};
 			plane.type = PL_FMT_UNORM;
 			plane.width = width;
 			plane.height = height;
 			plane.pixel_stride = 4;
 			plane.row_stride = state.BytesPerRow();
-			plane.pixels = videoFrame.GetData();
-			plane.swapped = nativeRgbLayout.swapped;
-			pl_plane_data_from_mask(&plane, nativeRgbLayout.masks);
+			plane.pixels = uploadPixels;
+			plane.swapped = uploadLayout.swapped;
+			pl_plane_data_from_mask(&plane, uploadLayout.masks);
 			frameGpuTiming.BeginStage(
 				AlphaD3D11FrameGpuTimer::Stage::SourceUpload);
 			const bool sourceUploaded = pl_upload_plane(d3d11->gpu,
@@ -13894,6 +13914,8 @@ struct LibplaceboVideoRenderer::Impl
 			std::string resolvedIngressStatus = tunnelRgbFallback ?
 				"Dolby Vision tunnel SDR RGB8 passthrough" :
 				nativeRgbLayout.label;
+			if (nativeRgbLowPad > 0)
+				resolvedIngressStatus += " (word shift)";
 			if (!analysisSource.IsValid())
 				resolvedIngressStatus += " (analysis unavailable)";
 			setIngressStatus(std::move(resolvedIngressStatus));

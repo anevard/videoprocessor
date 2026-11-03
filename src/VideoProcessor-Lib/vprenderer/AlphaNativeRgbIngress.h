@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include <VideoConversionOverride.h>
@@ -90,4 +91,63 @@ inline bool AlphaUsesP210Ingress(VideoFrameEncoding encoding,
 			encoding == VideoFrameEncoding::HDYC ||
 			encoding == VideoFrameEncoding::V210 ||
 			encoding == VideoFrameEncoding::P210);
+}
+
+// libplacebo's generic uploader matches a packed layout against the GPU's
+// texture formats bit for bit, padding included. D3D11 has one packed 10-bit
+// format, R10G10B10A2: three components from bit 0 and the pad on top. The
+// DeckLink 10-bit RGB words put their two pad bits at the bottom, so no format
+// ever matches them and every upload fails. Such a word is shifted down by its
+// low pad before upload and the masks move with it; the components then sit
+// where the format has them. A layout with no low pad (BGRA, ARGB) is
+// uploaded as it is.
+inline int AlphaNativeRgbLowPadBits(const AlphaNativeRgbLayout& layout) noexcept
+{
+	uint64_t used = layout.masks[0] | layout.masks[1] | layout.masks[2] |
+		layout.masks[3];
+	if (!used)
+		return 0;
+	int pad = 0;
+	while (!(used & 1u))
+	{
+		used >>= 1;
+		++pad;
+	}
+	return pad;
+}
+
+// The layout libplacebo is given for a frame that AlphaRepackNativeRgbWords
+// has shifted: masks moved down by the low pad, byte order already native.
+inline AlphaNativeRgbLayout AlphaNativeRgbUploadLayout(
+	const AlphaNativeRgbLayout& layout) noexcept
+{
+	AlphaNativeRgbLayout upload = layout;
+	const int pad = AlphaNativeRgbLowPadBits(layout);
+	if (pad == 0)
+		return upload;
+	for (uint64_t& mask : upload.masks)
+		mask >>= pad;
+	upload.swapped = false;
+	return upload;
+}
+
+// Repacks `count` 32-bit pixel words for upload: big-endian words are
+// byte-swapped first, then every word is shifted down by `pad` bits. The
+// pad bits leave at the bottom; the top `pad` bits read zero.
+inline void AlphaRepackNativeRgbWords(const uint8_t* source, uint32_t* target,
+	size_t count, bool swapped, int pad) noexcept
+{
+	for (size_t i = 0; i < count; ++i, source += 4)
+	{
+		const uint32_t word = swapped ?
+			(static_cast<uint32_t>(source[0]) << 24) |
+				(static_cast<uint32_t>(source[1]) << 16) |
+				(static_cast<uint32_t>(source[2]) << 8) |
+				static_cast<uint32_t>(source[3]) :
+			static_cast<uint32_t>(source[0]) |
+				(static_cast<uint32_t>(source[1]) << 8) |
+				(static_cast<uint32_t>(source[2]) << 16) |
+				(static_cast<uint32_t>(source[3]) << 24);
+		target[i] = word >> pad;
+	}
 }
