@@ -983,6 +983,9 @@ protected:
 
 	afx_msg void OnSelectCaptureDevice(UINT nID); // Handler for ON_COMMAND_RANGE
 	afx_msg void OnCommandCapturePlayer();
+	afx_msg void OnCommandCapturePattern();
+	// Selects the input of the source plugin of that name; false if none is listed.
+	bool SelectSourcePluginInput(const char* nameUtf8);
 	afx_msg void OnCommandPlayerTransport(UINT nID);
 	void UpdateSourcePluginPlayerKeys();
 
