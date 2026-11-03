@@ -54,8 +54,12 @@ public:
 		const std::string& pluginDirUtf8);
 	virtual ~SourcePluginCaptureDevice();
 
-	// GUI thread, as the plugin header requires. Logs a rejected command.
-	void SendCommand(const char* commandUtf8);
+	// GUI thread, as the plugin header requires. Logs a rejected command;
+	// returns the plugin's result.
+	int32_t SendCommand(const char* commandUtf8);
+
+	// The plugin's name, from its function table.
+	const std::string& NameUtf8() const { return m_nameUtf8; }
 
 	// ACaptureDevice
 	void SetCallbackHandler(ICaptureDeviceCallback*) override;
