@@ -11462,25 +11462,9 @@ QWidget* ConfigEditorWindow::createPatternPage()
         return line;
     };
 
-    // SDR gamma: the P3 SDR ramp and the SDR nits chart.
-    QWidget* gammaPanel = newPanel();
-    {
-        QStringList gammas;
-        for (int tenths = 20; tenths <= 26; ++tenths)
-            gammas << QString::number(tenths / 10.0, 'f', 1);
-        QComboBox* gamma = bindChoiceField(section, QStringLiteral("sdr_gamma"), gammas);
-        if (value(section, QStringLiteral("sdr_gamma")).isEmpty())
-        {
-            const QSignalBlocker blocker(gamma);
-            gamma->setCurrentIndex(gamma->findData(QStringLiteral("2.4")));
-        }
-        connect(gamma, qOverload<int>(&QComboBox::currentIndexChanged), this, [send, gamma](int)
-        {
-            send(QStringLiteral("gamma %1").arg(gamma->currentData().toString()));
-        });
-        gammaPanel->layout()->addWidget(fieldWithHelp(QStringLiteral("SDR gamma"), gamma,
-            QStringLiteral("The power gamma these SDR charts are drawn with. Default 2.4; set it to match the VP profile.")));
-    }
+    // No SDR gamma field: the P3 SDR ramp and the SDR nits chart follow the
+    // gamma VP decodes SDR with, which VP sends the generator itself
+    // (PatgenSdrGamma.h; [pattern] sdr_gamma_route and sdr_gamma_check_ms).
 
     // The HDR10 block: every PQ chart. Its luminances hide under "No HDR10 block".
     QWidget* hdr10Panel = newPanel();
@@ -11627,7 +11611,6 @@ QWidget* ConfigEditorWindow::createPatternPage()
     struct PanelUse { QWidget* panel; QStringList charts; };
     const std::vector<PanelUse> panels =
     {
-        { gammaPanel, { QStringLiteral("ramp_p3_sdr"), QStringLiteral("nits_sdr") } },
         { nitsPanel, { QStringLiteral("nits_pq"), QStringLiteral("dtm_response") } },
         { sdrRangePanel, { QStringLiteral("nits_sdr") } },
         { coloursPanel, { QStringLiteral("nits_pq"), QStringLiteral("nits_sdr") } },
