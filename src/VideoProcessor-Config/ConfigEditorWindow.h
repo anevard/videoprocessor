@@ -336,6 +336,10 @@ private:
     bool activeProfileSnapshotAvailable_ = false;
     QString subtitleHdrFallbackSelection_;
     std::function<void()> refreshSubtitleHdrFallback_;
+    // Patterns page: the Rendering profile VP reports active, empty while its
+    // live status is unavailable; the nits buttons' display peak follows it.
+    QString patternRenderingProfile_;
+    std::function<void()> refreshPatternDisplayPeak_;
     // Rendering / DTM: before Save or Apply, writes every rendering profile's
     // settings explicitly so none inherits from the default profile.
     std::function<void()> freezeRenderingProfiles_;
