@@ -609,6 +609,14 @@ protected:
 	CaptureDeviceState m_captureDeviceState = CaptureDeviceState::CAPTUREDEVICESTATE_UNKNOWN;
 	VideoStateComPtr m_captureDeviceVideoState = nullptr;  // This is what we get from the capture card
 
+	// The pattern generator's SDR gamma follows VP (PatgenSdrGamma.h).
+	bool m_patgenGammaRun = false;            // the generator's input is capturing
+	bool m_patgenGammaLive = false;           // frames presented since it started
+	uint64_t m_patgenGammaPresents = UINT64_MAX;
+	std::string m_patgenGammaSent;            // the word PATGEN last accepted
+	bool m_patgenGammaProfileRoute = false;
+	unsigned m_patgenGammaCheckMs = 1000;
+
 	VideoStateComPtr m_builtVideoState = nullptr;  // This is what we make of it
 	OsdInputColorInfo::AcceptedState m_osdAcceptedInputColor;
 
@@ -1052,6 +1060,7 @@ protected:
 	void RebuildRendererCombo();
 	void ClearRendererCombo();
 	void UpdateStatsOverlay();
+	void UpdatePatgenSdrGamma();
 	void PollAspectRatioOsd();
 	void LogMadVRPostStallResetDiagnostics(const StatsData& stats,
 		double measuredCaptureRateHz);
