@@ -74,6 +74,7 @@ static UINT vpUpdateExitMessage = RegisterWindowMessageW(L"VideoProcessor.Update
 #include <RendererGenerationGate.h>
 #include <RendererQueueLaunchAudit.h>
 #include <RendererProfileConfig.h>
+#include <source_plugin/PatgenSdrGamma.h>
 #include <MainConfigSchema.h>
 #include <UnifiedProfileRuntime.h>
 
@@ -5080,6 +5081,7 @@ CVideoProcessorDlg::~CVideoProcessorDlg()
 	m_configurationRpcServer.Stop();
 	KillTimer(PROFILE_CHANGE_OVERLAY_TIMER_ID);
 	KillTimer(ANALYSIS_DIAGNOSTIC_STATUS_TIMER_ID);
+	KillTimer(PatgenSdrGamma::TimerId);
 	ClearStagedConfiguration();
 	if (m_fullScreenVideoWindow &&
 		::IsWindow(m_fullScreenVideoWindow->GetHWND()))
@@ -13942,6 +13944,7 @@ BOOL CVideoProcessorDlg::OnInitDialog()
     }
     SetTimer(UpdateLauncher::StartupTimer, 30000, nullptr);
 	SetTimer(TIMER_ID_1SECOND, 1000, nullptr);
+	SetTimer(PatgenSdrGamma::TimerId, m_patgenGammaCheckMs, nullptr);
 	// Active-picture analysis remains sparse on the conversion worker. This
 	// cheap generation poll only consumes a published change, bounding NLS
 	// mapping reaction without putting image analysis on the UI thread.
@@ -15106,6 +15109,11 @@ void CVideoProcessorDlg::OnTimer(UINT_PTR nIDEvent)
 		m_analysisDiagnosticCaptionActive = false;
 		return;
 	}
+	if (nIDEvent == PatgenSdrGamma::TimerId)
+	{
+		UpdatePatgenSdrGamma();
+		return;
+	}
 	if (nIDEvent == PROFILE_CHANGE_OVERLAY_TIMER_ID)
 	{
 		UpdateProfileChangeOverlay(uiNow);
@@ -15850,6 +15858,95 @@ void CVideoProcessorDlg::PollAspectRatioOsd()
 	if (m_statsOverlay->RenderBgra(pixels, width, height, stride))
 		m_videoRenderer->SetNativeStatsOverlay(
 			pixels.data(), pixels.size(), width, height, stride);
+}
+
+// The pattern generator's SDR gamma follows VP (PatgenSdrGamma.h): while its
+// input is capturing, tell it the gamma VP decodes SDR with, on each change.
+void CVideoProcessorDlg::UpdatePatgenSdrGamma()
+{
+	const bool active = m_captureDeviceState == CaptureDeviceState::CAPTUREDEVICESTATE_CAPTURING &&
+		SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, SourcePluginBackend::PATTERN_PLUGIN_NAME);
+	if (!active)
+	{
+		m_patgenGammaRun = false;
+		return;
+	}
+	if (!m_patgenGammaRun)
+	{
+		// A new run: its [pattern] keys, and nothing sent yet. The first look
+		// waits one interval.
+		m_patgenGammaRun = true;
+		m_patgenGammaLive = false;
+		m_patgenGammaPresents = UINT64_MAX;
+		m_patgenGammaSent.clear();
+		ConfigFile config;
+		bool routeValid = true, msValid = true;
+		PatgenSdrGamma::Route route = PatgenSdrGamma::Route::Renderer;
+		unsigned ms = PatgenSdrGamma::DefaultCheckMs;
+		if (config.Load(ConfigFile::DEFAULT_FILENAME, ConfigFile::ReadPolicy::Fresh))
+		{
+			route = PatgenSdrGamma::ReadRoute(config, routeValid);
+			ms = PatgenSdrGamma::ReadCheckMs(config, msValid);
+		}
+		if (!routeValid)
+			DebugLog::Log("PATGEN SDR gamma: [pattern] sdr_gamma_route refused (renderer or profile); using renderer");
+		if (!msValid)
+			DebugLog::Log("PATGEN SDR gamma: [pattern] sdr_gamma_check_ms refused (%u to %u); using %u",
+				PatgenSdrGamma::MinimumCheckMs, PatgenSdrGamma::MaximumCheckMs, PatgenSdrGamma::DefaultCheckMs);
+		m_patgenGammaProfileRoute = route == PatgenSdrGamma::Route::Profile;
+		if (ms != m_patgenGammaCheckMs)
+		{
+			m_patgenGammaCheckMs = ms;
+			SetTimer(PatgenSdrGamma::TimerId, m_patgenGammaCheckMs, nullptr);
+		}
+		DebugLog::Log("PATGEN SDR gamma: route=%s, every %u ms", PatgenSdrGamma::RouteName(route), ms);
+		return;
+	}
+
+	// Until the renderer has presented frames since the run began, its
+	// decision may still be the previous input's.
+	if (!m_patgenGammaLive)
+	{
+		RendererOutputContract::Status status;
+		if (!m_videoRenderer || !m_videoRenderer->GetOutputContractStatus(status))
+			return;
+		if (m_patgenGammaPresents == UINT64_MAX || status.successfulPresents == m_patgenGammaPresents)
+		{
+			m_patgenGammaPresents = status.successfulPresents;
+			return;
+		}
+		m_patgenGammaLive = true;
+	}
+
+	std::string word;
+	if (!m_patgenGammaProfileRoute)
+	{
+		CString info;
+		if (!m_videoRenderer || !m_videoRenderer->GetOutputModeInfo(info))
+			return;
+		if (!PatgenSdrGamma::FromRendererLine(std::string(CStringA(info).GetString()), word))
+			return;
+	}
+	else
+	{
+		const auto snapshot = m_profileRuntime.GetSnapshot();
+		if (!snapshot || !snapshot->configuration)
+			return;
+		const auto selections = RendererProfileConfig::FormatSelections(snapshot->effectiveSelections);
+		const auto color = selections.find("color");
+		const std::string section = color == selections.end() || color->second.empty() ? std::string() :
+			ActiveProfileStatus::SectionFor(PatgenSdrGamma::ColorRoot, color->second, snapshot->configuration.get());
+		word = PatgenSdrGamma::FromProfile(*snapshot->configuration, section);
+	}
+	if (word == m_patgenGammaSent)
+		return;
+	const std::string command = "gamma " + word;
+	int32_t result = 0;
+	SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command.c_str(), &result);
+	DebugLog::Log("PATGEN SDR gamma: VP decodes SDR as %s (route %s); sent, result=%d", word.c_str(),
+		m_patgenGammaProfileRoute ? "profile" : "renderer", result);
+	if (result == 0)
+		m_patgenGammaSent = word;
 }
 
 void CVideoProcessorDlg::UpdateStatsOverlay()
