@@ -21,6 +21,7 @@
 #include "ToneProfileFile.h"
 #include "../VideoProcessor-ChartCore/ToneProfileRequest.h"
 #include "ToneGuiRules.h"
+#include "PatternDisplayPeak.h"
 #include <ConfigurationApplyPolicy.h>
 #include <ConfigurationIdentity.h>
 #include <ConfigurationLiveApply.h>
@@ -2745,6 +2746,16 @@ void ConfigEditorWindow::applyActiveProfileIndicators(bool available,
         subtitleHdrFallbackSelection_=hdrSelection;
         if (refreshSubtitleHdrFallback_) refreshSubtitleHdrFallback_();
     }
+
+    // The Patterns page's display peak: the Rendering profile VP is using.
+    // Refreshed on every snapshot, so a save shows at the next poll.
+    std::vector<std::string> activeSections;
+    if (available)
+        for (const auto& section : profiles)
+            activeSections.push_back(section.toLocal8Bit().toStdString());
+    patternRenderingProfile_ = QString::fromLocal8Bit(
+        PatternDisplayPeak::ActiveRenderingSection(activeSections).c_str());
+    if (refreshPatternDisplayPeak_) refreshPatternDisplayPeak_();
 
     refreshRendererAutoStatus();
 }
@@ -11515,14 +11526,9 @@ QWidget* ConfigEditorWindow::createPatternPage()
         };
         connect(from, &QLineEdit::editingFinished, this, sendRange);
         connect(to, &QLineEdit::editingFinished, this, sendRange);
-        // The page's own key: PATGEN never reads it.
-        QLineEdit* displayPeak = bindTextField(section, QStringLiteral("display_peak"));
-        displayPeak->setPlaceholderText(QStringLiteral("75"));
-        displayPeak->setMaximumWidth(108);
         nitsPanel->layout()->addWidget(row({
             fieldWithHelp(QStringLiteral("From, cd/m2"), from, QStringLiteral("Default: 0.")),
-            fieldWithHelp(QStringLiteral("To, cd/m2"), to, QStringLiteral("Default: 75.")),
-            fieldWithHelp(QStringLiteral("Display peak, cd/m2"), displayPeak, QStringLiteral("For the buttons below. Default: 75.")) }));
+            fieldWithHelp(QStringLiteral("To, cd/m2"), to, QStringLiteral("Default: 75.")) }));
 
         const auto setRange = [from, to, sendRange](const QString& low, const QString& high)
         {
@@ -11530,18 +11536,44 @@ QWidget* ConfigEditorWindow::createPatternPage()
             to->setText(high);
             sendRange();
         };
+        // The display peak is VP's target nits, as saved (PatternDisplayPeak.h);
+        // empty, and the two buttons greyed, while VP names no active
+        // Rendering profile.
+        const auto displayPeak = [this]
+        {
+            return QString::fromLocal8Bit(PatternDisplayPeak::TargetNits(savedSnapshot_,
+                patternRenderingProfile_.toLocal8Bit().toStdString(),
+                RenderingBuiltInDefault(QStringLiteral("sdr_target_nits")).toStdString()).c_str());
+        };
         auto* upTo = new QPushButton(QStringLiteral("Up to display peak"));
         upTo->setObjectName(QStringLiteral("config.pattern.nits.up_to_peak"));
-        connect(upTo, &QPushButton::clicked, this, [setRange, displayPeak, entered]
+        connect(upTo, &QPushButton::clicked, this, [setRange, displayPeak]
         {
-            setRange(QStringLiteral("0"), entered(displayPeak));
+            const QString peak = displayPeak();
+            if (!peak.isEmpty()) setRange(QStringLiteral("0"), peak);
         });
         auto* above = new QPushButton(QStringLiteral("Above display peak"));
         above->setObjectName(QStringLiteral("config.pattern.nits.above_peak"));
         connect(above, &QPushButton::clicked, this, [setRange, displayPeak, masteringPeak, entered]
         {
-            setRange(entered(displayPeak), entered(masteringPeak));
+            const QString peak = displayPeak();
+            if (!peak.isEmpty()) setRange(peak, entered(masteringPeak));
         });
+        auto* peakStatus = helpLabel(QString());
+        peakStatus->setObjectName(QStringLiteral("config.pattern.nits.display_peak"));
+        refreshPatternDisplayPeak_ = [this, displayPeak, guardedUpTo = QPointer<QPushButton>(upTo),
+            guardedAbove = QPointer<QPushButton>(above), guardedStatus = QPointer<QLabel>(peakStatus)]
+        {
+            if (!guardedUpTo || !guardedAbove || !guardedStatus) return;
+            const QString peak = displayPeak();
+            guardedUpTo->setEnabled(!peak.isEmpty());
+            guardedAbove->setEnabled(!peak.isEmpty());
+            const QString text = peak.isEmpty() ?
+                QStringLiteral("Display peak: not known until VP reports its active Rendering profile.") :
+                QStringLiteral("Display peak: %1 cd/m2, the target nits of VP's active Rendering profile [%2], as saved.")
+                    .arg(peak, patternRenderingProfile_);
+            if (guardedStatus->text() != text) guardedStatus->setText(text);
+        };
         auto* nearBlack = new QPushButton(QStringLiteral("Near black"));
         nearBlack->setObjectName(QStringLiteral("config.pattern.nits.near_black"));
         auto* top = new QComboBox;
@@ -11554,9 +11586,12 @@ QWidget* ConfigEditorWindow::createPatternPage()
         connect(nearBlack, &QPushButton::clicked, this, setNearBlack);
         connect(top, qOverload<int>(&QComboBox::activated), this, setNearBlack);
         nitsPanel->layout()->addWidget(row({ upTo, above, nearBlack, top }));
+        nitsPanel->layout()->addWidget(peakStatus);
         nitsPanel->layout()->addWidget(helpLabel(QStringLiteral(
             "24 bars an equal number of PQ codes apart, each labelled with its cd/m2 and code. "
-            "Above display peak runs to the peak mastering luminance.")));
+            "Up to display peak runs from 0 to VP's target nits; above display peak, from them "
+            "to the peak mastering luminance.")));
+        refreshPatternDisplayPeak_();
     }
 
     // The SDR nits chart's range, in % of the video range.
