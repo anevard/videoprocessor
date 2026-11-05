@@ -22,6 +22,7 @@
 #include "../VideoProcessor-ChartCore/ToneProfileRequest.h"
 #include "ToneGuiRules.h"
 #include "PatternDisplayPeak.h"
+#include "PatternLiveKeys.h"
 #include <ConfigurationApplyPolicy.h>
 #include <ConfigurationIdentity.h>
 #include <ConfigurationLiveApply.h>
@@ -4008,8 +4009,10 @@ bool ConfigEditorWindow::saveChanges()
         snapshotUsesDirectShowRenderer(savedSnapshot_));
     const bool playerChanged = std::any_of(changed.begin(), changed.end(),
         [](const ConfigurationApplyPolicy::Change& change) { return _stricmp(change.section.c_str(), "player") == 0; });
+    // Only a start-up [pattern] key offers the generator's restart; a live
+    // chart setting is already saved and sent (PatternLiveKeys.h).
     const bool patternChanged = std::any_of(changed.begin(), changed.end(),
-        [](const ConfigurationApplyPolicy::Change& change) { return _stricmp(change.section.c_str(), "pattern") == 0; });
+        [](const ConfigurationApplyPolicy::Change& change) { return PatternLiveKeys::NeedsRestart(change.section, change.key); });
     const auto offerPatternRestart = [this]
     {
         offerSourcePluginRestart(QStringLiteral("pattern"), QStringLiteral("pattern generator"), QString());
@@ -11354,6 +11357,70 @@ void ConfigEditorWindow::offerSourcePluginRestart(const QString& section, const 
 }
 
 
+bool ConfigEditorWindow::saveLiveSetting(const QString& section, const QString& key)
+{
+    if (!configurationLoaded_ || !document_ || !document_->existedAtLoad) return false;
+    const std::string sectionText = section.toStdString();
+    const std::string keyText = key.toStdString();
+
+    // The file as last saved, with only this key as it now is in the editor.
+    size_t line = 0, start = 0, end = 0;
+    const bool present = document_->Find(sectionText, keyText, line, start, end);
+    ConfigEditorCore::ConfigDocument saved;
+    saved.LoadBytes(document_->path, document_->loadedBytes);
+    saved.remoteSource = document_->remoteSource;
+    if (!present)
+        saved.RemoveKnown(sectionText, keyText.c_str());
+    else
+    {
+        const std::string wanted = document_->Get(sectionText.c_str(), keyText.c_str());
+        if (!saved.SetKnown(sectionText, keyText.c_str(), wanted))
+        {
+            saved.AddSection(sectionText);
+            saved.SetKnown(sectionText, keyText.c_str(), wanted);
+        }
+    }
+
+    const std::string candidate = saved.Serialize();
+    if (candidate != document_->loadedBytes)
+    {
+        if (remoteClient_)
+        {
+            ConfigurationRpcClient::ApplyResult applied;
+            std::string rpcError;
+            if (!remoteClient_->ApplyConfig(document_->loadedBytes, candidate, applied, rpcError))
+            {
+                setStatus(QStringLiteral("%1 not saved: %2 Apply saves it.").arg(key, QString::fromUtf8(rpcError)), true);
+                return false;
+            }
+            document_->loadedBytes = candidate;
+        }
+        else
+        {
+            // Never over a file changed outside this editor: then Apply saves it.
+            ConfigEditorCore::SaveResult result;
+            std::wstring error;
+            if (!ConfigEditorCore::SaveSafely(saved, result, error))
+            {
+                setStatus(QStringLiteral("%1 not saved: %2 Apply saves it.").arg(key, QString::fromStdWString(error)), true);
+                return false;
+            }
+            document_->loadedBytes = saved.loadedBytes;
+        }
+        // VP reads [pattern] from the file when the input starts; nothing to notify.
+    }
+
+    // This section is now saved as the file has it; any other unsaved edit stays.
+    const DocumentSnapshot savedNow = captureDocumentSnapshot(saved);
+    for (auto entry = savedSnapshot_.begin(); entry != savedSnapshot_.end();)
+        entry = _stricmp(entry->first.c_str(), sectionText.c_str()) == 0 ? savedSnapshot_.erase(entry) : std::next(entry);
+    for (const auto& entry : savedNow)
+        if (_stricmp(entry.first.c_str(), sectionText.c_str()) == 0)
+            savedSnapshot_[entry.first] = entry.second;
+    markDirty();
+    return true;
+}
+
 // The pattern generator source plugin, VP TPG. Its settings are [pattern];
 // the plugin receives them when its input starts. Charts are shown at once on
 // the target VP, through its RunAction "pattern.<command>", while VP TPG is
@@ -11415,14 +11482,40 @@ QWidget* ConfigEditorWindow::createPatternPage()
     layout->addWidget(collapsibleCard(QStringLiteral("ColourSpace"),
         QStringLiteral("Used when the VP TPG input starts."), signal, true));
 
-    // Chart settings. Each is saved in [pattern] and sent at once (PATGEN
-    // redraws the chart on screen if it uses it), and shows only while a chart
-    // that uses it is picked (PLAN.md Phase 3; ledger Decision 2026-11-04
-    // patgen-11). A typed field sends its placeholder, the default, when empty.
+    // Chart settings. Each is sent at once (PATGEN redraws the chart on screen
+    // if it uses it) and saved in [pattern] at once, without Apply (A183 (1),
+    // PatternLiveKeys.h), and shows only while a chart that uses it is picked
+    // (PLAN.md Phase 3; ledger Decision 2026-11-04 patgen-11). A typed field
+    // sends its placeholder, the default, when empty, and saves nothing then.
     const auto entered = [](const QLineEdit* field)
     {
         const QString text = field->text().trimmed();
         return text.isEmpty() ? field->placeholderText() : text;
+    };
+    // A live typed field: stored and saved when its edit is finished, never
+    // per keystroke, so it never lights Apply.
+    const auto liveTextField = [this, section](const QString& key, const QString& fallback)
+    {
+        auto* field = new QLineEdit(value(section, key));
+        field->setObjectName(controlName(section, key));
+        field->setAccessibleName(accessibleSettingName(key));
+        field->setPlaceholderText(fallback);
+        field->setMaximumWidth(108);
+        return field;
+    };
+    const auto storeLive = [this, section](const QLineEdit* field, const QString& key)
+    {
+        if (!document_) return;
+        const QString text = field->text().trimmed();
+        const std::string sectionText = section.toStdString();
+        const std::string keyText = key.toStdString();
+        if (text.isEmpty()) document_->RemoveKnown(sectionText, keyText.c_str());
+        else if (!document_->SetKnown(sectionText, keyText.c_str(), text.toLocal8Bit().constData()))
+        {
+            document_->AddSection(sectionText);
+            document_->SetKnown(sectionText, keyText.c_str(), text.toLocal8Bit().constData());
+        }
+        if (!saveLiveSetting(section, key)) markDirty();
     };
     const auto newPanel = [content]
     {
@@ -11433,22 +11526,27 @@ QWidget* ConfigEditorWindow::createPatternPage()
         panel->hide();
         return panel;
     };
-    const auto typedField = [this, send, section, entered](const QString& key, const QString& fallback)
+    const auto typedField = [this, send, entered, liveTextField, storeLive](const QString& key, const QString& fallback)
     {
-        QLineEdit* field = bindTextField(section, key);
-        field->setPlaceholderText(fallback);
-        field->setMaximumWidth(108);
-        connect(field, &QLineEdit::editingFinished, this, [send, field, key, entered]
+        QLineEdit* field = liveTextField(key, fallback);
+        connect(field, &QLineEdit::editingFinished, this, [send, field, key, entered, storeLive]
         {
+            storeLive(field, key);
             send(QStringLiteral("%1 %2").arg(key, entered(field)));
         });
         return field;
     };
-    const auto choiceField = [this, send, section](const QString& key, const QStringList& values, const QStringList& labels)
+    // A bound drop-down or tick box: bound as any other, then saved at once.
+    const auto saveLive = [this, section](const QString& key)
+    {
+        saveLiveSetting(section, key);
+    };
+    const auto choiceField = [this, send, section, saveLive](const QString& key, const QStringList& values, const QStringList& labels)
     {
         QComboBox* combo = bindChoiceField(section, key, values, labels);
-        connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this, [send, combo, key](int)
+        connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this, [send, combo, key, saveLive](int)
         {
+            saveLive(key);
             send(QStringLiteral("%1 %2").arg(key, combo->currentData().toString()));
         });
         return combo;
@@ -11506,14 +11604,12 @@ QWidget* ConfigEditorWindow::createPatternPage()
     // mastering peak, or near black up to a picked top.
     QWidget* nitsPanel = newPanel();
     {
-        QLineEdit* from = bindTextField(section, QStringLiteral("nits_from"));
-        from->setPlaceholderText(QStringLiteral("0"));
-        from->setMaximumWidth(108);
-        QLineEdit* to = bindTextField(section, QStringLiteral("nits_to"));
-        to->setPlaceholderText(QStringLiteral("75"));
-        to->setMaximumWidth(108);
-        const auto sendRange = [send, from, to, entered]
+        QLineEdit* from = liveTextField(QStringLiteral("nits_from"), QStringLiteral("0"));
+        QLineEdit* to = liveTextField(QStringLiteral("nits_to"), QStringLiteral("75"));
+        const auto sendRange = [send, from, to, entered, storeLive]
         {
+            storeLive(from, QStringLiteral("nits_from"));
+            storeLive(to, QStringLiteral("nits_to"));
             send(QStringLiteral("nits_range %1 %2").arg(entered(from), entered(to)));
         };
         connect(from, &QLineEdit::editingFinished, this, sendRange);
@@ -11589,14 +11685,12 @@ QWidget* ConfigEditorWindow::createPatternPage()
     // The SDR nits chart's range, in % of the video range.
     QWidget* sdrRangePanel = newPanel();
     {
-        QLineEdit* from = bindTextField(section, QStringLiteral("sdr_from"));
-        from->setPlaceholderText(QStringLiteral("0"));
-        from->setMaximumWidth(108);
-        QLineEdit* to = bindTextField(section, QStringLiteral("sdr_to"));
-        to->setPlaceholderText(QStringLiteral("100"));
-        to->setMaximumWidth(108);
-        const auto sendRange = [send, from, to, entered]
+        QLineEdit* from = liveTextField(QStringLiteral("sdr_from"), QStringLiteral("0"));
+        QLineEdit* to = liveTextField(QStringLiteral("sdr_to"), QStringLiteral("100"));
+        const auto sendRange = [send, from, to, entered, storeLive]
         {
+            storeLive(from, QStringLiteral("sdr_from"));
+            storeLive(to, QStringLiteral("sdr_to"));
             send(QStringLiteral("sdr_range %1 %2").arg(entered(from), entered(to)));
         };
         connect(from, &QLineEdit::editingFinished, this, sendRange);
@@ -11696,14 +11790,16 @@ QWidget* ConfigEditorWindow::createPatternPage()
         {
             QCheckBox* flash = bindCheckField(QStringLiteral("Flash the bars (0.75 s on, 0.75 s off)"),
                 section, QStringLiteral("flash"));
-            connect(flash, &QCheckBox::toggled, this, [send](bool on)
+            connect(flash, &QCheckBox::toggled, this, [send, saveLive](bool on)
             {
+                saveLive(QStringLiteral("flash"));
                 send(on ? QStringLiteral("flash on") : QStringLiteral("flash off"));
             });
             QCheckBox* labels = bindCheckField(QStringLiteral("Code and % under each bar"),
                 section, QStringLiteral("text"), true);
-            connect(labels, &QCheckBox::toggled, this, [send](bool on)
+            connect(labels, &QCheckBox::toggled, this, [send, saveLive](bool on)
             {
+                saveLive(QStringLiteral("text"));
                 send(on ? QStringLiteral("text on") : QStringLiteral("text off"));
             });
             bodyLayout->addWidget(row({ flash, labels }));
@@ -11726,16 +11822,29 @@ QWidget* ConfigEditorWindow::createPatternPage()
 
         layout->addWidget(createCard(title, QString(), body));
     }
+    // The group whose chart this page put on screen; nullptr for none.
+    const auto showing = std::make_shared<QPointer<QComboBox>>();
     for (size_t index = 0; index < pickers.size(); ++index)
     {
         QComboBox* picker = pickers[index];
         QVBoxLayout* settings = settingsAreas[index];
-        connect(picker, qOverload<int>(&QComboBox::activated), this, [send, pickers, picker, settings, showSettings](int item)
+        connect(picker, qOverload<int>(&QComboBox::activated), this, [send, pickers, picker, settings, showSettings, showing](int item)
         {
             const QString chart = picker->itemData(item).toString();
-            if (chart.isEmpty()) return;
+            if (chart.isEmpty())
+            {
+                // "Pick a chart" in the showing chart's group takes it off, as
+                // "Charts off" does (A183 (2)); in any other group it is already
+                // there and does nothing.
+                if (showing->data() != picker) return;
+                showing->clear();
+                showSettings(QString(), nullptr);
+                send(QStringLiteral("chart off"));
+                return;
+            }
             for (QComboBox* other : pickers)
                 if (other != picker) other->setCurrentIndex(0);
+            *showing = picker;
             showSettings(chart, settings);
             send(QStringLiteral("chart %1").arg(chart));
         });
@@ -11743,10 +11852,11 @@ QWidget* ConfigEditorWindow::createPatternPage()
 
     auto* off = new QPushButton(QStringLiteral("Charts off"));
     off->setObjectName(QStringLiteral("config.pattern.chart.off"));
-    connect(off, &QPushButton::clicked, this, [send, pickers, showSettings]
+    connect(off, &QPushButton::clicked, this, [send, pickers, showSettings, showing]
     {
         for (QComboBox* picker : pickers)
             picker->setCurrentIndex(0);
+        showing->clear();
         showSettings(QString(), nullptr);
         send(QStringLiteral("chart off"));
     });
@@ -11761,8 +11871,9 @@ QWidget* ConfigEditorWindow::createPatternPage()
     layout->addStretch();
 
     return createPage(QStringLiteral("Pattern generator"),
-        QStringLiteral("The VP TPG input: ColourSpace's patches and built-in charts. Applying a change to its "
-            "settings offers to restart the input, which uses them from then on."), content);
+        QStringLiteral("The VP TPG input: ColourSpace's patches and built-in charts. Chart settings are used and "
+            "saved as you change them. Applying a ColourSpace card change offers to restart the input, "
+            "which uses it from then on."), content);
 }
 
 QWidget* ConfigEditorWindow::createShortcutsPage()
