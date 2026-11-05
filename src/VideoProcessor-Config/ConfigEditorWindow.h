@@ -118,6 +118,12 @@ private:
     QWidget* createPlayerPage();
     void offerPlayerRestart();
     QWidget* createPatternPage();
+    // A live Patterns page chart setting (PatternLiveKeys.h), already set in
+    // the edited document: written to the configuration file now, alone, as
+    // it was last saved plus this one key, so it never lights Apply. Other
+    // unsaved edits stay unsaved. False (the edit then lights Apply as any
+    // other) if the file could not be written.
+    bool saveLiveSetting(const QString& section, const QString& key);
     // After a save that changed a source plugin's section ("player" or
     // "pattern"): if that plugin's input is the target VP's active input,
     // offer to restart it. warning: what a restart interrupts, or empty.
