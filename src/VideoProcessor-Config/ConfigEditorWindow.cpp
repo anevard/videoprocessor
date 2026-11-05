@@ -23,6 +23,7 @@
 #include "ToneGuiRules.h"
 #include "PatternDisplayPeak.h"
 #include "PatternLiveKeys.h"
+#include "PatternChartSignal.h"
 #include <ConfigurationApplyPolicy.h>
 #include <ConfigurationIdentity.h>
 #include <ConfigurationLiveApply.h>
@@ -11474,9 +11475,11 @@ QWidget* ConfigEditorWindow::createPatternPage()
         QStringLiteral("Set ColourSpace to the same depth and range; a patch at another depth is refused. "
             "The charts need a limited-range signal.")));
     signalLayout->addWidget(fieldWithHelp(QStringLiteral("Gamut"),
-        bindChoiceField(section, QStringLiteral("gamut"), { QStringLiteral("bt709"), QStringLiteral("bt2020") },
-            { QStringLiteral("BT.709"), QStringLiteral("BT.2020") }),
-        QStringLiteral("What VP is told ColourSpace's patches are.")));
+        bindChoiceField(section, QStringLiteral("gamut"),
+            { QStringLiteral("bt709"), QStringLiteral("bt2020"), QStringLiteral("p3_bt2020") },
+            { QStringLiteral("BT.709"), QStringLiteral("BT.2020"), QStringLiteral("BT.2020, P3 mastering") }),
+        QStringLiteral("What VP is told ColourSpace's patches are; never the charts, which follow the Chart signal. "
+            "P3 mastering: the same codes, declared as P3 inside BT.2020.")));
     signalLayout->addWidget(bindCheckField(QStringLiteral("Log every ColourSpace message"), section,
         QStringLiteral("log_messages")));
     layout->addWidget(collapsibleCard(QStringLiteral("ColourSpace"),
@@ -11567,15 +11570,26 @@ QWidget* ConfigEditorWindow::createPatternPage()
     // gamma VP decodes SDR with, which VP sends the generator itself
     // (PatgenSdrGamma.h; [pattern] sdr_gamma_route and sdr_gamma_check_ms).
 
-    // The HDR10 block: every PQ chart. Its luminances hide under "No HDR10 block".
+    // The HDR10 block: every PQ chart, on or off; its primaries are the Chart
+    // signal's (A183 (3) (g)). Its luminances hide while it is off.
     QWidget* hdr10Panel = newPanel();
     QLineEdit* masteringPeak = nullptr;
     {
-        QComboBox* block = choiceField(QStringLiteral("hdr10"),
-            { QStringLiteral("p3"), QStringLiteral("bt2020"), QStringLiteral("none") },
-            { QStringLiteral("P3-D65 primaries"), QStringLiteral("BT.2020 primaries"), QStringLiteral("No HDR10 block") });
-        hdr10Panel->layout()->addWidget(fieldWithHelp(QStringLiteral("HDR10 block"), block,
-            QStringLiteral("What the PQ charts carry.")));
+        QCheckBox* block = bindCheckField(QStringLiteral("Send the HDR10 block"), section, QStringLiteral("hdr10"), true);
+        // An older page saved p3, bt2020 or none; the generator reads none as off.
+        if (value(section, QStringLiteral("hdr10")).trimmed().compare(QStringLiteral("none"), Qt::CaseInsensitive) == 0)
+        {
+            const QSignalBlocker quiet(block);
+            block->setChecked(false);
+        }
+        connect(block, &QCheckBox::toggled, this, [send, saveLive](bool on)
+        {
+            saveLive(QStringLiteral("hdr10"));
+            send(on ? QStringLiteral("hdr10 on") : QStringLiteral("hdr10 off"));
+        });
+        hdr10Panel->layout()->addWidget(block);
+        hdr10Panel->layout()->addWidget(helpLabel(QStringLiteral(
+            "Carried by the PQ charts, in the Chart signal's primaries: P3 for P3 in BT.2020 PQ, else BT.2020.")));
         auto* luminances = new QWidget;
         auto* luminancesLayout = new QVBoxLayout(luminances);
         luminancesLayout->setContentsMargins(0, 0, 0, 0);
@@ -11591,12 +11605,8 @@ QWidget* ConfigEditorWindow::createPatternPage()
             fieldWithHelp(QStringLiteral("MaxCLL, cd/m2"), maxCll, QStringLiteral("Default: none, not sent.")),
             fieldWithHelp(QStringLiteral("MaxFALL, cd/m2"), maxFall, QStringLiteral("Default: none, not sent.")) }));
         hdr10Panel->layout()->addWidget(luminances);
-        const auto showLuminances = [block, luminances]
-        {
-            luminances->setVisible(block->currentData().toString() != QStringLiteral("none"));
-        };
-        connect(block, qOverload<int>(&QComboBox::currentIndexChanged), this, showLuminances);
-        showLuminances();
+        luminances->setVisible(block->isChecked());
+        connect(block, &QCheckBox::toggled, luminances, &QWidget::setVisible);
     }
 
     // The nits range: the PQ nits chart and the DTM chart's strip. Typed, or
@@ -11700,17 +11710,13 @@ QWidget* ConfigEditorWindow::createPatternPage()
             fieldWithHelp(QStringLiteral("To, %"), to, QStringLiteral("Default: 100.")) }));
     }
 
-    // The nits charts' colour rows.
+    // The nits charts' colour rows; their primaries are the Chart signal's.
     QWidget* coloursPanel = newPanel();
-    coloursPanel->layout()->addWidget(row({
-        fieldWithHelp(QStringLiteral("Saturation"), choiceField(QStringLiteral("saturation"),
-            { QStringLiteral("100"), QStringLiteral("75"), QStringLiteral("50"), QStringLiteral("25") },
-            { QStringLiteral("100 %"), QStringLiteral("75 %"), QStringLiteral("50 %"), QStringLiteral("25 %") }),
-            QStringLiteral("Every colour row; the other channels carry the rest of the bar's light.")),
-        fieldWithHelp(QStringLiteral("Primaries"), choiceField(QStringLiteral("nits_gamut"),
-            { QStringLiteral("p3"), QStringLiteral("bt2020"), QStringLiteral("bt709") },
-            { QStringLiteral("P3-D65"), QStringLiteral("BT.2020"), QStringLiteral("BT.709") }),
-            QStringLiteral("PQ charts are carried in BT.2020.")) }));
+    coloursPanel->layout()->addWidget(fieldWithHelp(QStringLiteral("Saturation"), choiceField(QStringLiteral("saturation"),
+        { QStringLiteral("100"), QStringLiteral("75"), QStringLiteral("50"), QStringLiteral("25") },
+        { QStringLiteral("100 %"), QStringLiteral("75 %"), QStringLiteral("50 %"), QStringLiteral("25 %") }),
+        QStringLiteral("Every colour row; the other channels carry the rest of the bar's light. "
+            "The rows are in the Chart signal's primaries.")));
 
     // The PQ grey ramp's top.
     QWidget* rampPanel = newPanel();
@@ -11755,6 +11761,31 @@ QWidget* ConfigEditorWindow::createPatternPage()
         }
     };
 
+    // The Chart signal (A183 (3), PatternChartSignal.h): the one signal every
+    // chart declares, live; the groups below list only the charts drawn for it.
+    std::vector<QString> signalValues, signalLabels;
+    {
+        size_t count = 0;
+        const PatternChartSignal::Signal* table = PatternChartSignal::Signals(count);
+        for (size_t index = 0; index < count; ++index)
+        {
+            signalValues.push_back(QString::fromUtf8(table[index].value));
+            signalLabels.push_back(QString::fromUtf8(table[index].label));
+        }
+    }
+    QComboBox* chartSignal = choiceField(QStringLiteral("chart_signal"),
+        QStringList(signalValues.begin(), signalValues.end()), QStringList(signalLabels.begin(), signalLabels.end()));
+    {
+        auto* signalBody = new QWidget;
+        auto* signalBodyLayout = new QVBoxLayout(signalBody);
+        signalBodyLayout->setContentsMargins(0, 0, 0, 0);
+        signalBodyLayout->setSpacing(10);
+        signalBodyLayout->addWidget(fieldWithHelp(QStringLiteral("Chart signal"), chartSignal,
+            QStringLiteral("What every chart is drawn in and declares to VP; ColourSpace's patches keep their own Gamut. "
+                "Only the charts drawn for this signal are listed.")));
+        layout->addWidget(createCard(QStringLiteral("Charts"), QString(), signalBody));
+    }
+
     // The charts, by group, each group one drop-down (PLAN.md Phase 3). One
     // chart is on screen at a time, so picking one clears the other groups.
     struct ChartItem { const char* label; const char* id; };
@@ -11778,6 +11809,9 @@ QWidget* ConfigEditorWindow::createPatternPage()
     };
     std::vector<QComboBox*> pickers;
     std::vector<QVBoxLayout*> settingsAreas;
+    // Each group's drop-down, card and charts, refilled for each Chart signal.
+    struct GroupView { QComboBox* picker; QWidget* card; std::vector<ChartItem> charts; };
+    const auto views = std::make_shared<std::vector<GroupView>>();
     for (const ChartGroup& group : groups)
     {
         const QString title = QString::fromUtf8(group.title);
@@ -11824,9 +11858,6 @@ QWidget* ConfigEditorWindow::createPatternPage()
         auto* picker = new QComboBox;
         picker->setObjectName(QStringLiteral("config.pattern.group.%1").arg(title.toLower().replace(QLatin1Char(' '), QLatin1Char('_'))));
         picker->setAccessibleName(title);
-        picker->addItem(QStringLiteral("Pick a chart"), QString());
-        for (const ChartItem& chart : group.charts)
-            picker->addItem(QString::fromUtf8(chart.label), QString::fromUtf8(chart.id));
         picker->setMinimumWidth(240);
         bodyLayout->addWidget(row({ picker }));
         auto* settings = new QVBoxLayout;
@@ -11836,10 +11867,45 @@ QWidget* ConfigEditorWindow::createPatternPage()
         pickers.push_back(picker);
         settingsAreas.push_back(settings);
 
-        layout->addWidget(createCard(title, QString(), body));
+        QWidget* card = createCard(title, QString(), body);
+        layout->addWidget(card);
+        views->push_back({ picker, card, group.charts });
     }
-    // The group whose chart this page put on screen; nullptr for none.
+    // The drop-downs list the charts drawn for this signal; a group with none
+    // hides. A chart still listed stays picked. False if the chart this page
+    // showed is no longer listed.
     const auto showing = std::make_shared<QPointer<QComboBox>>();
+    const auto fillPickers = [views, showing](const QString& signal)
+    {
+        bool kept = true;
+        for (GroupView& view : *views)
+        {
+            const QString current = view.picker->currentData().toString();
+            view.picker->clear();
+            view.picker->addItem(QStringLiteral("Pick a chart"), QString());
+            for (const ChartItem& chart : view.charts)
+                if (PatternChartSignal::Drawn(chart.id, signal.toStdString()))
+                    view.picker->addItem(QString::fromUtf8(chart.label), QString::fromUtf8(chart.id));
+            view.card->setVisible(view.picker->count() > 1);
+            const int index = current.isEmpty() ? -1 : view.picker->findData(current);
+            view.picker->setCurrentIndex(index < 0 ? 0 : index);
+            if (!current.isEmpty() && index < 0 && showing->data() == view.picker) kept = false;
+        }
+        return kept;
+    };
+    fillPickers(chartSignal->currentData().toString());
+    // A new Chart signal (choiceField has saved and sent it): the lists follow
+    // it, and a chart on screen that is not drawn for it is taken off.
+    connect(chartSignal, qOverload<int>(&QComboBox::currentIndexChanged), this,
+        [chartSignal, fillPickers, showing, showSettings, send](int)
+    {
+        if (fillPickers(chartSignal->currentData().toString())) return;
+        showing->clear();
+        showSettings(QString(), nullptr);
+        send(QStringLiteral("chart off"));
+    });
+
+    // showing: the group whose chart this page put on screen; nullptr for none.
     for (size_t index = 0; index < pickers.size(); ++index)
     {
         QComboBox* picker = pickers[index];
