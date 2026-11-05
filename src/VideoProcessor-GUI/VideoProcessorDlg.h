@@ -616,6 +616,13 @@ protected:
 	std::string m_patgenGammaSent;            // the word PATGEN last accepted
 	bool m_patgenGammaProfileRoute = false;
 	unsigned m_patgenGammaCheckMs = 1000;
+	// Config's "Crop exactly to the chart" switch (PatgenNoCrop.h, A200).
+	bool m_patgenExactCropWanted = false;     // the switch is on
+	std::string m_patgenCropRatio;            // the aspect chart Config last showed, "<n>:<d>"; empty: none
+	std::string m_patgenExactCrop;            // the ratio VP crops to now; empty: the typical path
+	// Native-raster charts shown 1:1, no switch (PatgenNoCrop.h, A201).
+	bool m_patgenOneToOneChart = false;       // the chart Config last showed is one of them
+	bool m_patgenOneToOne = false;            // Screen and Zoom are set aside now
 
 	VideoStateComPtr m_builtVideoState = nullptr;  // This is what we make of it
 	OsdInputColorInfo::AcceptedState m_osdAcceptedInputColor;
@@ -1061,6 +1068,7 @@ protected:
 	void ClearRendererCombo();
 	void UpdateStatsOverlay();
 	void UpdatePatgenSdrGamma();
+	void UpdatePatgenNoCrop(const char* reason);
 	void PollAspectRatioOsd();
 	void LogMadVRPostStallResetDiagnostics(const StatsData& stats,
 		double measuredCaptureRateHz);
