@@ -75,6 +75,7 @@ static UINT vpUpdateExitMessage = RegisterWindowMessageW(L"VideoProcessor.Update
 #include <RendererQueueLaunchAudit.h>
 #include <RendererProfileConfig.h>
 #include <source_plugin/PatgenSdrGamma.h>
+#include <source_plugin/PatgenNoCrop.h>
 #include <MainConfigSchema.h>
 #include <UnifiedProfileRuntime.h>
 
@@ -3147,15 +3148,32 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 		// pattern generator as "<command>" (e.g. "pattern.chart grey_steps").
 		if (name.rfind("pattern.", 0) == 0)
 		{
+			const std::string command = name.substr(8);
+			// The "No crop or zoom" switch is VP's own (PatgenNoCrop.h), kept
+			// with or without the generator's input.
+			bool noCrop = false;
+			if (PatgenNoCrop::ParseCommand(command, noCrop))
+			{
+				m_patgenNoCropWanted = noCrop;
+				UpdatePatgenNoCrop(noCrop ? "switch on" : "switch off");
+				Frame response;
+				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+				return response;
+			}
 			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
 				SourcePluginBackend::PATTERN_PLUGIN_NAME))
 				return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
-			const std::string command = name.substr(8);
 			int32_t result = 0;
 			SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command.c_str(), &result);
 			if (result != 0)
 				return ConfigurationRpcError(operation, "The pattern generator refused \"" + command +
 					"\" (" + std::to_string(result) + "); vp.log says why.");
+			bool aspect = false;
+			if (PatgenNoCrop::ParseChart(command, aspect))
+			{
+				m_patgenAspectChart = aspect;
+				UpdatePatgenNoCrop(aspect ? "aspect chart" : "other chart");
+			}
 			Frame response;
 			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 			return response;
@@ -9371,6 +9389,13 @@ void CVideoProcessorDlg::CaptureRemove()
 	m_captureDevice.Release();
 	m_captureDevice = nullptr;
 
+	// The generator's chart ends with its input; the renderer is already gone,
+	// so the next one starts with the profiles VP holds (PatgenNoCrop.h).
+	if (m_patgenNoCrop)
+		DebugLog::Log("PATGEN no crop or zoom: off, the input stopped; viewport and zoom restored");
+	m_patgenAspectChart = false;
+	m_patgenNoCrop = false;
+
 	m_desiredCaptureInputId = INVALID_CAPTURE_INPUT_ID;
 	m_currentCaptureInputId = INVALID_CAPTURE_INPUT_ID;
 
@@ -12964,8 +12989,22 @@ void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
 	CString activeState;
 	bool rendererRestartRequired = false;
 	bool liveResetRequired = false;
+	// Config's "No crop or zoom" switch: the renderer gets a copy with the
+	// viewport and zoom set aside; the runtime's snapshot is untouched
+	// (PatgenNoCrop.h).
+	UnifiedProfileRuntime::Snapshot noCrop;
+	if (m_patgenNoCrop)
+	{
+		noCrop = *snapshot;
+		PatgenNoCrop::SetAside(noCrop.effectiveSelections);
+		const uint64_t viewportGeneration = noCrop.viewport.generation;
+		noCrop.viewport = RendererProfileConfig::ResolvedViewport();
+		noCrop.viewport.profile = PatgenNoCrop::SetAsideName;
+		noCrop.viewport.zoomProfile = PatgenNoCrop::SetAsideName;
+		noCrop.viewport.generation = viewportGeneration;
+	}
 	if (!m_videoRenderer->ApplyApplicationState(
-		*snapshot, activeState, rendererRestartRequired, liveResetRequired))
+		m_patgenNoCrop ? noCrop : *snapshot, activeState, rendererRestartRequired, liveResetRequired))
 		return;
 	rendererRestartRequired = rendererRestartRequired || shaderRestartRequired;
 
@@ -15858,6 +15897,23 @@ void CVideoProcessorDlg::PollAspectRatioOsd()
 	if (m_statsOverlay->RenderBgra(pixels, width, height, stride))
 		m_videoRenderer->SetNativeStatsOverlay(
 			pixels.data(), pixels.size(), width, height, stride);
+}
+
+// Config's "No crop or zoom" switch (PatgenNoCrop.h): on while the switch is
+// on and the pattern generator's input shows an aspect chart Config picked.
+// Each change re-applies the profile runtime's current snapshot, which
+// ApplyUnifiedProfileSnapshot hands the renderer with or without the viewport
+// and zoom set aside.
+void CVideoProcessorDlg::UpdatePatgenNoCrop(const char* reason)
+{
+	const bool on = m_patgenNoCropWanted && m_patgenAspectChart &&
+		SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, SourcePluginBackend::PATTERN_PLUGIN_NAME);
+	if (on == m_patgenNoCrop)
+		return;
+	m_patgenNoCrop = on;
+	DebugLog::Log("PATGEN no crop or zoom: %s (%s)",
+		on ? "on, viewport and zoom set aside" : "off, viewport and zoom restored", reason);
+	ApplyUnifiedProfileSnapshot(m_profileRuntime.GetSnapshot(), true);
 }
 
 // The pattern generator's SDR gamma follows VP (PatgenSdrGamma.h): while its
