@@ -11804,6 +11804,22 @@ QWidget* ConfigEditorWindow::createPatternPage()
             });
             bodyLayout->addWidget(row({ flash, labels }));
         }
+        if (title == QStringLiteral("Aspect"))
+        {
+            // VP's own switch, never saved (PatgenNoCrop.h, A183 (6)): while it
+            // is on, an aspect chart is shown with VP's viewport and zoom set aside.
+            auto* noCrop = new QCheckBox(QStringLiteral("No crop or zoom"));
+            noCrop->setObjectName(QStringLiteral("config.pattern.aspect.no_crop"));
+            connect(noCrop, &QCheckBox::toggled, this, [send](bool on)
+            {
+                send(on ? QStringLiteral("nocrop on") : QStringLiteral("nocrop off"));
+            });
+            const QString help = QStringLiteral("Shows the aspect charts on the whole screen: VP's viewport and zoom "
+                "are set aside while one is on screen, and come back as they were. Not saved.");
+            noCrop->setAccessibleDescription(help);
+            bodyLayout->addWidget(noCrop);
+            bodyLayout->addWidget(helpLabel(help));
+        }
 
         auto* picker = new QComboBox;
         picker->setObjectName(QStringLiteral("config.pattern.group.%1").arg(title.toLower().replace(QLatin1Char(' '), QLatin1Char('_'))));
