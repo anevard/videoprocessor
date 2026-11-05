@@ -11804,6 +11804,25 @@ QWidget* ConfigEditorWindow::createPatternPage()
             });
             bodyLayout->addWidget(row({ flash, labels }));
         }
+        if (title == QStringLiteral("Aspect"))
+        {
+            // VP's own switch, never saved (PatgenNoCrop.h, A200): while it is
+            // on, an aspect chart is cropped exactly to its ratio through the
+            // active Screen profile.
+            auto* exactCrop = new QCheckBox(QStringLiteral("Crop exactly to the chart"));
+            exactCrop->setObjectName(QStringLiteral("config.pattern.aspect.exact_crop"));
+            connect(exactCrop, &QCheckBox::toggled, this, [send](bool on)
+            {
+                send(on ? QStringLiteral("exact_crop on") : QStringLiteral("exact_crop off"));
+            });
+            const QString help = QStringLiteral("On: each aspect chart is cropped exactly to its ratio and shown "
+                "through your Screen profile, as a perfectly cropped film of that ratio would be; automatic crop "
+                "and Zoom are set aside while it is on screen, and come back as they were. Off: the chart goes "
+                "through Screen, Zoom and automatic crop as set. Not saved.");
+            exactCrop->setAccessibleDescription(help);
+            bodyLayout->addWidget(exactCrop);
+            bodyLayout->addWidget(helpLabel(help));
+        }
 
         auto* picker = new QComboBox;
         picker->setObjectName(QStringLiteral("config.pattern.group.%1").arg(title.toLower().replace(QLatin1Char(' '), QLatin1Char('_'))));

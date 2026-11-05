@@ -41,6 +41,19 @@ public:
 	bool TryGetBool(const std::string& section, const std::string& key, bool& value) const;
 	const std::map<std::string, std::string>* GetSectionValues(const std::string& section) const;
 	std::vector<std::string> GetSectionNames() const;
+	// Sets one value in this object only; the file is never written. For a
+	// copy VP hands its renderer while the pattern generator's "Crop exactly
+	// to the chart" switch is on (PatgenNoCrop.h). A missing section is added
+	// at the end of the order. Header-only: no member is added, so the
+	// renderer DLL's own ConfigFile copy reads the object unchanged.
+	void SetValueInMemory(const std::string& section, const std::string& key,
+		const std::string& value)
+	{
+		const std::string name = NormalizeName(section);
+		if (m_sections.find(name) == m_sections.end())
+			m_sectionOrder.push_back(name);
+		m_sections[name][NormalizeName(key)] = value;
+	}
 
 	static std::string NormalizeName(const std::string& value);
 	static std::string Trim(const std::string& value);
