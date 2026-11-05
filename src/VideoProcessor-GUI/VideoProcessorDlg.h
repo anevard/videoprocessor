@@ -616,6 +616,10 @@ protected:
 	std::string m_patgenGammaSent;            // the word PATGEN last accepted
 	bool m_patgenGammaProfileRoute = false;
 	unsigned m_patgenGammaCheckMs = 1000;
+	// Config's "No crop or zoom" switch (PatgenNoCrop.h).
+	bool m_patgenNoCropWanted = false;        // the switch is on
+	bool m_patgenAspectChart = false;         // the chart Config last showed is an aspect chart
+	bool m_patgenNoCrop = false;              // viewport and zoom are set aside now
 
 	VideoStateComPtr m_builtVideoState = nullptr;  // This is what we make of it
 	OsdInputColorInfo::AcceptedState m_osdAcceptedInputColor;
@@ -1061,6 +1065,7 @@ protected:
 	void ClearRendererCombo();
 	void UpdateStatsOverlay();
 	void UpdatePatgenSdrGamma();
+	void UpdatePatgenNoCrop(const char* reason);
 	void PollAspectRatioOsd();
 	void LogMadVRPostStallResetDiagnostics(const StatsData& stats,
 		double measuredCaptureRateHz);
