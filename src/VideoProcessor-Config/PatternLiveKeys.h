@@ -36,10 +36,10 @@ namespace PatternLiveKeys
     inline bool IsLive(const std::string& key)
     {
         static const char* const live[] = {
-            "flash", "text",
+            "chart_signal", "flash", "text",
             "hdr10", "hdr10_peak", "hdr10_min", "hdr10_maxcll", "hdr10_maxfall",
             "nits_from", "nits_to", "sdr_from", "sdr_to",
-            "saturation", "nits_gamut", "ramp_peak", "dtm_hold", "dtm_size",
+            "saturation", "ramp_peak", "dtm_hold", "dtm_size",
         };
         for (const char* name : live)
             if (SameName(key, name)) return true;
