@@ -120,6 +120,7 @@ copy /Y "$(ProjectDir)..\VideoProcessor-ConfigDiscovery\x64\$(Configuration)\Vid
     <ClInclude Include="SettingsNavigationIcons.h" />
     <ClInclude Include="ProfileListController.h" />
     <ClInclude Include="PatternDisplayPeak.h" />
+    <ClInclude Include="PatternLiveKeys.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="VpTheme.h" />
     <ClInclude Include="..\VideoProcessor-ConfigCore\ConfigEditorCore.h" />
