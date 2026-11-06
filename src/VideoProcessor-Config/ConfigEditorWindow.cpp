@@ -11930,18 +11930,21 @@ QWidget* ConfigEditorWindow::createPatternPage()
         }
         if (title == QStringLiteral("Aspect"))
         {
-            // VP's own switch, never saved (PatgenNoCrop.h, A183 (6)): while it
-            // is on, an aspect chart is shown with VP's viewport and zoom set aside.
-            auto* noCrop = new QCheckBox(QStringLiteral("No crop or zoom"));
-            noCrop->setObjectName(QStringLiteral("config.pattern.aspect.no_crop"));
-            connect(noCrop, &QCheckBox::toggled, this, [send](bool on)
+            // VP's own switch, never saved (PatgenNoCrop.h, A200): while it is
+            // on, an aspect chart is cropped exactly to its ratio through the
+            // active Screen profile.
+            auto* exactCrop = new QCheckBox(QStringLiteral("Crop exactly to the chart"));
+            exactCrop->setObjectName(QStringLiteral("config.pattern.aspect.exact_crop"));
+            connect(exactCrop, &QCheckBox::toggled, this, [send](bool on)
             {
-                send(on ? QStringLiteral("nocrop on") : QStringLiteral("nocrop off"));
+                send(on ? QStringLiteral("exact_crop on") : QStringLiteral("exact_crop off"));
             });
-            const QString help = QStringLiteral("Shows the aspect charts on the whole screen: VP's viewport and zoom "
-                "are set aside while one is on screen, and come back as they were. Not saved.");
-            noCrop->setAccessibleDescription(help);
-            bodyLayout->addWidget(noCrop);
+            const QString help = QStringLiteral("On: each aspect chart is cropped exactly to its ratio and shown "
+                "through your Screen profile, as a perfectly cropped film of that ratio would be; automatic crop "
+                "and Zoom are set aside while it is on screen, and come back as they were. Off: the chart goes "
+                "through Screen, Zoom and automatic crop as set. Not saved.");
+            exactCrop->setAccessibleDescription(help);
+            bodyLayout->addWidget(exactCrop);
             bodyLayout->addWidget(helpLabel(help));
         }
 

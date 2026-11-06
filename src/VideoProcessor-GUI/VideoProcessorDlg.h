@@ -618,10 +618,13 @@ protected:
 	unsigned m_patgenGammaCheckMs = 1000;
 	// Its target nits, on the same timer and run (PatgenTargetNits.h).
 	std::string m_patgenNitsSent;             // the value PATGEN last accepted
-	// Config's "No crop or zoom" switch (PatgenNoCrop.h).
-	bool m_patgenNoCropWanted = false;        // the switch is on
-	bool m_patgenAspectChart = false;         // the chart Config last showed is an aspect chart
-	bool m_patgenNoCrop = false;              // viewport and zoom are set aside now
+	// Config's "Crop exactly to the chart" switch (PatgenNoCrop.h, A200).
+	bool m_patgenExactCropWanted = false;     // the switch is on
+	std::string m_patgenCropRatio;            // the aspect chart Config last showed, "<n>:<d>"; empty: none
+	std::string m_patgenExactCrop;            // the ratio VP crops to now; empty: the typical path
+	// Native-raster charts shown 1:1, no switch (PatgenNoCrop.h, A201).
+	bool m_patgenOneToOneChart = false;       // the chart Config last showed is one of them
+	bool m_patgenOneToOne = false;            // Screen and Zoom are set aside now
 
 	VideoStateComPtr m_builtVideoState = nullptr;  // This is what we make of it
 	OsdInputColorInfo::AcceptedState m_osdAcceptedInputColor;
