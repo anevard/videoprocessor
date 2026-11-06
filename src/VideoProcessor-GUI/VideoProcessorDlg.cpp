@@ -75,7 +75,9 @@ static UINT vpUpdateExitMessage = RegisterWindowMessageW(L"VideoProcessor.Update
 #include <RendererQueueLaunchAudit.h>
 #include <RendererProfileConfig.h>
 #include <source_plugin/PatgenSdrGamma.h>
+#include <source_plugin/PatgenTargetNits.h>
 #include <source_plugin/PatgenNoCrop.h>
+#include <source_plugin/PatgenChartShowing.h>
 #include <MainConfigSchema.h>
 #include <UnifiedProfileRuntime.h>
 
@@ -3165,6 +3167,16 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 				return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
 			int32_t result = 0;
 			SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command.c_str(), &result);
+			// The Patterns page's "is my chart still showing?" (A202,
+			// PatgenChartShowing.h): only ColourSpace's answer is refused.
+			if (command == PatgenChartShowing::Command)
+			{
+				if (PatgenChartShowing::ColourSpaceHasTheScreen(result))
+					return ConfigurationRpcError(operation, PatgenChartShowing::ColourSpaceHasScreen);
+				Frame response;
+				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+				return response;
+			}
 			if (result != 0)
 				return ConfigurationRpcError(operation, "The pattern generator refused \"" + command +
 					"\" (" + std::to_string(result) + "); vp.log says why.");
@@ -15151,6 +15163,7 @@ void CVideoProcessorDlg::OnTimer(UINT_PTR nIDEvent)
 	if (nIDEvent == PatgenSdrGamma::TimerId)
 	{
 		UpdatePatgenSdrGamma();
+		UpdatePatgenTargetNits();
 		return;
 	}
 	if (nIDEvent == PROFILE_CHANGE_OVERLAY_TIMER_ID)
@@ -15935,6 +15948,7 @@ void CVideoProcessorDlg::UpdatePatgenSdrGamma()
 		m_patgenGammaLive = false;
 		m_patgenGammaPresents = UINT64_MAX;
 		m_patgenGammaSent.clear();
+		m_patgenNitsSent.clear();
 		ConfigFile config;
 		bool routeValid = true, msValid = true;
 		PatgenSdrGamma::Route route = PatgenSdrGamma::Route::Renderer;
@@ -16003,6 +16017,32 @@ void CVideoProcessorDlg::UpdatePatgenSdrGamma()
 		m_patgenGammaProfileRoute ? "profile" : "renderer", result);
 	if (result == 0)
 		m_patgenGammaSent = word;
+}
+
+// The pattern generator's sharpness and aspect charts draw their PQ white at
+// VP's target nits (PatgenTargetNits.h): during the gamma timer's run, tell
+// it the active Rendering profile's sdr_target_nits, on each change.
+void CVideoProcessorDlg::UpdatePatgenTargetNits()
+{
+	if (!m_patgenGammaRun)
+		return;
+	const auto snapshot = m_profileRuntime.GetSnapshot();
+	if (!snapshot || !snapshot->configuration)
+		return;
+	const auto selections = RendererProfileConfig::FormatSelections(snapshot->effectiveSelections);
+	const auto display = selections.find("display");
+	const std::string section = display == selections.end() || display->second.empty() ? std::string() :
+		ActiveProfileStatus::SectionFor("vprenderer", display->second, snapshot->configuration.get());
+	const std::string word = PatgenTargetNits::Word(PatgenTargetNits::Resolve(*snapshot->configuration, section));
+	if (word == m_patgenNitsSent)
+		return;
+	const std::string command = "target_nits " + word;
+	int32_t result = 0;
+	SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command.c_str(), &result);
+	DebugLog::Log("PATGEN target nits: %s cd/m2 (Rendering profile %s); sent, result=%d", word.c_str(),
+		section.empty() ? "base" : section.c_str(), result);
+	if (result == 0)
+		m_patgenNitsSent = word;
 }
 
 void CVideoProcessorDlg::UpdateStatsOverlay()
