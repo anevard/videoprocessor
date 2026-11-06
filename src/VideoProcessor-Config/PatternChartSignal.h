@@ -5,10 +5,10 @@
 // Every chart declares exactly the chosen signal, and the page lists only the
 // charts drawn for it. The lists mirror the pattern generator's own
 // (vp-patgen src/charts.cpp ChartDrawnFor), as the operator chose them at
-// patgen-16: the grey-only and colour clipping charts, the SDR nits chart,
-// greyscale, sharpness and aspect charts under the three SDR signals; each
-// colour ramp under its own signal; the PQ nits chart, PQ grey ramp and DTM
-// response under both PQ signals.
+// patgen-16: the grey-only and colour clipping charts, the SDR nits chart and
+// greyscale charts under the three SDR signals; each colour ramp under its
+// own signal; the PQ nits chart, PQ grey ramp and DTM response under both PQ
+// signals; the sharpness and aspect charts under all five (A199).
 
 #include <cstring>
 #include <string>
@@ -61,15 +61,44 @@ namespace PatternChartSignal
         if (chart == "ramp_p3_pq") return signal == "p3_bt2020_pq";
         // The PQ charts under both PQ signals.
         if (chart == "nits_pq" || chart == "grey_ramp_pq" || chart == "dtm_response") return found->pq;
+        // Sharpness and aspect under every signal (ledger A199): under PQ
+        // their white is VP's target nits, capped at 203 cd/m2.
+        static const char* const every[] = {
+            "resolution", "focus_white", "focus_green",
+            "aspect_1.33", "aspect_1.78", "aspect_1.85", "aspect_1.896", "aspect_2.00", "aspect_2.39",
+        };
+        for (const char* id : every)
+            if (chart == id) return true;
         // Every other chart under the three SDR signals.
         static const char* const sdr[] = {
             "clip_black", "clip_black_grey", "clip_white", "clip_white_grey", "nits_sdr", "clip_colour",
             "grey_steps", "grey_ramp", "gradient_10bit", "gamma_check",
-            "resolution", "focus_white", "focus_green",
-            "aspect_1.33", "aspect_1.78", "aspect_1.85", "aspect_1.896", "aspect_2.00", "aspect_2.39",
         };
         for (const char* id : sdr)
             if (chart == id) return !found->pq;
         return false;
+    }
+
+    // The chart that follows a showing chart to a new signal (ledger A198,
+    // operator), as the generator does it itself (vp-patgen src/charts.cpp
+    // ChartForSignal): a colour ramp becomes that signal's ramp, and the twins
+    // swap (nits_pq <-> nits_sdr, grey_ramp_pq <-> grey_ramp), each keeping
+    // its own range settings. Any other chart is returned unchanged.
+    inline std::string Follow(const std::string& chart, const std::string& signal)
+    {
+        const Signal* found = Find(signal);
+        if (!found) return chart;
+        if (chart == "ramp_709" || chart == "ramp_2020_sdr" || chart == "ramp_p3_sdr" ||
+            chart == "ramp_2020_pq" || chart == "ramp_p3_pq")
+        {
+            if (signal == "bt709_sdr") return "ramp_709";
+            if (signal == "bt2020_sdr") return "ramp_2020_sdr";
+            if (signal == "p3_bt2020_sdr") return "ramp_p3_sdr";
+            if (signal == "bt2020_pq") return "ramp_2020_pq";
+            return "ramp_p3_pq";
+        }
+        if (chart == "nits_pq" || chart == "nits_sdr") return found->pq ? "nits_pq" : "nits_sdr";
+        if (chart == "grey_ramp_pq" || chart == "grey_ramp") return found->pq ? "grey_ramp_pq" : "grey_ramp";
+        return chart;
     }
 }
