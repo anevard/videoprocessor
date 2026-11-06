@@ -3152,13 +3152,13 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 		if (name.rfind("pattern.", 0) == 0)
 		{
 			const std::string command = name.substr(8);
-			// The "No crop or zoom" switch is VP's own (PatgenNoCrop.h), kept
-			// with or without the generator's input.
-			bool noCrop = false;
-			if (PatgenNoCrop::ParseCommand(command, noCrop))
+			// The "Crop exactly to the chart" switch is VP's own
+			// (PatgenNoCrop.h), kept with or without the generator's input.
+			bool exactCrop = false;
+			if (PatgenNoCrop::ParseCommand(command, exactCrop))
 			{
-				m_patgenNoCropWanted = noCrop;
-				UpdatePatgenNoCrop(noCrop ? "switch on" : "switch off");
+				m_patgenExactCropWanted = exactCrop;
+				UpdatePatgenNoCrop(exactCrop ? "switch on" : "switch off");
 				Frame response;
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;
@@ -3173,7 +3173,17 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 			if (command == PatgenChartShowing::Command)
 			{
 				if (PatgenChartShowing::ColourSpaceHasTheScreen(result))
+				{
+					// ColourSpace's patches are never measured through a
+					// chart's crop (A200) or set-aside (A201).
+					if (!m_patgenCropRatio.empty() || m_patgenOneToOneChart)
+					{
+						m_patgenCropRatio.clear();
+						m_patgenOneToOneChart = false;
+						UpdatePatgenNoCrop("ColourSpace has the screen");
+					}
 					return ConfigurationRpcError(operation, PatgenChartShowing::ColourSpaceHasScreen);
+				}
 				Frame response;
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;
@@ -3181,11 +3191,26 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 			if (result != 0)
 				return ConfigurationRpcError(operation, "The pattern generator refused \"" + command +
 					"\" (" + std::to_string(result) + "); vp.log says why.");
-			bool aspect = false;
-			if (PatgenNoCrop::ParseChart(command, aspect))
+			std::string chartId;
+			if (PatgenNoCrop::ParseChart(command, chartId))
 			{
-				m_patgenAspectChart = aspect;
-				UpdatePatgenNoCrop(aspect ? "aspect chart" : "other chart");
+				// An aspect chart's ratio comes from the generator itself
+				// (A200, operator: "PATGEN tells VP"); a chart it cannot
+				// answer for gets no crop.
+				m_patgenCropRatio.clear();
+				if (PatgenNoCrop::IsAspectChart(chartId))
+				{
+					int32_t answer = 0;
+					SourcePluginBackend::SendSourcePluginCommand(m_captureDevice,
+						PatgenNoCrop::RatioQuery(chartId).c_str(), &answer);
+					if (!PatgenNoCrop::RatioText(answer, m_patgenCropRatio))
+						DebugLog::Log("PATGEN crop exactly to the chart: no ratio for %s (%d); not cropped",
+							chartId.c_str(), static_cast<int>(answer));
+				}
+				// A native-raster chart is shown 1:1, no switch (A201).
+				m_patgenOneToOneChart = PatgenNoCrop::IsOneToOneChart(chartId);
+				UpdatePatgenNoCrop(m_patgenOneToOneChart ? "native-raster chart" :
+					m_patgenCropRatio.empty() ? "other chart" : "aspect chart");
 			}
 			Frame response;
 			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
@@ -9417,10 +9442,14 @@ void CVideoProcessorDlg::CaptureRemove()
 
 	// The generator's chart ends with its input; the renderer is already gone,
 	// so the next one starts with the profiles VP holds (PatgenNoCrop.h).
-	if (m_patgenNoCrop)
-		DebugLog::Log("PATGEN no crop or zoom: off, the input stopped; viewport and zoom restored");
-	m_patgenAspectChart = false;
-	m_patgenNoCrop = false;
+	if (!m_patgenExactCrop.empty())
+		DebugLog::Log("PATGEN crop exactly to the chart: off, the input stopped; zoom and crop restored");
+	if (m_patgenOneToOne)
+		DebugLog::Log("PATGEN 1:1 chart: off, the input stopped; viewport and zoom restored");
+	m_patgenCropRatio.clear();
+	m_patgenExactCrop.clear();
+	m_patgenOneToOneChart = false;
+	m_patgenOneToOne = false;
 
 	m_desiredCaptureInputId = INVALID_CAPTURE_INPUT_ID;
 	m_currentCaptureInputId = INVALID_CAPTURE_INPUT_ID;
@@ -13021,22 +13050,47 @@ void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
 	CString activeState;
 	bool rendererRestartRequired = false;
 	bool liveResetRequired = false;
-	// Config's "No crop or zoom" switch: the renderer gets a copy with the
-	// viewport and zoom set aside; the runtime's snapshot is untouched
-	// (PatgenNoCrop.h).
-	UnifiedProfileRuntime::Snapshot noCrop;
-	if (m_patgenNoCrop)
+	// Config's "Crop exactly to the chart" switch (PatgenNoCrop.h, A200): the
+	// renderer gets a copy with the Zoom set aside and a configuration copy
+	// whose active Screen section crops exactly to the chart's ratio; the
+	// runtime's snapshot and the file are untouched.
+	UnifiedProfileRuntime::Snapshot exactCrop;
+	const bool cropping = !m_patgenOneToOne && !m_patgenExactCrop.empty() && snapshot->configuration;
+	// A native-raster chart (PatgenNoCrop.h, A201): Screen and Zoom both set
+	// aside, so the chart is pixel for pixel on the whole panel.
+	if (m_patgenOneToOne)
 	{
-		noCrop = *snapshot;
-		PatgenNoCrop::SetAside(noCrop.effectiveSelections);
-		const uint64_t viewportGeneration = noCrop.viewport.generation;
-		noCrop.viewport = RendererProfileConfig::ResolvedViewport();
-		noCrop.viewport.profile = PatgenNoCrop::SetAsideName;
-		noCrop.viewport.zoomProfile = PatgenNoCrop::SetAsideName;
-		noCrop.viewport.generation = viewportGeneration;
+		exactCrop = *snapshot;
+		PatgenNoCrop::SetAside(exactCrop.effectiveSelections);
+		const uint64_t viewportGeneration = exactCrop.viewport.generation;
+		exactCrop.viewport = RendererProfileConfig::ResolvedViewport();
+		exactCrop.viewport.profile = PatgenNoCrop::SetAsideName;
+		exactCrop.viewport.zoomProfile = PatgenNoCrop::SetAsideName;
+		exactCrop.viewport.generation = viewportGeneration;
+	}
+	else if (cropping)
+	{
+		exactCrop = *snapshot;
+		PatgenNoCrop::SetAsideZoom(exactCrop.effectiveSelections);
+		const ConfigFile& file = *snapshot->configuration;
+		const std::string screen = PatgenNoCrop::ScreenSection(
+			ConfigFile::NormalizeName(snapshot->viewport.profile),
+			RendererProfileConfig::IsTargetModel(file), file.HasSection("vprenderer.viewport"));
+		auto copy = std::make_shared<ConfigFile>(file);
+		PatgenNoCrop::CropExactly(*copy, screen, m_patgenExactCrop);
+		exactCrop.configuration = copy;
+		exactCrop.viewport.zoomProfile = PatgenNoCrop::SetAsideName;
+		exactCrop.viewport.automaticCrop = false;
+		exactCrop.viewport.cropNarrowerContentToFillScreen = false;
+		exactCrop.viewport.cropWiderContentToFillScreen = false;
+		std::string ratioError;
+		exactCrop.viewport.hasFixedCropAspect = AspectRatioParser::Parse(
+			m_patgenExactCrop, 1.0, 4.0, exactCrop.viewport.fixedCropAspect, ratioError);
+		DebugLog::Log("PATGEN crop exactly to the chart: [%s] fixed_crop_aspect %s, automatic crop off, zoom set aside",
+			screen.c_str(), m_patgenExactCrop.c_str());
 	}
 	if (!m_videoRenderer->ApplyApplicationState(
-		m_patgenNoCrop ? noCrop : *snapshot, activeState, rendererRestartRequired, liveResetRequired))
+		cropping || m_patgenOneToOne ? exactCrop : *snapshot, activeState, rendererRestartRequired, liveResetRequired))
 		return;
 	rendererRestartRequired = rendererRestartRequired || shaderRestartRequired;
 
@@ -15932,20 +15986,29 @@ void CVideoProcessorDlg::PollAspectRatioOsd()
 			pixels.data(), pixels.size(), width, height, stride);
 }
 
-// Config's "No crop or zoom" switch (PatgenNoCrop.h): on while the switch is
-// on and the pattern generator's input shows an aspect chart Config picked.
-// Each change re-applies the profile runtime's current snapshot, which
-// ApplyUnifiedProfileSnapshot hands the renderer with or without the viewport
-// and zoom set aside.
+// Config's "Crop exactly to the chart" switch (PatgenNoCrop.h, A200): on
+// while the switch is on and the pattern generator's input shows an aspect
+// chart Config picked whose ratio the generator gave. Each change (a new
+// ratio included) re-applies the profile runtime's current snapshot, which
+// ApplyUnifiedProfileSnapshot hands the renderer with or without the exact
+// crop. A native-raster chart (A201) is shown 1:1 the same way, switch or not.
 void CVideoProcessorDlg::UpdatePatgenNoCrop(const char* reason)
 {
-	const bool on = m_patgenNoCropWanted && m_patgenAspectChart &&
+	const bool generator =
 		SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, SourcePluginBackend::PATTERN_PLUGIN_NAME);
-	if (on == m_patgenNoCrop)
+	const bool on = generator && m_patgenExactCropWanted && !m_patgenCropRatio.empty();
+	const std::string ratio = on ? m_patgenCropRatio : std::string();
+	const bool oneToOne = generator && m_patgenOneToOneChart;
+	if (ratio == m_patgenExactCrop && oneToOne == m_patgenOneToOne)
 		return;
-	m_patgenNoCrop = on;
-	DebugLog::Log("PATGEN no crop or zoom: %s (%s)",
-		on ? "on, viewport and zoom set aside" : "off, viewport and zoom restored", reason);
+	if (ratio != m_patgenExactCrop)
+		DebugLog::Log("PATGEN crop exactly to the chart: %s%s (%s)",
+			on ? "on at " : "off, zoom and crop restored", ratio.c_str(), reason);
+	if (oneToOne != m_patgenOneToOne)
+		DebugLog::Log("PATGEN 1:1 chart: %s (%s)",
+			oneToOne ? "on, viewport and zoom set aside" : "off, viewport and zoom restored", reason);
+	m_patgenExactCrop = ratio;
+	m_patgenOneToOne = oneToOne;
 	ApplyUnifiedProfileSnapshot(m_profileRuntime.GetSnapshot(), true);
 }
 
