@@ -5,7 +5,9 @@
 // "gamma <word>": 2.0 to 2.6 is a pure power PATGEN draws its SDR charts
 // with; srgb, bt1886, 1.8, 2.8 or unknown PATGEN refuses with its refusal
 // screen, so a chart is never drawn with a guessed gamma. The word is sent
-// again only when it changes.
+// again when it changes, and once more in each new run: a run begins when
+// the generator's input is capturing and ends when its capture device goes
+// (CaptureRemove), so every capture Restart starts a new one.
 //
 // [pattern] keys, read at each start of the pattern generator's input:
 //   sdr_gamma_route = renderer | profile   (default renderer)

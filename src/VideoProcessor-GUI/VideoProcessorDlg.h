@@ -616,6 +616,8 @@ protected:
 	std::string m_patgenGammaSent;            // the word PATGEN last accepted
 	bool m_patgenGammaProfileRoute = false;
 	unsigned m_patgenGammaCheckMs = 1000;
+	// Its target nits, on the same timer and run (PatgenTargetNits.h).
+	std::string m_patgenNitsSent;             // the value PATGEN last accepted
 	// Config's "Crop exactly to the chart" switch (PatgenNoCrop.h, A200).
 	bool m_patgenExactCropWanted = false;     // the switch is on
 	std::string m_patgenCropRatio;            // the aspect chart Config last showed, "<n>:<d>"; empty: none
@@ -1068,6 +1070,7 @@ protected:
 	void ClearRendererCombo();
 	void UpdateStatsOverlay();
 	void UpdatePatgenSdrGamma();
+	void UpdatePatgenTargetNits();
 	void UpdatePatgenNoCrop(const char* reason);
 	void PollAspectRatioOsd();
 	void LogMadVRPostStallResetDiagnostics(const StatsData& stats,

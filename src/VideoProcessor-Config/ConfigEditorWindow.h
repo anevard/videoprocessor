@@ -346,6 +346,8 @@ private:
     // live status is unavailable; the nits buttons' display peak follows it.
     QString patternRenderingProfile_;
     std::function<void()> refreshPatternDisplayPeak_;
+    // On the status tick: has ColourSpace replaced the Patterns page's chart? (A202)
+    std::function<void()> checkPatternChartShowing_;
     // Rendering / DTM: before Save or Apply, writes every rendering profile's
     // settings explicitly so none inherits from the default profile.
     std::function<void()> freezeRenderingProfiles_;
