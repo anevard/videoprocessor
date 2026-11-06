@@ -24,6 +24,7 @@
 #include "PatternDisplayPeak.h"
 #include "PatternLiveKeys.h"
 #include "PatternChartSignal.h"
+#include <source_plugin/PatgenChartShowing.h>
 #include <ConfigurationApplyPolicy.h>
 #include <ConfigurationIdentity.h>
 #include <ConfigurationLiveApply.h>
@@ -2758,6 +2759,8 @@ void ConfigEditorWindow::applyActiveProfileIndicators(bool available,
     patternRenderingProfile_ = QString::fromLocal8Bit(
         PatternDisplayPeak::ActiveRenderingSection(activeSections).c_str());
     if (refreshPatternDisplayPeak_) refreshPatternDisplayPeak_();
+    // The Patterns page's chart, replaced by ColourSpace? (A202)
+    if (checkPatternChartShowing_) checkPatternChartShowing_();
 
     refreshRendererAutoStatus();
 }
@@ -11446,22 +11449,55 @@ QWidget* ConfigEditorWindow::createPatternPage()
     // Parented from the start: showing a parentless label opens a window.
     auto* status = helpLabel(QStringLiteral("Select the VP TPG input on the target VP, then pick a chart."));
     status->setObjectName(QStringLiteral("config.pattern.status"));
+    // Chart commands sent, and those not answered yet: the "is my chart still
+    // showing?" question waits for them and ignores an answer they overtook
+    // (A202, below).
+    const auto chartCommands = std::make_shared<uint64_t>(0);
+    const auto chartPending = std::make_shared<int>(0);
     // Sends one command to the pattern generator now; the answer shows under the charts.
-    const auto send = [this, status](const QString& command)
+    const auto send = [this, status, chartCommands, chartPending](const QString& command)
     {
         if (noTarget_ || testMode_)
         {
             status->setText(QStringLiteral("No target VP to send %1 to.").arg(command));
             return;
         }
-        status->setText(QStringLiteral("Sending %1...").arg(command));
-        runTargetAction(QStringLiteral("pattern.") + command, [status, command](bool sent, const QString& error)
+        const bool chartCommand = command.startsWith(QStringLiteral("chart "));
+        if (chartCommand)
         {
+            ++*chartCommands;
+            ++*chartPending;
+        }
+        status->setText(QStringLiteral("Sending %1...").arg(command));
+        runTargetAction(QStringLiteral("pattern.") + command,
+            [status, command, chartCommand, chartPending](bool sent, const QString& error)
+        {
+            if (chartCommand) --*chartPending;
             status->setText(sent ? QStringLiteral("Sent: %1").arg(command) : error);
         });
     };
 
-    // ColourSpace and the signal: used from the input's next start.
+    // The signal: the depth and range of every chart and every ColourSpace
+    // patch, so the page's first item (A195, Decision coord-48). Used from the
+    // input's next start.
+    {
+        auto* signalBody = new QWidget;
+        auto* signalBodyLayout = new QVBoxLayout(signalBody);
+        signalBodyLayout->setContentsMargins(0, 0, 0, 0);
+        signalBodyLayout->setSpacing(10);
+        signalBodyLayout->addWidget(fieldWithHelp(QStringLiteral("Depth and range"),
+            bindChoiceField(section, QStringLiteral("mode"),
+                { QStringLiteral("r10l_legal_10"), QStringLiteral("r10l_legal_8"), QStringLiteral("bgra8_full_8") },
+                { QStringLiteral("RGB 10-bit, limited range"), QStringLiteral("RGB 8-bit, limited range"),
+                  QStringLiteral("RGB 8-bit, full range") }),
+            QStringLiteral("Every chart and every ColourSpace patch. Set ColourSpace to the same depth and range; "
+                "a patch at another depth is refused. The charts need a limited-range signal.")));
+        layout->addWidget(createCard(QStringLiteral("Signal"),
+            QStringLiteral("Used when the VP TPG input starts."), signalBody));
+    }
+
+    // ColourSpace: used from the input's next start. Closed until opened: it is
+    // read as the colour space, hence the name (A195).
     auto* signal = new QWidget;
     auto* signalLayout = new QVBoxLayout(signal);
     signalLayout->setContentsMargins(0, 0, 0, 0);
@@ -11475,13 +11511,6 @@ QWidget* ConfigEditorWindow::createPatternPage()
     port->setPlaceholderText(QStringLiteral("20002"));
     port->setMaximumWidth(108);
     signalLayout->addWidget(fieldWithHelp(QStringLiteral("Port"), port, QStringLiteral("Default: 20002.")));
-    signalLayout->addWidget(fieldWithHelp(QStringLiteral("Signal"),
-        bindChoiceField(section, QStringLiteral("mode"),
-            { QStringLiteral("r10l_legal_10"), QStringLiteral("r10l_legal_8"), QStringLiteral("bgra8_full_8") },
-            { QStringLiteral("RGB 10-bit, limited range"), QStringLiteral("RGB 8-bit, limited range"),
-              QStringLiteral("RGB 8-bit, full range") }),
-        QStringLiteral("Set ColourSpace to the same depth and range; a patch at another depth is refused. "
-            "The charts need a limited-range signal.")));
     signalLayout->addWidget(fieldWithHelp(QStringLiteral("Gamut"),
         bindChoiceField(section, QStringLiteral("gamut"),
             { QStringLiteral("bt709"), QStringLiteral("bt2020"), QStringLiteral("p3_bt2020") },
@@ -11490,8 +11519,8 @@ QWidget* ConfigEditorWindow::createPatternPage()
             "P3 mastering: the same codes, declared as P3 inside BT.2020.")));
     signalLayout->addWidget(bindCheckField(QStringLiteral("Log every ColourSpace message"), section,
         QStringLiteral("log_messages")));
-    layout->addWidget(collapsibleCard(QStringLiteral("ColourSpace"),
-        QStringLiteral("Used when the VP TPG input starts."), signal, true));
+    layout->addWidget(collapsibleCard(QStringLiteral("ColourSpace patches"),
+        QStringLiteral("Used when the VP TPG input starts."), signal, false));
 
     // Chart settings. Each is sent at once (PATGEN redraws the chart on screen
     // if it uses it) and saved in [pattern] at once, without Apply (A183 (1),
@@ -11617,9 +11646,10 @@ QWidget* ConfigEditorWindow::createPatternPage()
         connect(block, &QCheckBox::toggled, luminances, &QWidget::setVisible);
     }
 
-    // The nits range: the PQ nits chart and the DTM chart's strip. Typed, or
-    // set by a quick button: up to the display's peak, from it to the
-    // mastering peak, or near black up to a picked top.
+    // The nits range: the PQ nits chart and the DTM chart's strip. One Range
+    // drop-down sets From and To (A197); each entry shows the numbers it sets,
+    // and it always names the entry whose numbers From and To hold, else
+    // Custom, so typed numbers read Custom.
     QWidget* nitsPanel = newPanel();
     {
         QLineEdit* from = liveTextField(QStringLiteral("nits_from"), QStringLiteral("0"));
@@ -11632,18 +11662,9 @@ QWidget* ConfigEditorWindow::createPatternPage()
         };
         connect(from, &QLineEdit::editingFinished, this, sendRange);
         connect(to, &QLineEdit::editingFinished, this, sendRange);
-        nitsPanel->layout()->addWidget(row({
-            fieldWithHelp(QStringLiteral("From, cd/m2"), from, QStringLiteral("Default: 0.")),
-            fieldWithHelp(QStringLiteral("To, cd/m2"), to, QStringLiteral("Default: 75.")) }));
 
-        const auto setRange = [from, to, sendRange](const QString& low, const QString& high)
-        {
-            from->setText(low);
-            to->setText(high);
-            sendRange();
-        };
         // The display peak is VP's target nits, as saved (PatternDisplayPeak.h);
-        // empty, and the two buttons greyed, while VP names no active
+        // empty, and its two entries greyed, while VP names no active
         // Rendering profile.
         const auto displayPeak = [this]
         {
@@ -11651,47 +11672,107 @@ QWidget* ConfigEditorWindow::createPatternPage()
                 patternRenderingProfile_.toLocal8Bit().toStdString(),
                 RenderingBuiltInDefault(QStringLiteral("sdr_target_nits")).toStdString()).c_str());
         };
-        auto* upTo = new QPushButton(QStringLiteral("Up to display peak"));
-        upTo->setObjectName(QStringLiteral("config.pattern.nits.up_to_peak"));
-        connect(upTo, &QPushButton::clicked, this, [setRange, displayPeak]
+        enum RangeEntry { kUpToPeak, kAbovePeak, kNearBlackHalf, kNearBlackOne, kNearBlackTwo, kCustom, kRangeEntries };
+        // The From and To an entry sets; both empty while it is not known.
+        const auto entryRange = [displayPeak, masteringPeak, entered](int entry)
         {
-            const QString peak = displayPeak();
-            if (!peak.isEmpty()) setRange(QStringLiteral("0"), peak);
-        });
-        auto* above = new QPushButton(QStringLiteral("Above display peak"));
-        above->setObjectName(QStringLiteral("config.pattern.nits.above_peak"));
-        connect(above, &QPushButton::clicked, this, [setRange, displayPeak, masteringPeak, entered]
+            const QString peak = (entry == kUpToPeak || entry == kAbovePeak) ? displayPeak() : QString();
+            switch (entry)
+            {
+            case kUpToPeak: return peak.isEmpty() ? QStringList() : QStringList{ QStringLiteral("0"), peak };
+            case kAbovePeak: return peak.isEmpty() ? QStringList() : QStringList{ peak, entered(masteringPeak) };
+            case kNearBlackHalf: return QStringList{ QStringLiteral("0"), QStringLiteral("0.5") };
+            case kNearBlackOne: return QStringList{ QStringLiteral("0"), QStringLiteral("1") };
+            case kNearBlackTwo: return QStringList{ QStringLiteral("0"), QStringLiteral("2") };
+            default: return QStringList();
+            }
+        };
+        auto* range = new QComboBox;
+        range->setObjectName(QStringLiteral("config.pattern.nits.range"));
+        range->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+        range->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        for (int entry = 0; entry < kRangeEntries; ++entry)
+            range->addItem(QString());
+        // Names the entry whose numbers From and To hold, else Custom.
+        const auto matchRange = [range, from, to, entered, entryRange]
         {
-            const QString peak = displayPeak();
-            if (!peak.isEmpty()) setRange(peak, entered(masteringPeak));
+            bool lowOk = false, highOk = false;
+            const double low = entered(from).toDouble(&lowOk);
+            const double high = entered(to).toDouble(&highOk);
+            int match = kCustom;
+            for (int entry = 0; lowOk && highOk && entry < kCustom && match == kCustom; ++entry)
+            {
+                const QStringList numbers = entryRange(entry);
+                if (numbers.size() == 2 && std::abs(numbers[0].toDouble() - low) < 1e-6 &&
+                    std::abs(numbers[1].toDouble() - high) < 1e-6)
+                    match = entry;
+            }
+            if (range->currentIndex() != match) range->setCurrentIndex(match);
+        };
+        // Entry labels carry their numbers, so they follow the display peak and
+        // the peak mastering luminance.
+        const auto labelRange = [range, entryRange]
+        {
+            auto* model = qobject_cast<QStandardItemModel*>(range->model());
+            for (int entry = 0; entry < kRangeEntries; ++entry)
+            {
+                const QStringList numbers = entryRange(entry);
+                const QString shown = numbers.size() == 2 ?
+                    QStringLiteral(" (%1 - %2)").arg(numbers[0], numbers[1]) : QStringLiteral(" (not known)");
+                QString text;
+                switch (entry)
+                {
+                case kUpToPeak: text = QStringLiteral("Up to display peak") + shown; break;
+                case kAbovePeak: text = QStringLiteral("Above display peak") + shown; break;
+                case kCustom: text = QStringLiteral("Custom"); break;
+                default: text = QStringLiteral("Near black") + shown; break;
+                }
+                if (range->itemText(entry) != text) range->setItemText(entry, text);
+                if (model && model->item(entry) && entry != kCustom)
+                    model->item(entry)->setEnabled(numbers.size() == 2);
+            }
+        };
+        connect(range, qOverload<int>(&QComboBox::activated), this, [from, to, sendRange, entryRange](int entry)
+        {
+            const QStringList numbers = entryRange(entry);
+            if (numbers.size() != 2) return;
+            from->setText(numbers[0]);
+            to->setText(numbers[1]);
+            sendRange();
         });
+        const auto typedCustom = [range] { range->setCurrentIndex(kCustom); };
+        connect(from, &QLineEdit::textEdited, this, typedCustom);
+        connect(to, &QLineEdit::textEdited, this, typedCustom);
+        connect(from, &QLineEdit::editingFinished, this, matchRange);
+        connect(to, &QLineEdit::editingFinished, this, matchRange);
+        connect(masteringPeak, &QLineEdit::editingFinished, this, [labelRange, matchRange]
+        {
+            labelRange();
+            matchRange();
+        });
+
+        nitsPanel->layout()->addWidget(row({ fieldWithHelp(QStringLiteral("Range"), range, QString()) }));
+        nitsPanel->layout()->addWidget(row({
+            fieldWithHelp(QStringLiteral("From, cd/m2"), from, QStringLiteral("Default: 0.")),
+            fieldWithHelp(QStringLiteral("To, cd/m2"), to, QStringLiteral("Default: 75.")) }));
         auto* peakStatus = helpLabel(QString());
         peakStatus->setObjectName(QStringLiteral("config.pattern.nits.display_peak"));
-        refreshPatternDisplayPeak_ = [this, displayPeak, guardedUpTo = QPointer<QPushButton>(upTo),
-            guardedAbove = QPointer<QPushButton>(above), guardedStatus = QPointer<QLabel>(peakStatus)]
+        // Every status poll: the labels follow the display peak; the match is
+        // left alone while From or To is being typed in.
+        refreshPatternDisplayPeak_ = [this, displayPeak, labelRange, matchRange,
+            guardedRange = QPointer<QComboBox>(range), guardedFrom = QPointer<QLineEdit>(from),
+            guardedTo = QPointer<QLineEdit>(to), guardedStatus = QPointer<QLabel>(peakStatus)]
         {
-            if (!guardedUpTo || !guardedAbove || !guardedStatus) return;
+            if (!guardedRange || !guardedFrom || !guardedTo || !guardedStatus) return;
+            labelRange();
+            if (!guardedFrom->hasFocus() && !guardedTo->hasFocus()) matchRange();
             const QString peak = displayPeak();
-            guardedUpTo->setEnabled(!peak.isEmpty());
-            guardedAbove->setEnabled(!peak.isEmpty());
             const QString text = peak.isEmpty() ?
                 QStringLiteral("Display peak: not known until VP reports its active Rendering profile.") :
                 QStringLiteral("Display peak: %1 cd/m2, the target nits of VP's active Rendering profile [%2], as saved.")
                     .arg(peak, patternRenderingProfile_);
             if (guardedStatus->text() != text) guardedStatus->setText(text);
         };
-        auto* nearBlack = new QPushButton(QStringLiteral("Near black"));
-        nearBlack->setObjectName(QStringLiteral("config.pattern.nits.near_black"));
-        auto* top = new QComboBox;
-        top->setObjectName(QStringLiteral("config.pattern.nits.near_black_top"));
-        top->setAccessibleName(QStringLiteral("Near black, up to"));
-        for (const char* nits : { "0.5", "1", "2" })
-            top->addItem(QStringLiteral("up to %1 cd/m2").arg(QString::fromUtf8(nits)), QString::fromUtf8(nits));
-        top->setCurrentIndex(1);
-        const auto setNearBlack = [setRange, top] { setRange(QStringLiteral("0"), top->currentData().toString()); };
-        connect(nearBlack, &QPushButton::clicked, this, setNearBlack);
-        connect(top, qOverload<int>(&QComboBox::activated), this, setNearBlack);
-        nitsPanel->layout()->addWidget(row({ upTo, above, nearBlack, top }));
         nitsPanel->layout()->addWidget(peakStatus);
         nitsPanel->layout()->addWidget(helpLabel(QStringLiteral(
             "24 bars an equal number of PQ codes apart, each labelled with its cd/m2 and code. "
@@ -11732,15 +11813,24 @@ QWidget* ConfigEditorWindow::createPatternPage()
         typedField(QStringLiteral("ramp_peak"), QStringLiteral("1000")), QStringLiteral("Default: 1000.")));
 
     // The DTM chart's bright patch.
+    // Hold and Patch size side by side at their own widths (A197): the patch
+    // size drop-down is as wide as its longest entry, and the sentence that
+    // would stretch its column sits under the row.
     QWidget* dtmPanel = newPanel();
-    dtmPanel->layout()->addWidget(row({
-        fieldWithHelp(QStringLiteral("Hold each size, s"), typedField(QStringLiteral("dtm_hold"), QStringLiteral("5")),
-            QStringLiteral("1 to 60. Default: 5.")),
-        fieldWithHelp(QStringLiteral("Patch size"), choiceField(QStringLiteral("dtm_size"),
+    {
+        QComboBox* patchSize = choiceField(QStringLiteral("dtm_size"),
             { QStringLiteral("cycle"), QStringLiteral("1"), QStringLiteral("10"), QStringLiteral("25"), QStringLiteral("50") },
             { QStringLiteral("Cycle 1, 10, 25, 50 %"), QStringLiteral("1 %"), QStringLiteral("10 %"),
-              QStringLiteral("25 %"), QStringLiteral("50 %") }),
-            QStringLiteral("The patch is drawn at MaxCLL, or the peak mastering luminance without one.")) }));
+              QStringLiteral("25 %"), QStringLiteral("50 %") });
+        patchSize->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+        patchSize->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        dtmPanel->layout()->addWidget(row({
+            fieldWithHelp(QStringLiteral("Hold each size, s"), typedField(QStringLiteral("dtm_hold"), QStringLiteral("5")),
+                QStringLiteral("1 to 60. Default: 5.")),
+            fieldWithHelp(QStringLiteral("Patch size"), patchSize, QString()) }));
+        dtmPanel->layout()->addWidget(helpLabel(
+            QStringLiteral("The patch is drawn at MaxCLL, or the peak mastering luminance without one.")));
+    }
 
     // Which chart uses which settings, in the order they show.
     struct PanelUse { QWidget* panel; QStringList charts; };
@@ -11818,7 +11908,7 @@ QWidget* ConfigEditorWindow::createPatternPage()
     std::vector<QComboBox*> pickers;
     std::vector<QVBoxLayout*> settingsAreas;
     // Each group's drop-down, card and charts, refilled for each Chart signal.
-    struct GroupView { QComboBox* picker; QWidget* card; std::vector<ChartItem> charts; };
+    struct GroupView { QComboBox* picker; QWidget* card; QVBoxLayout* settings; std::vector<ChartItem> charts; };
     const auto views = std::make_shared<std::vector<GroupView>>();
     for (const ChartGroup& group : groups)
     {
@@ -11880,18 +11970,20 @@ QWidget* ConfigEditorWindow::createPatternPage()
 
         QWidget* card = createCard(title, QString(), body);
         layout->addWidget(card);
-        views->push_back({ picker, card, group.charts });
+        views->push_back({ picker, card, settings, group.charts });
     }
     // The drop-downs list the charts drawn for this signal; a group with none
-    // hides. A chart still listed stays picked. False if the chart this page
-    // showed is no longer listed.
+    // hides. A chart still listed stays picked; a colour ramp or a twin moves
+    // to the chart that follows it to this signal (A198), in the same group.
+    // False if the chart this page showed is no longer listed.
     const auto showing = std::make_shared<QPointer<QComboBox>>();
     const auto fillPickers = [views, showing](const QString& signal)
     {
         bool kept = true;
         for (GroupView& view : *views)
         {
-            const QString current = view.picker->currentData().toString();
+            const QString current = QString::fromStdString(PatternChartSignal::Follow(
+                view.picker->currentData().toString().toStdString(), signal.toStdString()));
             view.picker->clear();
             view.picker->addItem(QStringLiteral("Pick a chart"), QString());
             for (const ChartItem& chart : view.charts)
@@ -11906,11 +11998,19 @@ QWidget* ConfigEditorWindow::createPatternPage()
     };
     fillPickers(chartSignal->currentData().toString());
     // A new Chart signal (choiceField has saved and sent it): the lists follow
-    // it, and a chart on screen that is not drawn for it is taken off.
+    // it. A colour ramp or twin on screen has followed it in the generator
+    // too, so its settings follow here; any other chart on screen that is not
+    // drawn for it is taken off.
     connect(chartSignal, qOverload<int>(&QComboBox::currentIndexChanged), this,
-        [chartSignal, fillPickers, showing, showSettings, send](int)
+        [chartSignal, fillPickers, showing, showSettings, views, send](int)
     {
-        if (fillPickers(chartSignal->currentData().toString())) return;
+        if (fillPickers(chartSignal->currentData().toString()))
+        {
+            for (const GroupView& view : *views)
+                if (showing->data() == view.picker)
+                    showSettings(view.picker->currentData().toString(), view.settings);
+            return;
+        }
         showing->clear();
         showSettings(QString(), nullptr);
         send(QStringLiteral("chart off"));
@@ -11953,6 +12053,32 @@ QWidget* ConfigEditorWindow::createPatternPage()
         showSettings(QString(), nullptr);
         send(QStringLiteral("chart off"));
     });
+    // A ColourSpace patch, blank or lost link replaces the page's chart in the
+    // generator (A202). On Config's status tick, only while this page has a
+    // chart up and no chart command is unanswered, ask whether it is still
+    // showing (PatgenChartShowing.h); on ColourSpace's no, every drop-down
+    // reads "Pick a chart" and the settings close. Nothing is sent: the
+    // screen is ColourSpace's. No more asking until a chart is picked.
+    const auto asking = std::make_shared<bool>(false);
+    checkPatternChartShowing_ = [this, pickers, showing, showSettings, asking, chartCommands, chartPending]
+    {
+        if (*asking || *chartPending > 0 || !showing->data() || noTarget_ || testMode_) return;
+        *asking = true;
+        const uint64_t askedAfter = *chartCommands;
+        runTargetAction(QStringLiteral("pattern.") + QString::fromUtf8(PatgenChartShowing::Command),
+            [pickers, showing, showSettings, asking, chartCommands, askedAfter](bool sent, const QString& error)
+        {
+            *asking = false;
+            if (sent || error != QString::fromUtf8(PatgenChartShowing::ColourSpaceHasScreen) ||
+                *chartCommands != askedAfter || !showing->data())
+                return;
+            for (QComboBox* picker : pickers)
+                picker->setCurrentIndex(0);
+            showing->clear();
+            showSettings(QString(), nullptr);
+        });
+    };
+
     auto* offRow = new QHBoxLayout;
     offRow->addWidget(off);
     offRow->addStretch();
@@ -11965,7 +12091,7 @@ QWidget* ConfigEditorWindow::createPatternPage()
 
     return createPage(QStringLiteral("Pattern generator"),
         QStringLiteral("The VP TPG input: ColourSpace's patches and built-in charts. Chart settings are used and "
-            "saved as you change them. Applying a ColourSpace card change offers to restart the input, "
+            "saved as you change them. Applying a Signal or ColourSpace patches change offers to restart the input, "
             "which uses it from then on."), content);
 }
 
