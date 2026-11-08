@@ -64,8 +64,9 @@ namespace PatternChartSignal
         // Sharpness and aspect under every signal (ledger A199): under PQ
         // their white is VP's target nits, capped at 203 cd/m2. One focus
         // chart, its width and colour its own settings (A219 (12)).
+        // The saturation chart under every signal too (A246).
         static const char* const every[] = {
-            "resolution", "focus",
+            "sat_sweep", "resolution", "focus",
             "aspect_1.33", "aspect_1.78", "aspect_1.85", "aspect_1.896", "aspect_2.00", "aspect_2.39",
         };
         for (const char* id : every)
