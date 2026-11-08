@@ -11880,6 +11880,25 @@ QWidget* ConfigEditorWindow::createPatternPage()
             fieldWithHelp(QStringLiteral("Colour"), colour, QStringLiteral("Default: White.")) }));
     }
 
+    // The saturation chart (A246): its full colour's level, % of white's
+    // light, and its PQ white, VP's target white unless one is typed.
+    QWidget* saturationPanel = newPanel();
+    {
+        QComboBox* level = choiceField(QStringLiteral("sat_level"),
+            { QStringLiteral("100"), QStringLiteral("75"), QStringLiteral("50"), QStringLiteral("25") },
+            { QStringLiteral("100 %"), QStringLiteral("75 %"), QStringLiteral("50 %"), QStringLiteral("25 %") });
+        level->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+        level->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        saturationPanel->layout()->addWidget(row({
+            fieldWithHelp(QStringLiteral("Full colour at"), level,
+                QStringLiteral("Of white's light. Default: 100 %.")),
+            fieldWithHelp(QStringLiteral("PQ white, cd/m2"), typedField(QStringLiteral("sat_peak"), QStringLiteral("none")),
+                QStringLiteral("Default: none, VP's target white.")) }));
+        saturationPanel->layout()->addWidget(helpLabel(QStringLiteral(
+            "Each row steps from grey to the Chart signal's full colour at one brightness. "
+            "The % labels follow \"Code and % under each bar\" in Clipping.")));
+    }
+
     // Which chart uses which settings, in the order they show.
     struct PanelUse { QWidget* panel; QStringList charts; };
     const std::vector<PanelUse> panels =
@@ -11890,6 +11909,7 @@ QWidget* ConfigEditorWindow::createPatternPage()
         { rampPanel, { QStringLiteral("grey_ramp_pq") } },
         { dtmPanel, { QStringLiteral("dtm_response") } },
         { focusPanel, { QStringLiteral("focus") } },
+        { saturationPanel, { QStringLiteral("sat_sweep") } },
     };
     // Moves the picked chart's settings into its card; hides the rest.
     const auto showSettings = [panels](const QString& chart, QVBoxLayout* settings)
@@ -11963,7 +11983,8 @@ QWidget* ConfigEditorWindow::createPatternPage()
             { "PQ ramp to a peak", "grey_ramp_pq" }, { "10-bit gradient", "gradient_10bit" } } },
         { "Colour ramps", { { "BT.709", "ramp_709" }, { "BT.2020 SDR", "ramp_2020_sdr" },
             { "BT.2020 PQ", "ramp_2020_pq" }, { "P3 in BT.2020 SDR", "ramp_p3_sdr" },
-            { "P3 in BT.2020 PQ", "ramp_p3_pq" }, { "DTM response", "dtm_response" } } },
+            { "P3 in BT.2020 PQ", "ramp_p3_pq" }, { "DTM response", "dtm_response" },
+            { "Saturation", "sat_sweep" } } },
         { "Sharpness", { { "Resolution", "resolution" }, { "Focus", "focus" } } },
         { "Aspect", { { "1.33", "aspect_1.33" }, { "1.78", "aspect_1.78" }, { "1.85", "aspect_1.85" },
             { "1.896 (4096x2160)", "aspect_1.896" }, { "2.00", "aspect_2.00" }, { "2.39", "aspect_2.39" } } },
