@@ -13050,10 +13050,11 @@ void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
 	CString activeState;
 	bool rendererRestartRequired = false;
 	bool liveResetRequired = false;
-	// Config's "Crop exactly to the chart" switch (PatgenNoCrop.h, A200): the
-	// renderer gets a copy with the Zoom set aside and a configuration copy
-	// whose active Screen section crops exactly to the chart's ratio; the
-	// runtime's snapshot and the file are untouched.
+	// Config's "Crop exactly to the chart" switch (PatgenNoCrop.h, A200,
+	// A229): the renderer gets a copy whose Zoom group selects PATGEN's own
+	// Zoom profile, added to a configuration copy, cropping exactly to the
+	// chart's ratio; the operator's Screen and every other profile apply as
+	// configured; the runtime's snapshot and the file are untouched.
 	UnifiedProfileRuntime::Snapshot exactCrop;
 	const bool cropping = !m_patgenOneToOne && !m_patgenExactCrop.empty() && snapshot->configuration;
 	// A native-raster chart (PatgenNoCrop.h, A201): Screen and Zoom both set
@@ -13071,23 +13072,22 @@ void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
 	else if (cropping)
 	{
 		exactCrop = *snapshot;
-		PatgenNoCrop::SetAsideZoom(exactCrop.effectiveSelections);
 		const ConfigFile& file = *snapshot->configuration;
-		const std::string screen = PatgenNoCrop::ScreenSection(
-			ConfigFile::NormalizeName(snapshot->viewport.profile),
-			RendererProfileConfig::IsTargetModel(file), file.HasSection("vprenderer.viewport"));
 		auto copy = std::make_shared<ConfigFile>(file);
-		PatgenNoCrop::CropExactly(*copy, screen, m_patgenExactCrop);
+		const std::string zoom = PatgenNoCrop::CropExactly(*copy,
+			RendererProfileConfig::IsTargetModel(file), exactCrop.effectiveSelections, m_patgenExactCrop);
 		exactCrop.configuration = copy;
-		exactCrop.viewport.zoomProfile = PatgenNoCrop::SetAsideName;
+		exactCrop.viewport.zoomProfile = zoom.substr(zoom.rfind('.') + 1);
 		exactCrop.viewport.automaticCrop = false;
 		exactCrop.viewport.cropNarrowerContentToFillScreen = false;
 		exactCrop.viewport.cropWiderContentToFillScreen = false;
 		std::string ratioError;
 		exactCrop.viewport.hasFixedCropAspect = AspectRatioParser::Parse(
 			m_patgenExactCrop, 1.0, 4.0, exactCrop.viewport.fixedCropAspect, ratioError);
-		DebugLog::Log("PATGEN crop exactly to the chart: [%s] fixed_crop_aspect %s, automatic crop off, zoom set aside",
-			screen.c_str(), m_patgenExactCrop.c_str());
+		DebugLog::Log("PATGEN crop exactly to the chart: [%s] fixed_crop_aspect %s, automatic crop off, "
+			"selected in place of zoom profile '%s'; screen profile '%s' as configured",
+			zoom.c_str(), m_patgenExactCrop.c_str(), snapshot->viewport.zoomProfile.c_str(),
+			snapshot->viewport.profile.c_str());
 	}
 	if (!m_videoRenderer->ApplyApplicationState(
 		cropping || m_patgenOneToOne ? exactCrop : *snapshot, activeState, rendererRestartRequired, liveResetRequired))

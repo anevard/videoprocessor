@@ -44,14 +44,19 @@ public:
 	// Sets one value in this object only; the file is never written. For a
 	// copy VP hands its renderer while the pattern generator's "Crop exactly
 	// to the chart" switch is on (PatgenNoCrop.h). A missing section is added
-	// at the end of the order. Header-only: no member is added, so the
-	// renderer DLL's own ConfigFile copy reads the object unchanged.
+	// at the end of the order, or at its front when first is true (a group
+	// with no root section takes its first named profile as its baseline).
+	// Header-only: no member is added, so the renderer DLL's own ConfigFile
+	// copy reads the object unchanged.
 	void SetValueInMemory(const std::string& section, const std::string& key,
-		const std::string& value)
+		const std::string& value, bool first = false)
 	{
 		const std::string name = NormalizeName(section);
 		if (m_sections.find(name) == m_sections.end())
-			m_sectionOrder.push_back(name);
+		{
+			if (first) m_sectionOrder.insert(m_sectionOrder.begin(), name);
+			else m_sectionOrder.push_back(name);
+		}
 		m_sections[name][NormalizeName(key)] = value;
 	}
 
