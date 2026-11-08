@@ -348,6 +348,9 @@ private:
     std::function<void()> refreshPatternDisplayPeak_;
     // On the status tick: has ColourSpace replaced the Patterns page's chart? (A202)
     std::function<void()> checkPatternChartShowing_;
+    // On the first status tick that reaches VP after the Patterns page is
+    // built: a chart an earlier page left up is taken off (A219 (2)).
+    std::function<void()> clearPatternChartOnOpen_;
     // Rendering / DTM: before Save or Apply, writes every rendering profile's
     // settings explicitly so none inherits from the default profile.
     std::function<void()> freezeRenderingProfiles_;

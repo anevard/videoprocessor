@@ -2759,6 +2759,8 @@ void ConfigEditorWindow::applyActiveProfileIndicators(bool available,
     if (refreshPatternDisplayPeak_) refreshPatternDisplayPeak_();
     // The Patterns page's chart, replaced by ColourSpace? (A202)
     if (checkPatternChartShowing_) checkPatternChartShowing_();
+    // A newly built Patterns page reads "Pick a chart"; so does the screen (A219 (2)).
+    if (available && clearPatternChartOnOpen_) clearPatternChartOnOpen_();
 
     refreshRendererAutoStatus();
 }
@@ -11583,6 +11585,9 @@ QWidget* ConfigEditorWindow::createPatternPage()
         });
         return combo;
     };
+    // Side by side from the left at their own widths, labels on one line,
+    // whatever the window's width (A197 (b), A219 (6)): a cell never grows,
+    // even when it holds a line edit, which expands by default.
     const auto row = [](std::initializer_list<QWidget*> widgets)
     {
         auto* line = new QWidget;
@@ -11590,7 +11595,10 @@ QWidget* ConfigEditorWindow::createPatternPage()
         lineLayout->setContentsMargins(0, 0, 0, 0);
         lineLayout->setSpacing(16);
         for (QWidget* widget : widgets)
-            lineLayout->addWidget(widget);
+        {
+            widget->setSizePolicy(QSizePolicy::Maximum, widget->sizePolicy().verticalPolicy());
+            lineLayout->addWidget(widget, 0, Qt::AlignTop);
+        }
         lineLayout->addStretch();
         return line;
     };
@@ -11600,8 +11608,16 @@ QWidget* ConfigEditorWindow::createPatternPage()
     // (PatgenSdrGamma.h; [pattern] sdr_gamma_route and sdr_gamma_check_ms).
 
     // The HDR10 block: every PQ chart, on or off; its primaries are the Chart
-    // signal's (A183 (3) (g)). Its luminances hide while it is off.
-    QWidget* hdr10Panel = newPanel();
+    // signal's (A183 (3) (g)). Its luminances hide while it is off. One card
+    // under the Chart signal, shown only while that signal is PQ (A219 (5),
+    // operator: "one setting for the pattern generator. Near the top"); low
+    // values left of high ones.
+    auto* hdr10Panel = new QWidget(content);
+    {
+        auto* panelLayout = new QVBoxLayout(hdr10Panel);
+        panelLayout->setContentsMargins(0, 0, 0, 0);
+        panelLayout->setSpacing(10);
+    }
     QLineEdit* masteringPeak = nullptr;
     {
         QCheckBox* block = bindCheckField(QStringLiteral("Send the HDR10 block"), section, QStringLiteral("hdr10"), true);
@@ -11626,13 +11642,13 @@ QWidget* ConfigEditorWindow::createPatternPage()
         masteringPeak = typedField(QStringLiteral("hdr10_peak"), QStringLiteral("1000"));
         QLineEdit* masteringMin = typedField(QStringLiteral("hdr10_min"), QStringLiteral("0.0001"));
         luminancesLayout->addWidget(row({
-            fieldWithHelp(QStringLiteral("Peak mastering luminance, cd/m2"), masteringPeak, QStringLiteral("Default: 1000.")),
-            fieldWithHelp(QStringLiteral("Minimum, cd/m2"), masteringMin, QStringLiteral("Default: 0.0001.")) }));
+            fieldWithHelp(QStringLiteral("Minimum mastering luminance, cd/m2"), masteringMin, QStringLiteral("Default: 0.0001.")),
+            fieldWithHelp(QStringLiteral("Peak mastering luminance, cd/m2"), masteringPeak, QStringLiteral("Default: 1000.")) }));
         QLineEdit* maxCll = typedField(QStringLiteral("hdr10_maxcll"), QStringLiteral("none"));
         QLineEdit* maxFall = typedField(QStringLiteral("hdr10_maxfall"), QStringLiteral("none"));
         luminancesLayout->addWidget(row({
-            fieldWithHelp(QStringLiteral("MaxCLL, cd/m2"), maxCll, QStringLiteral("Default: none, not sent.")),
-            fieldWithHelp(QStringLiteral("MaxFALL, cd/m2"), maxFall, QStringLiteral("Default: none, not sent.")) }));
+            fieldWithHelp(QStringLiteral("MaxFALL, cd/m2"), maxFall, QStringLiteral("Default: none, not sent.")),
+            fieldWithHelp(QStringLiteral("MaxCLL, cd/m2"), maxCll, QStringLiteral("Default: none, not sent.")) }));
         hdr10Panel->layout()->addWidget(luminances);
         luminances->setVisible(block->isChecked());
         connect(block, &QCheckBox::toggled, luminances, &QWidget::setVisible);
@@ -11780,6 +11796,14 @@ QWidget* ConfigEditorWindow::createPatternPage()
         QLineEdit* to = liveTextField(QStringLiteral("sdr_to"), QStringLiteral("100"));
         const auto sendRange = [send, from, to, entered, storeLive]
         {
+            // Above 109.5 is set to 109.5, never refused (A219 (3)(d)); the
+            // generator does the same.
+            for (QLineEdit* field : { from, to })
+            {
+                bool number = false;
+                if (field->text().trimmed().toDouble(&number) > 109.5 && number)
+                    field->setText(QStringLiteral("109.5"));
+            }
             storeLive(from, QStringLiteral("sdr_from"));
             storeLive(to, QStringLiteral("sdr_to"));
             send(QStringLiteral("sdr_range %1 %2").arg(entered(from), entered(to)));
@@ -11787,8 +11811,10 @@ QWidget* ConfigEditorWindow::createPatternPage()
         connect(from, &QLineEdit::editingFinished, this, sendRange);
         connect(to, &QLineEdit::editingFinished, this, sendRange);
         sdrRangePanel->layout()->addWidget(row({
-            fieldWithHelp(QStringLiteral("From, %"), from, QStringLiteral("Default: 0.")),
-            fieldWithHelp(QStringLiteral("To, %"), to, QStringLiteral("Default: 100.")) }));
+            fieldWithHelp(QStringLiteral("From, %"), from, QStringLiteral("Default: 0. At most 109.5.")),
+            fieldWithHelp(QStringLiteral("To, %"), to, QStringLiteral("Default: 100. At most 109.5.")) }));
+        sdrRangePanel->layout()->addWidget(helpLabel(QStringLiteral(
+            "A number above 109.5 is set to 109.5. A tick marks where 100 % falls.")));
     }
 
     // The nits charts' colour rows; their primaries are the Chart signal's.
@@ -11824,6 +11850,31 @@ QWidget* ConfigEditorWindow::createPatternPage()
             QStringLiteral("The patch is drawn at MaxCLL, or the peak mastering luminance without one.")));
     }
 
+    // The focus chart's lines (A219 (12)): width and colour, live.
+    QWidget* focusPanel = newPanel();
+    {
+        QComboBox* width = choiceField(QStringLiteral("focus_width"),
+            { QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("3"), QStringLiteral("4") },
+            { QStringLiteral("1 px"), QStringLiteral("2 px"), QStringLiteral("3 px"), QStringLiteral("4 px") });
+        // Unset: the generator's default, 2 px.
+        if (value(section, QStringLiteral("focus_width")).trimmed().isEmpty())
+        {
+            const QSignalBlocker quiet(width);
+            width->setCurrentIndex(width->findData(QStringLiteral("2")));
+        }
+        QComboBox* colour = choiceField(QStringLiteral("focus_colour"),
+            { QStringLiteral("white"), QStringLiteral("red"), QStringLiteral("green"), QStringLiteral("blue") },
+            { QStringLiteral("White"), QStringLiteral("Red"), QStringLiteral("Green"), QStringLiteral("Blue") });
+        for (QComboBox* combo : { width, colour })
+        {
+            combo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+            combo->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        }
+        focusPanel->layout()->addWidget(row({
+            fieldWithHelp(QStringLiteral("Line width"), width, QStringLiteral("Default: 2 px.")),
+            fieldWithHelp(QStringLiteral("Colour"), colour, QStringLiteral("Default: White.")) }));
+    }
+
     // Which chart uses which settings, in the order they show.
     struct PanelUse { QWidget* panel; QStringList charts; };
     const std::vector<PanelUse> panels =
@@ -11833,8 +11884,7 @@ QWidget* ConfigEditorWindow::createPatternPage()
         { coloursPanel, { QStringLiteral("nits_pq"), QStringLiteral("nits_sdr") } },
         { rampPanel, { QStringLiteral("grey_ramp_pq") } },
         { dtmPanel, { QStringLiteral("dtm_response") } },
-        { hdr10Panel, { QStringLiteral("ramp_2020_pq"), QStringLiteral("ramp_p3_pq"), QStringLiteral("nits_pq"),
-            QStringLiteral("grey_ramp_pq"), QStringLiteral("dtm_response") } },
+        { focusPanel, { QStringLiteral("focus") } },
     };
     // Moves the picked chart's settings into its card; hides the rest.
     const auto showSettings = [panels](const QString& chart, QVBoxLayout* settings)
@@ -11865,6 +11915,10 @@ QWidget* ConfigEditorWindow::createPatternPage()
     }
     QComboBox* chartSignal = choiceField(QStringLiteral("chart_signal"),
         QStringList(signalValues.begin(), signalValues.end()), QStringList(signalLabels.begin(), signalLabels.end()));
+    // Shown while the page's chart is not drawn for the Chart signal (A219 (11)).
+    QLabel* refusedNote = helpLabel(QString());
+    refusedNote->setObjectName(QStringLiteral("config.pattern.chart.refused"));
+    refusedNote->hide();
     {
         auto* signalBody = new QWidget;
         auto* signalBodyLayout = new QVBoxLayout(signalBody);
@@ -11873,8 +11927,18 @@ QWidget* ConfigEditorWindow::createPatternPage()
         signalBodyLayout->addWidget(fieldWithHelp(QStringLiteral("Chart signal"), chartSignal,
             QStringLiteral("What every chart is drawn in and declares to VP; ColourSpace's patches keep their own Gamut. "
                 "Only the charts drawn for this signal are listed.")));
+        signalBodyLayout->addWidget(refusedNote);
         layout->addWidget(createCard(QStringLiteral("Charts"), QString(), signalBody));
     }
+    QWidget* hdr10Card = createCard(QStringLiteral("HDR10 block"),
+        QStringLiteral("Every PQ chart."), hdr10Panel);
+    layout->addWidget(hdr10Card);
+    const auto showHdr10 = [hdr10Card](const QString& signal)
+    {
+        const PatternChartSignal::Signal* found = PatternChartSignal::Find(signal.toStdString());
+        hdr10Card->setVisible(found && found->pq);
+    };
+    showHdr10(chartSignal->currentData().toString());
 
     // The charts, by group, each group one drop-down (PLAN.md Phase 3). One
     // chart is on screen at a time, so picking one clears the other groups.
@@ -11884,16 +11948,13 @@ QWidget* ConfigEditorWindow::createPatternPage()
     {
         { "Clipping", { { "Black, grey", "clip_black_grey" }, { "Black, colour", "clip_black" },
             { "White, grey", "clip_white_grey" }, { "White, colour", "clip_white" },
-            { "Nits range, PQ", "nits_pq" }, { "Range, SDR", "nits_sdr" },
-            { "Colour, 72-100 %", "clip_colour" } } },
+            { "Nits range, PQ", "nits_pq" }, { "Range, SDR", "nits_sdr" } } },
         { "Greyscale", { { "Steps", "grey_steps" }, { "Ramp", "grey_ramp" },
-            { "PQ ramp to a peak", "grey_ramp_pq" }, { "10-bit gradient", "gradient_10bit" },
-            { "Gamma check 2.2 / 2.4", "gamma_check" } } },
+            { "PQ ramp to a peak", "grey_ramp_pq" }, { "10-bit gradient", "gradient_10bit" } } },
         { "Colour ramps", { { "BT.709", "ramp_709" }, { "BT.2020 SDR", "ramp_2020_sdr" },
             { "BT.2020 PQ", "ramp_2020_pq" }, { "P3 in BT.2020 SDR", "ramp_p3_sdr" },
             { "P3 in BT.2020 PQ", "ramp_p3_pq" }, { "DTM response", "dtm_response" } } },
-        { "Sharpness", { { "Resolution", "resolution" }, { "Focus, white", "focus_white" },
-            { "Focus, green", "focus_green" } } },
+        { "Sharpness", { { "Resolution", "resolution" }, { "Focus", "focus" } } },
         { "Aspect", { { "1.33", "aspect_1.33" }, { "1.78", "aspect_1.78" }, { "1.85", "aspect_1.85" },
             { "1.896 (4096x2160)", "aspect_1.896" }, { "2.00", "aspect_2.00" }, { "2.39", "aspect_2.39" } } },
     };
@@ -11967,15 +12028,22 @@ QWidget* ConfigEditorWindow::createPatternPage()
     // The drop-downs list the charts drawn for this signal; a group with none
     // hides. A chart still listed stays picked; a colour ramp or a twin moves
     // to the chart that follows it to this signal (A198), in the same group.
-    // False if the chart this page showed is no longer listed.
+    // False if the chart this page showed is not listed for this signal: the
+    // generator then shows its refusal screen, and the chart comes back with
+    // a signal it is drawn for (A219 (11)).
+    // showing: the group whose chart this page put on screen, nullptr for
+    // none; showingChart: that chart, as the generator follows it.
     const auto showing = std::make_shared<QPointer<QComboBox>>();
-    const auto fillPickers = [views, showing](const QString& signal)
+    const auto showingChart = std::make_shared<QString>();
+    const auto fillPickers = [views, showing, showingChart](const QString& signal)
     {
         bool kept = true;
         for (GroupView& view : *views)
         {
+            const QString was = showing->data() == view.picker ? *showingChart : view.picker->currentData().toString();
             const QString current = QString::fromStdString(PatternChartSignal::Follow(
-                view.picker->currentData().toString().toStdString(), signal.toStdString()));
+                was.toStdString(), signal.toStdString()));
+            if (showing->data() == view.picker) *showingChart = current;
             view.picker->clear();
             view.picker->addItem(QStringLiteral("Pick a chart"), QString());
             for (const ChartItem& chart : view.charts)
@@ -11989,31 +12057,40 @@ QWidget* ConfigEditorWindow::createPatternPage()
         return kept;
     };
     fillPickers(chartSignal->currentData().toString());
-    // A new Chart signal (choiceField has saved and sent it): the lists follow
-    // it. A colour ramp or twin on screen has followed it in the generator
-    // too, so its settings follow here; any other chart on screen that is not
-    // drawn for it is taken off.
+    // A new Chart signal (choiceField has saved and sent it): the lists and
+    // the HDR10 card follow it. A colour ramp or twin on screen has followed
+    // it in the generator too, so its settings follow here. Any other chart
+    // on screen that is not drawn for it stays the page's chart: the
+    // generator shows its refusal screen with the reason, never black
+    // (A219 (11), operator: "I would show a refusal screen"), and redraws it
+    // when the signal comes back to one it is drawn for.
     connect(chartSignal, qOverload<int>(&QComboBox::currentIndexChanged), this,
-        [chartSignal, fillPickers, showing, showSettings, views, send](int)
+        [chartSignal, fillPickers, showing, showingChart, showSettings, showHdr10, views, refusedNote, groups](int)
     {
-        if (fillPickers(chartSignal->currentData().toString()))
-        {
-            for (const GroupView& view : *views)
-                if (showing->data() == view.picker)
-                    showSettings(view.picker->currentData().toString(), view.settings);
-            return;
-        }
-        showing->clear();
-        showSettings(QString(), nullptr);
-        send(QStringLiteral("chart off"));
+        const QString signal = chartSignal->currentData().toString();
+        showHdr10(signal);
+        refusedNote->hide();
+        const bool kept = fillPickers(signal);
+        for (const GroupView& view : *views)
+            if (showing->data() == view.picker)
+                showSettings(kept ? view.picker->currentData().toString() : QString(), kept ? view.settings : nullptr);
+        if (kept || !showing->data()) return;
+        QString label = *showingChart;
+        for (const ChartGroup& group : groups)
+            for (const ChartItem& chart : group.charts)
+                if (*showingChart == QString::fromUtf8(chart.id))
+                    label = QStringLiteral("%1, %2").arg(QString::fromUtf8(group.title), QString::fromUtf8(chart.label));
+        refusedNote->setText(QStringLiteral("%1 is not drawn for %2: the screen says so until you pick a chart, "
+            "or a signal it is drawn for.").arg(label, chartSignal->currentText()));
+        refusedNote->show();
     });
 
-    // showing: the group whose chart this page put on screen; nullptr for none.
     for (size_t index = 0; index < pickers.size(); ++index)
     {
         QComboBox* picker = pickers[index];
         QVBoxLayout* settings = settingsAreas[index];
-        connect(picker, qOverload<int>(&QComboBox::activated), this, [send, pickers, picker, settings, showSettings, showing](int item)
+        connect(picker, qOverload<int>(&QComboBox::activated), this,
+            [send, pickers, picker, settings, showSettings, showing, showingChart, refusedNote](int item)
         {
             const QString chart = picker->itemData(item).toString();
             if (chart.isEmpty())
@@ -12023,6 +12100,8 @@ QWidget* ConfigEditorWindow::createPatternPage()
                 // there and does nothing.
                 if (showing->data() != picker) return;
                 showing->clear();
+                showingChart->clear();
+                refusedNote->hide();
                 showSettings(QString(), nullptr);
                 send(QStringLiteral("chart off"));
                 return;
@@ -12030,6 +12109,8 @@ QWidget* ConfigEditorWindow::createPatternPage()
             for (QComboBox* other : pickers)
                 if (other != picker) other->setCurrentIndex(0);
             *showing = picker;
+            *showingChart = chart;
+            refusedNote->hide();
             showSettings(chart, settings);
             send(QStringLiteral("chart %1").arg(chart));
         });
@@ -12037,11 +12118,13 @@ QWidget* ConfigEditorWindow::createPatternPage()
 
     auto* off = new QPushButton(QStringLiteral("Charts off"));
     off->setObjectName(QStringLiteral("config.pattern.chart.off"));
-    connect(off, &QPushButton::clicked, this, [send, pickers, showSettings, showing]
+    connect(off, &QPushButton::clicked, this, [send, pickers, showSettings, showing, showingChart, refusedNote]
     {
         for (QComboBox* picker : pickers)
             picker->setCurrentIndex(0);
         showing->clear();
+        showingChart->clear();
+        refusedNote->hide();
         showSettings(QString(), nullptr);
         send(QStringLiteral("chart off"));
     });
@@ -12052,13 +12135,13 @@ QWidget* ConfigEditorWindow::createPatternPage()
     // reads "Pick a chart" and the settings close. Nothing is sent: the
     // screen is ColourSpace's. No more asking until a chart is picked.
     const auto asking = std::make_shared<bool>(false);
-    checkPatternChartShowing_ = [this, pickers, showing, showSettings, asking, chartCommands, chartPending]
+    checkPatternChartShowing_ = [this, pickers, showing, showingChart, refusedNote, showSettings, asking, chartCommands, chartPending]
     {
         if (*asking || *chartPending > 0 || !showing->data() || noTarget_ || testMode_) return;
         *asking = true;
         const uint64_t askedAfter = *chartCommands;
         runTargetAction(QStringLiteral("pattern.") + QString::fromUtf8(PatgenChartShowing::Command),
-            [pickers, showing, showSettings, asking, chartCommands, askedAfter](bool sent, const QString& error)
+            [pickers, showing, showingChart, refusedNote, showSettings, asking, chartCommands, askedAfter](bool sent, const QString& error)
         {
             *asking = false;
             if (sent || error != QString::fromUtf8(PatgenChartShowing::ColourSpaceHasScreen) ||
@@ -12067,8 +12150,24 @@ QWidget* ConfigEditorWindow::createPatternPage()
             for (QComboBox* picker : pickers)
                 picker->setCurrentIndex(0);
             showing->clear();
+            showingChart->clear();
+            refusedNote->hide();
             showSettings(QString(), nullptr);
         });
+    };
+    // This page is built reading "Pick a chart" (Config's start, a target
+    // switch, Cancel), so the screen must not keep a chart an earlier page put
+    // up (A219 (2), operator: a Config restart clears the screen). Once, on the
+    // first status tick that reaches VP, unless a chart was picked already;
+    // the generator's "chart_clear" leaves a ColourSpace patch alone. Quiet:
+    // an input other than VP TPG has no chart to clear.
+    const auto cleared = std::make_shared<bool>(false);
+    clearPatternChartOnOpen_ = [this, cleared, chartCommands]
+    {
+        if (*cleared || noTarget_ || testMode_) return;
+        *cleared = true;
+        if (*chartCommands > 0) return;
+        runTargetAction(QStringLiteral("pattern.chart_clear"), [](bool, const QString&) {});
     };
 
     auto* offRow = new QHBoxLayout;
