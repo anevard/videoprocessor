@@ -41,6 +41,7 @@ namespace PatternLiveKeys
             "nits_from", "nits_to", "sdr_from", "sdr_to",
             "saturation", "ramp_peak", "dtm_hold", "dtm_size",
             "focus_width", "focus_colour",
+            "sat_level", "sat_peak",
         };
         for (const char* name : live)
             if (SameName(key, name)) return true;
