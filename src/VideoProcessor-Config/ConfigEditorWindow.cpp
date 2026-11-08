@@ -11505,12 +11505,16 @@ QWidget* ConfigEditorWindow::createPatternPage()
     port->setPlaceholderText(QStringLiteral("20002"));
     port->setMaximumWidth(108);
     signalLayout->addWidget(fieldWithHelp(QStringLiteral("Port"), port, QStringLiteral("Default: 20002.")));
-    signalLayout->addWidget(fieldWithHelp(QStringLiteral("Gamut"),
-        bindChoiceField(section, QStringLiteral("gamut"),
-            { QStringLiteral("bt709"), QStringLiteral("bt2020"), QStringLiteral("p3_bt2020") },
-            { QStringLiteral("BT.709"), QStringLiteral("BT.2020"), QStringLiteral("BT.2020, P3 mastering") }),
+    // A230 (1): two PQ entries; their HDR10 block is the one HDR10 card's.
+    QComboBox* patchGamut = bindChoiceField(section, QStringLiteral("gamut"),
+        { QStringLiteral("bt709"), QStringLiteral("bt2020"), QStringLiteral("p3_bt2020"),
+            QStringLiteral("bt2020_pq"), QStringLiteral("p3_bt2020_pq") },
+        { QStringLiteral("BT.709"), QStringLiteral("BT.2020"), QStringLiteral("BT.2020, P3 mastering"),
+            QStringLiteral("BT.2020, PQ"), QStringLiteral("BT.2020 PQ, P3 mastering") });
+    signalLayout->addWidget(fieldWithHelp(QStringLiteral("Gamut"), patchGamut,
         QStringLiteral("What VP is told ColourSpace's patches are; never the charts, which follow the Chart signal. "
-            "P3 mastering: the same codes, declared as P3 inside BT.2020.")));
+            "ColourSpace's numbers are always sent unchanged. P3 mastering: declared as P3 inside BT.2020. "
+            "PQ: the HDR10 block card decides the block.")));
     signalLayout->addWidget(bindCheckField(QStringLiteral("Log every ColourSpace message"), section,
         QStringLiteral("log_messages")));
     layout->addWidget(collapsibleCard(QStringLiteral("ColourSpace patches"),
@@ -11634,7 +11638,8 @@ QWidget* ConfigEditorWindow::createPatternPage()
         });
         hdr10Panel->layout()->addWidget(block);
         hdr10Panel->layout()->addWidget(helpLabel(QStringLiteral(
-            "Carried by the PQ charts, in the Chart signal's primaries: P3 for P3 in BT.2020 PQ, else BT.2020.")));
+            "Carried by the PQ charts, in the Chart signal's primaries: P3 for P3 in BT.2020 PQ, else BT.2020. "
+            "Also by ColourSpace's PQ patches, in their Gamut's primaries.")));
         auto* luminances = new QWidget;
         auto* luminancesLayout = new QVBoxLayout(luminances);
         luminancesLayout->setContentsMargins(0, 0, 0, 0);
@@ -11931,14 +11936,19 @@ QWidget* ConfigEditorWindow::createPatternPage()
         layout->addWidget(createCard(QStringLiteral("Charts"), QString(), signalBody));
     }
     QWidget* hdr10Card = createCard(QStringLiteral("HDR10 block"),
-        QStringLiteral("Every PQ chart."), hdr10Panel);
+        QStringLiteral("Every PQ chart and every PQ ColourSpace patch."), hdr10Panel);
     layout->addWidget(hdr10Card);
-    const auto showHdr10 = [hdr10Card](const QString& signal)
+    // Shown while the Chart signal or the patches' Gamut is PQ (A230 (1)).
+    const auto showHdr10 = [hdr10Card, patchGamut](const QString& signal)
     {
-        const PatternChartSignal::Signal* found = PatternChartSignal::Find(signal.toStdString());
-        hdr10Card->setVisible(found && found->pq);
+        hdr10Card->setVisible(PatternChartSignal::Hdr10CardShown(signal.toStdString(),
+            patchGamut->currentData().toString().toStdString()));
     };
     showHdr10(chartSignal->currentData().toString());
+    connect(patchGamut, qOverload<int>(&QComboBox::currentIndexChanged), this, [chartSignal, showHdr10](int)
+    {
+        showHdr10(chartSignal->currentData().toString());
+    });
 
     // The charts, by group, each group one drop-down (PLAN.md Phase 3). One
     // chart is on screen at a time, so picking one clears the other groups.
