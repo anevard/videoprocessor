@@ -62,17 +62,20 @@ namespace PatternChartSignal
         // The PQ charts under both PQ signals.
         if (chart == "nits_pq" || chart == "grey_ramp_pq" || chart == "dtm_response") return found->pq;
         // Sharpness and aspect under every signal (ledger A199): under PQ
-        // their white is VP's target nits, capped at 203 cd/m2.
+        // their white is VP's target nits, capped at 203 cd/m2. One focus
+        // chart, its width and colour its own settings (A219 (12)).
         static const char* const every[] = {
-            "resolution", "focus_white", "focus_green",
+            "resolution", "focus",
             "aspect_1.33", "aspect_1.78", "aspect_1.85", "aspect_1.896", "aspect_2.00", "aspect_2.39",
         };
         for (const char* id : every)
             if (chart == id) return true;
-        // Every other chart under the three SDR signals.
+        // Every other chart under the three SDR signals ("Range, SDR" does
+        // the colour clipping chart's job, and gamma_check is gone: A219 (3),
+        // (8)).
         static const char* const sdr[] = {
-            "clip_black", "clip_black_grey", "clip_white", "clip_white_grey", "nits_sdr", "clip_colour",
-            "grey_steps", "grey_ramp", "gradient_10bit", "gamma_check",
+            "clip_black", "clip_black_grey", "clip_white", "clip_white_grey", "nits_sdr",
+            "grey_steps", "grey_ramp", "gradient_10bit",
         };
         for (const char* id : sdr)
             if (chart == id) return !found->pq;
