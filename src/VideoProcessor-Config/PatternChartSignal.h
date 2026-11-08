@@ -104,4 +104,19 @@ namespace PatternChartSignal
         if (chart == "grey_ramp_pq" || chart == "grey_ramp") return found->pq ? "grey_ramp_pq" : "grey_ramp";
         return chart;
     }
+
+    // The ColourSpace patches' Gamut ([pattern] gamut) is PQ (A230 (1)):
+    // "BT.2020, PQ" or "BT.2020 PQ, P3 mastering".
+    inline bool PatchGamutIsPq(const std::string& gamut)
+    {
+        return gamut == "bt2020_pq" || gamut == "p3_bt2020_pq";
+    }
+
+    // The HDR10 block card, one for the charts and the patches, shows while
+    // the Chart signal or the patches' Gamut is PQ (A230 (1)).
+    inline bool Hdr10CardShown(const std::string& chartSignal, const std::string& gamut)
+    {
+        const Signal* found = Find(chartSignal);
+        return (found && found->pq) || PatchGamutIsPq(gamut);
+    }
 }
