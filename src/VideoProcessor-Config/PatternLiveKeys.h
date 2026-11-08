@@ -40,6 +40,7 @@ namespace PatternLiveKeys
             "hdr10", "hdr10_peak", "hdr10_min", "hdr10_maxcll", "hdr10_maxfall",
             "nits_from", "nits_to", "sdr_from", "sdr_to",
             "saturation", "ramp_peak", "dtm_hold", "dtm_size",
+            "focus_width", "focus_colour",
         };
         for (const char* name : live)
             if (SameName(key, name)) return true;

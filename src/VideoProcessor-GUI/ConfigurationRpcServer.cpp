@@ -5,6 +5,8 @@
 #include "ConfigurationRpcServer.h"
 #include "ActiveProfileStatus.h"
 #include "DisplayMonitorInventory.h"
+#include <DebugLog.h>
+#include <source_plugin/PatgenCommandLog.h>
 
 #include <algorithm>
 #include <array>
@@ -95,6 +97,28 @@ Frame DisplayModesResponse(const Frame& request)
     response.operation = static_cast<uint16_t>(request.operation | ResponseFlag);
     if (!BuildDisplayModes(value, response.payload)) return ErrorResponse(request.operation, "Display-mode inventory exceeds the supported limit.");
     return response;
+}
+
+// TEMPORARY, REMOVE ONCE FOUND (A219 (1); PatgenCommandLog.h says why): one
+// vp.log line per Patterns page command answered, with the sending PC.
+void LogPatternCommand(SOCKET client, const Frame& request, const Frame& response)
+{
+	size_t cursor = 2;
+	std::string action;
+	if (!ReadString(request.payload, cursor, action) || !PatgenCommandLog::Logged(action))
+		return;
+	std::string from;
+	sockaddr_in peer{};
+	int peerSize = sizeof(peer);
+	char text[INET_ADDRSTRLEN] = {};
+	if (getpeername(client, reinterpret_cast<sockaddr*>(&peer), &peerSize) == 0 &&
+		inet_ntop(AF_INET, &peer.sin_addr, text, sizeof(text)))
+		from = text;
+	const bool accepted = (response.operation & ErrorFlag) == 0;
+	std::string answer;
+	size_t answerCursor = 0;
+	if (!accepted) ReadString(response.payload, answerCursor, answer);
+	DebugLog::Log("%s", PatgenCommandLog::Line(from, action, accepted, answer).c_str());
 }
 
 bool PrivatePeer(const sockaddr_in& peer)
@@ -402,6 +426,8 @@ void ConfigurationRpcServer::HandleClient(uintptr_t rawSocket)
 	Frame response = operation == static_cast<uint16_t>(Operation::GetActiveProfileStatus) ?
 		ActiveProfileResponse(request) : operation == static_cast<uint16_t>(Operation::GetDisplayModes) ?
         DisplayModesResponse(request) : Dispatch(request);
+	if (operation == static_cast<uint16_t>(Operation::RunAction))
+		LogPatternCommand(client, request, response); // TEMPORARY (A219 (1))
 	std::vector<uint8_t> encoded;
 	if (Encode(response, encoded)) SendExact(client, encoded.data(), encoded.size());
 }
