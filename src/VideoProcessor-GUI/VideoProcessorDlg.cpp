@@ -79,6 +79,7 @@ static UINT vpUpdateExitMessage = RegisterWindowMessageW(L"VideoProcessor.Update
 #include <source_plugin/PatgenTargetNits.h>
 #include <source_plugin/PatgenNoCrop.h>
 #include <source_plugin/PatgenChartShowing.h>
+#include <source_plugin/PatgenRawOutput.h>
 #include <MainConfigSchema.h>
 #include <UnifiedProfileRuntime.h>
 
@@ -3184,6 +3185,19 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 					}
 					return ConfigurationRpcError(operation, PatgenChartShowing::ColourSpaceHasScreen);
 				}
+				Frame response;
+				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+				return response;
+			}
+			// The Patterns page's raw box reads the generator's live state
+			// (PatgenRawOutput.h): OK for on, refused with Off for off.
+			if (command == PatgenRawOutput::StateCommand)
+			{
+				if (PatgenRawOutput::IsOff(result))
+					return ConfigurationRpcError(operation, PatgenRawOutput::Off);
+				if (!PatgenRawOutput::IsOn(result))
+					return ConfigurationRpcError(operation,
+						"The pattern generator did not answer raw_state (" + std::to_string(result) + ").");
 				Frame response;
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;
