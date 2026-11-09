@@ -412,6 +412,12 @@ namespace SourcePluginBackend
 		return plugin && plugin->NameUtf8() == nameUtf8;
 	}
 
+	bool SourcePluginNativeRaster(ACaptureDevice* device)
+	{
+		SourcePluginCaptureDevice* plugin = dynamic_cast<SourcePluginCaptureDevice*>(device);
+		return plugin && plugin->NativeRaster();
+	}
+
 	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8, int32_t* result)
 	{
 		SourcePluginCaptureDevice* plugin = dynamic_cast<SourcePluginCaptureDevice*>(device);

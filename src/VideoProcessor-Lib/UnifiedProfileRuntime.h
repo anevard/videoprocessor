@@ -92,6 +92,18 @@ namespace UnifiedProfileRuntime
 		bool PrepareManualAction(const std::string& name,
 			ActionInvocation& invocation, std::string& error) const;
 
+		// A measurement's pick (a source plugin's run, vp_source_plugin.h
+		// version 6): the group selects exactly this one profile, as a live
+		// shortcut would, but it is never persisted. ReleaseTemporaryProfiles
+		// puts every group picked so back exactly as it was before its first
+		// pick (manual choice and shortcut override both), unpersisted too.
+		bool SelectTemporaryProfile(const std::string& group, const std::string& profile,
+			const DisplayRuleExpression::ValueLookup& sourceValues,
+			SelectionResult& result, std::string& error);
+		bool ReleaseTemporaryProfiles(
+			const DisplayRuleExpression::ValueLookup& sourceValues,
+			SelectionResult& result, std::string& error);
+
 		// Advances each ordered group whose profiles share this cycle key.
 		bool SelectCycleKey(const std::string& key,
 			const DisplayRuleExpression::ValueLookup& sourceValues,
@@ -167,5 +179,17 @@ namespace UnifiedProfileRuntime
 		// passed across the separately deployed VP Renderer DLL boundary.
 		std::set<std::string> m_sessionOverrideGroups;
 		std::shared_ptr<const Snapshot> m_snapshot;
+		// SelectTemporaryProfile: each group as it was before its first pick.
+		struct TemporaryOrigin
+		{
+			bool hadManual = false;
+			RendererProfileConfig::Selection manual;
+			bool hadOverride = false;
+		};
+		std::map<std::string, TemporaryOrigin> m_temporaryOrigins;
+		bool PublishUnpersisted(const RendererProfileConfig::Selections& manual,
+			std::set<std::string> sessionOverrides,
+			const DisplayRuleExpression::ValueLookup& sourceValues,
+			SelectionResult& result, std::string& error);
 	};
 }

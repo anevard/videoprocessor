@@ -68,3 +68,20 @@ static constexpr const char* VP_LIBPLACEBO_HDR_STATUS_EXPORT =
 using VideoProcessorLibplaceboGetHdrStatusFn = bool (__cdecl *)(
 	const IVideoRenderer* renderer,
 	RendererHdrStatus* status);
+
+// Optional, outside the API version, as the HDR status: a source plugin's
+// readback and present waits (source plugin interface version 6). Plain C
+// structs with their own struct_size; no renderer pointer, so they serve
+// whichever renderer the DLL runs. A plugin's thread blocks in them.
+struct vp_source_rect;
+struct vp_source_readback;
+struct vp_source_presented;
+static constexpr const char* VP_LIBPLACEBO_SOURCE_READBACK_EXPORT =
+	"VideoProcessorLibplaceboSourceReadback";
+using VideoProcessorLibplaceboSourceReadbackFn = int32_t (__cdecl *)(
+	uint64_t sourceFrame, const vp_source_rect* rect, uint32_t flags,
+	uint32_t timeoutMs, vp_source_readback* out);
+static constexpr const char* VP_LIBPLACEBO_SOURCE_PRESENTED_EXPORT =
+	"VideoProcessorLibplaceboSourceWaitPresented";
+using VideoProcessorLibplaceboSourceWaitPresentedFn = int32_t (__cdecl *)(
+	uint64_t sourceFrame, uint32_t timeoutMs, vp_source_presented* out);
