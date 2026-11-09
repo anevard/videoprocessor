@@ -22,7 +22,13 @@ namespace
 		VideoProcessorLibplaceboDestroyRendererFn destroyRenderer = nullptr;
 		VideoProcessorLibplaceboGetStartupReadinessFn startupReadiness = nullptr;
 		VideoProcessorLibplaceboGetHdrStatusFn getHdrStatus = nullptr; // optional
+		VideoProcessorLibplaceboSourceReadbackFn sourceReadback = nullptr;          // optional
+		VideoProcessorLibplaceboSourceWaitPresentedFn sourceWaitPresented = nullptr; // optional
 	};
+	// The DLL whose renderer was created last (its source exports serve a
+	// source plugin): nullptr until then. Validated exports stay loaded for
+	// the process's life (GetPlugin).
+	std::atomic<const PluginExports*> sourceExports{ nullptr };
 
     void __cdecl ForwardAnalysisRecord(void* context,const AnalysisDiagnosticRecordV1* record) {
         if(record) static_cast<AnalysisDiagnosticTrace*>(context)->Submit(*record);
@@ -133,6 +139,10 @@ namespace
 		}
 		result.getHdrStatus = reinterpret_cast<VideoProcessorLibplaceboGetHdrStatusFn>(
 			GetProcAddress(result.module, VP_LIBPLACEBO_HDR_STATUS_EXPORT));
+		result.sourceReadback = reinterpret_cast<VideoProcessorLibplaceboSourceReadbackFn>(
+			GetProcAddress(result.module, VP_LIBPLACEBO_SOURCE_READBACK_EXPORT));
+		result.sourceWaitPresented = reinterpret_cast<VideoProcessorLibplaceboSourceWaitPresentedFn>(
+			GetProcAddress(result.module, VP_LIBPLACEBO_SOURCE_PRESENTED_EXPORT));
 
         const auto diagnostics=reinterpret_cast<VideoProcessorLibplaceboConfigureDiagnosticFn>(
             GetProcAddress(result.module,VP_LIBPLACEBO_DIAGNOSTIC_EXPORT));
@@ -167,6 +177,26 @@ namespace
 bool LibplaceboPluginVideoRenderer::IsAvailable(bool beta)
 {
 	return GetPlugin(beta).module != nullptr;
+}
+
+
+int32_t LibplaceboPluginVideoRenderer::SourceReadback(uint64_t sourceFrame,
+	const vp_source_rect& rect, uint32_t flags, uint32_t timeoutMs, vp_source_readback& out)
+{
+	const PluginExports* plugin = sourceExports.load(std::memory_order_acquire);
+	if (!plugin || !plugin->sourceReadback)
+		return VP_SOURCE_ERROR_UNSUPPORTED;
+	return plugin->sourceReadback(sourceFrame, &rect, flags, timeoutMs, &out);
+}
+
+
+int32_t LibplaceboPluginVideoRenderer::SourceWaitPresented(uint64_t sourceFrame,
+	uint32_t timeoutMs, vp_source_presented& out)
+{
+	const PluginExports* plugin = sourceExports.load(std::memory_order_acquire);
+	if (!plugin || !plugin->sourceWaitPresented)
+		return VP_SOURCE_ERROR_UNSUPPORTED;
+	return plugin->sourceWaitPresented(sourceFrame, timeoutMs, &out);
 }
 
 
@@ -206,6 +236,7 @@ LibplaceboPluginVideoRenderer::LibplaceboPluginVideoRenderer(
 	m_destroyRenderer = plugin.destroyRenderer;
 	m_startupReadiness = plugin.startupReadiness;
 	m_getHdrStatus = plugin.getHdrStatus;
+	sourceExports.store(&plugin, std::memory_order_release);
     activeDiagnosticProducers.fetch_add(1, std::memory_order_relaxed);
     AnalysisDiagnosticTrace::Instance().SetProducerAvailable(true,true);
 }

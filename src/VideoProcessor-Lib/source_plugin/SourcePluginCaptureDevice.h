@@ -61,6 +61,10 @@ public:
 	// The plugin's name, from its function table.
 	const std::string& NameUtf8() const { return m_nameUtf8; }
 
+	// The plugin asks for its frames 1:1 (VP_SOURCE_STATE_NATIVE_RASTER,
+	// version 6), as of its last video state.
+	bool NativeRaster() const { return m_nativeRaster.load(std::memory_order_acquire); }
+
 	// ACaptureDevice
 	void SetCallbackHandler(ICaptureDeviceCallback*) override;
 	CString GetName() override;
@@ -105,6 +109,7 @@ private:
 	std::thread m_readerThread;
 
 	std::atomic<timingclocktime_t> m_frameOffsetTicks{0};
+	std::atomic_bool m_nativeRaster = false;
 
 	// If false no more data is sent out (DeckLink's pair).
 	std::atomic_bool m_outputCaptureData = false;
@@ -137,6 +142,12 @@ private:
 	void UpdateState(CaptureDeviceState state);
 
 	static void HostLog(void* context, uint32_t level, const char* messageUtf8);
+	static int32_t HostReadback(void* context, uint64_t sourceFrame,
+		const vp_source_rect* rect, uint32_t flags, uint32_t timeoutMs, vp_source_readback* out);
+	static int32_t HostWaitPresented(void* context, uint64_t sourceFrame,
+		uint32_t timeoutMs, vp_source_presented* out);
+	static int32_t HostSelectProfile(void* context, const char* groupUtf8, const char* profileUtf8);
+	static int32_t HostGetProfile(void* context, const char* groupUtf8, char* buffer, uint32_t size);
 
 	// Starts owned by its creator, which Attach()es it (as the DeckLink
 	// discoverer does).

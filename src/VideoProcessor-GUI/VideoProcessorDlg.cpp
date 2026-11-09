@@ -2091,6 +2091,8 @@ BEGIN_MESSAGE_MAP(CVideoProcessorDlg, CDialog)
 	ON_MESSAGE(WM_MESSAGE_RENDERER_RESTART_REQUIRED, &CVideoProcessorDlg::OnMessageRendererRestartRequired)
 	ON_MESSAGE(WM_MESSAGE_RENDERER_QUEUE_CONTRACT_CHANGED, &CVideoProcessorDlg::OnMessageRendererQueueContractChanged)
 	ON_MESSAGE(WM_MESSAGE_CONFIGURATION_RPC_REQUEST, &CVideoProcessorDlg::OnConfigurationRpcRequest)
+	ON_MESSAGE(WM_MESSAGE_SOURCE_PLUGIN_HOST_CALL, &CVideoProcessorDlg::OnSourcePluginHostCall)
+	ON_MESSAGE(WM_MESSAGE_SOURCE_NATIVE_RASTER, &CVideoProcessorDlg::OnSourceNativeRaster)
 	ON_MESSAGE(WM_MODERN_OPERATOR_ACTION, &CVideoProcessorDlg::OnMessageModernOperatorAction)
 
 	// Command handlers (from accelerator)
@@ -3067,6 +3069,90 @@ LRESULT CVideoProcessorDlg::OnConfigurationRpcRequest(WPARAM id, LPARAM)
 	return 0;
 }
 
+// A source plugin's profile call (vp_source_plugin.h version 6), posted from
+// its thread by SourcePluginHostCalls.
+LRESULT CVideoProcessorDlg::OnSourcePluginHostCall(WPARAM id, LPARAM)
+{
+	m_sourcePluginHostCalls.Run(static_cast<uint64_t>(id),
+		[this](SourcePluginHostCalls::Job& job) { RunSourcePluginHostJob(job); });
+	return 0;
+}
+
+// select_profile is a temporary pick (UnifiedProfileRuntime::
+// SelectTemporaryProfile): never saved, released back to exactly what each
+// group had; applied as the Config RPC's SelectProfile applies a pick.
+void CVideoProcessorDlg::RunSourcePluginHostJob(SourcePluginHostCalls::Job& job)
+{
+	using Kind = SourcePluginHostCalls::Job::Kind;
+	if (m_wantToTerminate)
+	{
+		job.result = VP_SOURCE_ERROR_STATE;
+		return;
+	}
+	if (job.kind == Kind::Get)
+	{
+		const auto snapshot = m_profileRuntime.GetSnapshot();
+		const auto found = snapshot ?
+			snapshot->effectiveSelections.find(ConfigFile::NormalizeName(job.group)) :
+			RendererProfileConfig::Selections::const_iterator();
+		if (!snapshot || found == snapshot->effectiveSelections.end())
+		{
+			job.result = VP_SOURCE_ERROR_ARGUMENT;
+			return;
+		}
+		for (const std::string& profile : found->second)
+			job.profiles += (job.profiles.empty() ? "" : ",") + profile;
+		job.result = VP_SOURCE_OK;
+		return;
+	}
+	UnifiedProfileRuntime::SelectionResult result;
+	std::string error;
+	const bool ok = job.kind == Kind::Select ?
+		m_profileRuntime.SelectTemporaryProfile(job.group, job.profile,
+			GetUnifiedProfileSourceLookup(), result, error) :
+		m_profileRuntime.ReleaseTemporaryProfiles(GetUnifiedProfileSourceLookup(), result, error);
+	if (!ok)
+	{
+		DebugLog::Log("Source plugin profile %s refused: group=%s profile=%s (%s)",
+			job.kind == Kind::Select ? "pick" : "release", job.group.c_str(), job.profile.c_str(),
+			error.c_str());
+		job.result = VP_SOURCE_ERROR_ARGUMENT;
+		return;
+	}
+	DebugLog::Log(job.kind == Kind::Select ?
+		"Source plugin profile pick (temporary, not saved): %s = %s%s" :
+		"Source plugin profile picks released%s%s%s",
+		job.kind == Kind::Select ? job.group.c_str() : "",
+		job.kind == Kind::Select ? job.profile.c_str() : "",
+		result.changed ? "" : " (no change)");
+	if (result.changed)
+	{
+		bool queueReset = false;
+		for (const auto& selection : result.selections)
+			queueReset = queueReset || (result.snapshot &&
+				QueueProfileRestartPolicy::RequiresResetAfterManualSelection(
+					selection.group == "queue", result.snapshot->queue.profile, true));
+		ApplyUnifiedProfileSnapshot(result.snapshot, true, queueReset);
+		if (!EventActionLauncher::IsRenderingSelectionFeedback(
+			m_profileActionProcessActive.load(), result.selections, false))
+			ScheduleUnifiedProfileActions(result.actions);
+		if (queueReset)
+			QueueUnifiedQueueProfileReset(result.snapshot, "source-plugin:" + job.group);
+	}
+	job.result = VP_SOURCE_OK;
+}
+
+// A source plugin asks for its frames 1:1, or no longer does (posted by the
+// video state handler): the Screen and Zoom set aside as for a native-raster
+// chart (PatgenNoCrop.h).
+LRESULT CVideoProcessorDlg::OnSourceNativeRaster(WPARAM on, LPARAM)
+{
+	m_sourceNativeRaster = on != 0 && m_captureDevice &&
+		SourcePluginBackend::SourcePluginNativeRaster(m_captureDevice);
+	UpdatePatgenNoCrop(m_sourceNativeRaster ? "the source asks for 1:1" : "the source no longer asks for 1:1");
+	return 0;
+}
+
 ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 	const Frame& request)
 {
@@ -3176,7 +3262,10 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 				if (PatgenChartShowing::ColourSpaceHasTheScreen(result))
 				{
 					// ColourSpace's patches are never measured through a
-					// chart's crop (A200) or set-aside (A201).
+					// chart's crop (A200) or a chart's set-aside (A201); they
+					// are shown 1:1 only by the generator's own request
+					// (VP_SOURCE_STATE_NATIVE_RASTER, its Patterns-page
+					// switch, A261), which this leaves alone.
 					if (!m_patgenCropRatio.empty() || m_patgenOneToOneChart)
 					{
 						m_patgenCropRatio.clear();
@@ -5149,6 +5238,8 @@ bool CVideoProcessorDlg::TryGetDisplayRefreshRateOverride(
 CVideoProcessorDlg::~CVideoProcessorDlg()
 {
 	m_configurationRpcServer.Stop();
+	SourcePluginHostServices::Set(nullptr);
+	m_sourcePluginHostCalls.Stop();
 	KillTimer(PROFILE_CHANGE_OVERLAY_TIMER_ID);
 	KillTimer(ANALYSIS_DIAGNOSTIC_STATUS_TIMER_ID);
 	KillTimer(PatgenSdrGamma::TimerId);
@@ -6293,6 +6384,11 @@ LRESULT CVideoProcessorDlg::OnMessageCaptureDeviceVideoStateChange(WPARAM wParam
 		IsNewLldvModeSelected();
 
 	m_captureDeviceVideoState = videoState;
+	// A source plugin's 1:1 request (version 6) changed with this state:
+	// applied after this state is (OnSourceNativeRaster).
+	if ((videoState->valid && SourcePluginBackend::SourcePluginNativeRaster(m_captureDevice)) !=
+		m_sourceNativeRaster)
+		PostMessage(WM_MESSAGE_SOURCE_NATIVE_RASTER, m_sourceNativeRaster ? 0 : 1, 0);
 	const bool newLldvJustConfirmed = UpdateNewLldvCandidate();
 	const bool newLldvWasCleared =
 		wasNewLldvEffective && !m_newLldvCandidateConfirmed;
@@ -9468,6 +9564,7 @@ void CVideoProcessorDlg::CaptureRemove()
 	m_patgenExactCrop.clear();
 	m_patgenOneToOneChart = false;
 	m_patgenOneToOne = false;
+	m_sourceNativeRaster = false;
 
 	m_desiredCaptureInputId = INVALID_CAPTURE_INPUT_ID;
 	m_currentCaptureInputId = INVALID_CAPTURE_INPUT_ID;
@@ -14136,6 +14233,9 @@ BOOL CVideoProcessorDlg::OnInitDialog()
 		const ConfigurationRpcServer::DiscoveryInfo info{
 			identity.str(), ConfigurationRpcUtf8(std::wstring(computerName,
 				computerNameLength)), ConfigurationRpcUtf8(VERSION_DESCRIBE) };
+		// A source plugin's version 6 host calls (SourcePluginHostCalls.h).
+		m_sourcePluginHostCalls.Start(GetSafeHwnd(), WM_MESSAGE_SOURCE_PLUGIN_HOST_CALL);
+		SourcePluginHostServices::Set(&m_sourcePluginHostCalls);
 		std::string rpcError;
 		if (!m_configurationRpcServer.Start(GetSafeHwnd(),
 			WM_MESSAGE_CONFIGURATION_RPC_REQUEST, info, rpcError))
@@ -15133,6 +15233,8 @@ void CVideoProcessorDlg::OnClose()
 	m_desiredCaptureDevice = nullptr;
 	m_wantToTerminate = true;
 	m_configurationRpcServer.Stop();
+	// A plugin's profile calls are refused from here; its readbacks time out.
+	m_sourcePluginHostCalls.Stop();
 	KillTimer(FULLSCREEN_FOCUS_TIMER_ID);
 	KillTimer(FULLSCREEN_ACTIVATION_TIMER_ID);
 	m_fullscreenActivation.Cancel();
@@ -16011,14 +16113,17 @@ void CVideoProcessorDlg::PollAspectRatioOsd()
 // chart Config picked whose ratio the generator gave. Each change (a new
 // ratio included) re-applies the profile runtime's current snapshot, which
 // ApplyUnifiedProfileSnapshot hands the renderer with or without the exact
-// crop. A native-raster chart (A201) is shown 1:1 the same way, switch or not.
+// crop. A native-raster chart (A201) is shown 1:1 the same way, switch or not,
+// and so is any source plugin's input while it asks for 1:1
+// (VP_SOURCE_STATE_NATIVE_RASTER: the generator's harness runs and, with its
+// switch on, ColourSpace's patches, A261).
 void CVideoProcessorDlg::UpdatePatgenNoCrop(const char* reason)
 {
 	const bool generator =
 		SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, SourcePluginBackend::PATTERN_PLUGIN_NAME);
 	const bool on = generator && m_patgenExactCropWanted && !m_patgenCropRatio.empty();
 	const std::string ratio = on ? m_patgenCropRatio : std::string();
-	const bool oneToOne = generator && m_patgenOneToOneChart;
+	const bool oneToOne = (generator && m_patgenOneToOneChart) || m_sourceNativeRaster;
 	if (ratio == m_patgenExactCrop && oneToOne == m_patgenOneToOne)
 		return;
 	if (ratio != m_patgenExactCrop)
