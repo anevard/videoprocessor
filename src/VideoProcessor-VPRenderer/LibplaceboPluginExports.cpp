@@ -5,6 +5,7 @@
 #include <DebugLog.h>
 #include <vprenderer/LibplaceboRendererPluginApi.h>
 #include <vprenderer/LibplaceboVideoRenderer.h>
+#include <vprenderer/SourceReadbackBroker.h>
 
 
 extern "C" __declspec(dllexport) uint32_t __cdecl
@@ -75,6 +76,24 @@ VideoProcessorLibplaceboGetHdrStatus(
 	if (!renderer || !status || !status->Supported())
 		return false;
 	return static_cast<const LibplaceboVideoRenderer*>(renderer)->GetHdrStatus(*status);
+}
+
+extern "C" __declspec(dllexport) int32_t __cdecl
+VideoProcessorLibplaceboSourceReadback(uint64_t sourceFrame, const vp_source_rect* rect,
+	uint32_t flags, uint32_t timeoutMs, vp_source_readback* out)
+{
+	if (!rect || !out || out->struct_size == 0)
+		return VP_SOURCE_ERROR_ARGUMENT;
+	return LibplaceboVideoRenderer::SourceBroker().Readback(sourceFrame, *rect, flags, timeoutMs, *out);
+}
+
+extern "C" __declspec(dllexport) int32_t __cdecl
+VideoProcessorLibplaceboSourceWaitPresented(uint64_t sourceFrame, uint32_t timeoutMs,
+	vp_source_presented* out)
+{
+	if (!out || out->struct_size == 0)
+		return VP_SOURCE_ERROR_ARGUMENT;
+	return LibplaceboVideoRenderer::SourceBroker().WaitPresented(sourceFrame, timeoutMs, *out);
 }
 
 extern "C" __declspec(dllexport) bool __cdecl VideoProcessorLibplaceboIsBeta()

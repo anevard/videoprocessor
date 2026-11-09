@@ -32,6 +32,10 @@ namespace SourcePluginBackend
 	// True if the device is the input of the source plugin of that name.
 	bool IsSourcePluginNamed(ACaptureDevice* device, const char* nameUtf8);
 
+	// True if the device is a source plugin's input asking for its frames
+	// 1:1 (VP_SOURCE_STATE_NATIVE_RASTER, version 6).
+	bool SourcePluginNativeRaster(ACaptureDevice* device);
+
 	// GUI thread. Sends one player command line (e.g. "pause", "seek +10")
 	// to the device's plugin. False if the device is not a source plugin;
 	// a command the plugin rejects is logged and still returns true.

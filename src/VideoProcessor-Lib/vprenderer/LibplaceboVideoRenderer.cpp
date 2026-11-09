@@ -104,6 +104,7 @@
 
 #include <dxgi1_6.h>
 #include <nvapi.h>
+#include <vprenderer/SourceReadbackBroker.h>
 #include <wincodec.h>
 #include <bcrypt.h>
 
@@ -5823,6 +5824,8 @@ struct LibplaceboVideoRenderer::Impl
 	// when it starts or changes. Always true: the cleared target is the frame.
 	std::string rawOutputStatus;
 	uint64_t rawOutputLastPresentedFrame = UINT64_MAX;
+	// The PNG the last Ctrl+Alt+S-style capture wrote (render thread).
+	std::wstring lastRenderedCapturePng;
 	bool RenderRawOutput(const VideoState& state, bool nativeRgbUpload,
 		const pl_frame& image, const pl_frame& target)
 	{
@@ -6147,6 +6150,94 @@ struct LibplaceboVideoRenderer::Impl
 		return true;
 	}
 
+	// A source plugin's readback (vp_source_plugin.h version 6,
+	// SourceReadbackBroker.h): only rect of the backbuffer is copied, into a
+	// rect-sized staging texture, and only its statistics leave.
+	int32_t ReadSourceRect(ID3D11Texture2D* authoritativeBackbuffer,
+		const vp_source_rect& rect, uint64_t sourceFrame, vp_source_readback& out)
+	{
+		out = {};
+		out.struct_size = sizeof(out);
+		out.source_frame = sourceFrame;
+		CComPtr<ID3D11Texture2D> backBuffer = authoritativeBackbuffer;
+		if (!backBuffer)
+		{
+			CComPtr<IDXGISwapChain> nativeSwapchain;
+			nativeSwapchain.Attach(pl_d3d11_swapchain_unwrap(swapchain));
+			if (!nativeSwapchain ||
+				FAILED(nativeSwapchain->GetBuffer(0, IID_PPV_ARGS(&backBuffer))) || !backBuffer)
+				return VP_SOURCE_ERROR;
+		}
+		D3D11_TEXTURE2D_DESC desc{};
+		backBuffer->GetDesc(&desc);
+		out.output_width = desc.Width;
+		out.output_height = desc.Height;
+		if (desc.Format != DXGI_FORMAT_R10G10B10A2_UNORM)
+			return VP_SOURCE_ERROR_UNSUPPORTED;
+		out.bits = 10;
+		if (rect.width == 0 || rect.height == 0 || rect.x >= desc.Width || rect.y >= desc.Height ||
+			rect.width > desc.Width - rect.x || rect.height > desc.Height - rect.y)
+			return VP_SOURCE_ERROR_ARGUMENT;
+
+		D3D11_TEXTURE2D_DESC stagingDesc = desc;
+		stagingDesc.Width = rect.width;
+		stagingDesc.Height = rect.height;
+		stagingDesc.MipLevels = 1;
+		stagingDesc.ArraySize = 1;
+		stagingDesc.SampleDesc.Count = 1;
+		stagingDesc.SampleDesc.Quality = 0;
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.BindFlags = 0;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		stagingDesc.MiscFlags = 0;
+		CComPtr<ID3D11Texture2D> staging;
+		if (FAILED(d3d11->device->CreateTexture2D(&stagingDesc, nullptr, &staging)) || !staging)
+			return VP_SOURCE_ERROR;
+		CComPtr<ID3D11DeviceContext> context;
+		d3d11->device->GetImmediateContext(&context);
+		const D3D11_BOX box = { rect.x, rect.y, 0, rect.x + rect.width, rect.y + rect.height, 1 };
+		context->CopySubresourceRegion(staging, 0, 0, 0, 0, backBuffer, 0, &box);
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (FAILED(context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped)))
+			return VP_SOURCE_ERROR;
+		uint32_t minimum[3] = { 1023, 1023, 1023 };
+		uint32_t maximum[3] = { 0, 0, 0 };
+		uint64_t sum[3] = { 0, 0, 0 };
+		uint64_t hash = 1469598103934665603ull;
+		for (uint32_t y = 0; y < rect.height; ++y)
+		{
+			const uint32_t* row = reinterpret_cast<const uint32_t*>(
+				static_cast<const uint8_t*>(mapped.pData) + static_cast<size_t>(y) * mapped.RowPitch);
+			for (uint32_t x = 0; x < rect.width; ++x)
+			{
+				const uint32_t pixel = row[x];
+				// R10G10B10A2_UNORM: R in bits 0-9, G 10-19, B 20-29.
+				for (unsigned channel = 0; channel < 3; ++channel)
+				{
+					const uint32_t code = (pixel >> (channel * 10)) & 0x3FFu;
+					minimum[channel] = std::min(minimum[channel], code);
+					maximum[channel] = std::max(maximum[channel], code);
+					sum[channel] += code;
+				}
+				for (unsigned byte = 0; byte < sizeof(pixel); ++byte)
+				{
+					hash ^= static_cast<uint8_t>(pixel >> (byte * 8));
+					hash *= 1099511628211ull;
+				}
+			}
+		}
+		context->Unmap(staging, 0);
+		const double count = static_cast<double>(rect.width) * rect.height;
+		for (unsigned channel = 0; channel < 3; ++channel)
+		{
+			out.min[channel] = minimum[channel];
+			out.max[channel] = maximum[channel];
+			out.mean[channel] = static_cast<double>(sum[channel]) / count;
+		}
+		out.hash = hash;
+		return VP_SOURCE_OK;
+	}
+
 	void LogOutputReadback(ID3D11Texture2D* authoritativeBackbuffer,
 		const char* owner)
 	{
@@ -6247,6 +6338,7 @@ struct LibplaceboVideoRenderer::Impl
 			pixels.size() * sizeof(uint32_t));
 		const std::wstring pngPath = directory + L"\\" + stem + L".png";
 		const std::wstring jsonPath = directory + L"\\" + stem + L".json";
+		lastRenderedCapturePng = pngPath;   // a source plugin's readback names it
 		// The caller supplies this frame's DM status, not the mutable UI
 		// snapshot which can reset concurrently on a source transition. The
 		// HDMI image is already composed; 12-bit ingress does not prove FEL.
@@ -20141,18 +20233,47 @@ releaseDriftBaseRetention =
         displayVsyncClock.SkipMissed(SteadyClockNowNs());
 		const int64_t swapStartQpc = PerformanceCounterNow();
 		bool submitted = false;
+		// A source plugin's readback of this frame (SourceReadbackBroker.h):
+		// read before the present, answered after it.
+		vp_source_rect sourceReadbackRect{};
+		uint32_t sourceReadbackFlags = 0;
+		const uint64_t sourceReadbackId = rendered ? LibplaceboVideoRenderer::SourceBroker().Take(
+			videoFrame.GetCounter(), sourceReadbackRect, sourceReadbackFlags) : 0;
+		vp_source_readback sourceReadback{};
+		int32_t sourceReadbackResult = VP_SOURCE_ERROR;
+		const auto readSource = [&](ID3D11Texture2D* backbuffer)
+		{
+			if (!sourceReadbackId)
+				return;
+			sourceReadbackResult = ReadSourceRect(backbuffer, sourceReadbackRect,
+				videoFrame.GetCounter(), sourceReadback);
+			// The whole frame as well, through the capture below.
+			if (sourceReadbackResult == VP_SOURCE_OK && (sourceReadbackFlags & VP_SOURCE_READBACK_PNG))
+				renderedOutputCaptureRequested.store(true, std::memory_order_release);
+		};
+		const auto nameSourcePng = [&]
+		{
+			if (!sourceReadbackId || sourceReadbackResult != VP_SOURCE_OK ||
+				!(sourceReadbackFlags & VP_SOURCE_READBACK_PNG))
+				return;
+			const std::string path = WideToUtf8(lastRenderedCapturePng);
+			strncpy_s(sourceReadback.png_path, path.c_str(), _TRUNCATE);
+		};
 		if (vpOwnedSwapchain)
 		{
 			// This mirrors libplacebo's submit ordering while keeping the actual
 			// DXGI presentation boundary in VP: flush GPU work, release every
 			// backbuffer reference, then Present exactly once.
 			pl_gpu_flush(d3d11->gpu);
+			lastRenderedCapturePng.clear();
+			readSource(vpOwnedBackbuffer);
 			if (rendered && renderedOutputCaptureRequested.exchange(false,
 				std::memory_order_acq_rel))
 			{
 				CaptureRenderedOutput(vpOwnedBackbuffer, "VP-owned-DXGI",
 					frameGeneration, sourceSequence, image, frameDvLuminance);
 			}
+			nameSourcePng();
 			if (outputDiagnostics && rendered && !diagnosticReadbackComplete)
 			{
 				if (diagnosticReadbackFramesRemaining == 0)
@@ -20181,12 +20302,15 @@ releaseDriftBaseRetention =
 		}
 		else
 		{
+			lastRenderedCapturePng.clear();
+			readSource(nullptr);
 			if (rendered && renderedOutputCaptureRequested.exchange(false,
 				std::memory_order_acq_rel))
 			{
 				CaptureRenderedOutput(nullptr, "libplacebo-owned",
 					frameGeneration, sourceSequence, image, frameDvLuminance);
 			}
+			nameSourcePng();
 			if (outputDiagnostics && rendered && !diagnosticReadbackComplete)
 			{
 				if (diagnosticReadbackFramesRemaining == 0)
@@ -20228,6 +20352,11 @@ releaseDriftBaseRetention =
 		if (!rendered || !submitted)
 		{
 			frameGpuTiming.Reject();
+			// Read, but its present failed: answered with no present.
+			if (sourceReadbackId)
+				LibplaceboVideoRenderer::SourceBroker().Complete(sourceReadbackId,
+					sourceReadbackResult == VP_SOURCE_OK ? VP_SOURCE_ERROR : sourceReadbackResult,
+					sourceReadback);
 		}
 		if (rendered && submitted)
 		{
@@ -20650,6 +20779,27 @@ releaseDriftBaseRetention =
 			record.releaseReason = AlphaSourceReleaseReason::Submitted;
 
             const AlphaDxgiPresentationSample sample = ObservePresent(record);
+            // A source plugin's waits (SourceReadbackBroker.h): this present,
+            // and the readback that rode it.
+            {
+                vp_source_presented presented{};
+                presented.struct_size = sizeof(presented);
+                presented.source_frame = record.sourceFrameNumber;
+                presented.vp_present = successfulPresentCount;
+                presented.submit_qpc = swapStartQpc;
+                presented.dxgi_present_id = static_cast<uint32_t>(record.presentId);
+                presented.dxgi_stats = sample.available ? 1u : 0u;
+                presented.dxgi_shown_id = sample.available ? sample.presentCount : 0u;
+                presented.dxgi_shown_qpc = sample.available ? sample.syncQpc : 0;
+                if (sourceReadbackId)
+                {
+                    sourceReadback.vp_present = successfulPresentCount;
+                    sourceReadback.dxgi_present_id = presented.dxgi_present_id;
+                    LibplaceboVideoRenderer::SourceBroker().Complete(sourceReadbackId,
+                        sourceReadbackResult, sourceReadback);
+                }
+                LibplaceboVideoRenderer::SourceBroker().Presented(presented);
+            }
             // One line per new raw frame on screen (A251 R8): the source's
             // frame counter beside the presents, for the exactness check.
             if (rawOutput && record.sourceFrameNumber != rawOutputLastPresentedFrame)
@@ -23593,6 +23743,13 @@ bool LibplaceboVideoRenderer::GetHdrStatus(RendererHdrStatus& status) const
 	if (!m_impl)
 		return false;
 	return m_impl->HdrStatusSnapshot(status);
+}
+
+
+SourceReadbackBroker& LibplaceboVideoRenderer::SourceBroker()
+{
+	static SourceReadbackBroker broker;
+	return broker;
 }
 
 

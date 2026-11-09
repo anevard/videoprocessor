@@ -542,6 +542,115 @@ namespace UnifiedProfileRuntime
 		return true;
 	}
 
+	// SelectProfile's publish without PersistSelections (m_mutex held).
+	bool Runtime::PublishUnpersisted(const RendererProfileConfig::Selections& manual,
+		std::set<std::string> sessionOverrides,
+		const DisplayRuleExpression::ValueLookup& sourceValues,
+		SelectionResult& result, std::string& error)
+	{
+		const auto current = std::atomic_load(&m_snapshot);
+		const auto values = sourceValues ? sourceValues :
+			DisplayRuleExpression::ValueLookup([](const std::string&,
+				std::string&) { return false; });
+		std::shared_ptr<const Snapshot> candidate;
+		if (!BuildSnapshot(manual, sessionOverrides, values, m_generation + 1,
+			candidate, error)) return false;
+		if (current && SameEffectiveState(*current, *candidate) &&
+			sessionOverrides == m_sessionOverrideGroups)
+		{
+			result.snapshot = current;
+			return true;
+		}
+		if (!CollectTransitionActionInvocations(current, candidate, "manual",
+			result.actions, error)) return false;
+		++m_generation;
+		m_sessionOverrideGroups = std::move(sessionOverrides);
+		std::atomic_store(&m_snapshot, candidate);
+		result.changed = true;
+		result.snapshot = candidate;
+		return true;
+	}
+
+	bool Runtime::SelectTemporaryProfile(const std::string& requestedGroup,
+		const std::string& requestedProfile,
+		const DisplayRuleExpression::ValueLookup& sourceValues,
+		SelectionResult& result, std::string& error)
+	{
+		std::lock_guard<std::mutex> guard(m_mutex);
+		result = {};
+		error.clear();
+		const std::string groupName = ConfigFile::NormalizeName(requestedGroup);
+		const std::string profileName = ConfigFile::NormalizeName(requestedProfile);
+		if (!m_initialized)
+		{
+			error = "unified profile runtime is not initialized";
+			return false;
+		}
+		const auto group = std::find_if(m_model.groups.begin(), m_model.groups.end(),
+			[&](const RendererProfileConfig::Group& candidate)
+			{ return candidate.name == groupName; });
+		if (group == m_model.groups.end() ||
+			std::find(group->profiles.begin(), group->profiles.end(), profileName) ==
+			group->profiles.end())
+		{
+			error = "profile is not available in the active VP configuration";
+			return false;
+		}
+		const auto current = std::atomic_load(&m_snapshot);
+		RendererProfileConfig::Selections manual = current ?
+			current->manualSelections : RendererProfileConfig::Selections();
+		std::set<std::string> sessionOverrides = m_sessionOverrideGroups;
+		if (m_temporaryOrigins.find(groupName) == m_temporaryOrigins.end())
+		{
+			TemporaryOrigin origin;
+			const auto had = manual.find(groupName);
+			origin.hadManual = had != manual.end();
+			if (origin.hadManual) origin.manual = had->second;
+			origin.hadOverride = sessionOverrides.count(groupName) != 0;
+			m_temporaryOrigins[groupName] = origin;
+		}
+		manual[groupName] = { profileName };
+		sessionOverrides.insert(groupName);
+		result.selections.push_back({ groupName, { profileName }, false });
+		return PublishUnpersisted(manual, std::move(sessionOverrides), sourceValues, result, error);
+	}
+
+	bool Runtime::ReleaseTemporaryProfiles(
+		const DisplayRuleExpression::ValueLookup& sourceValues,
+		SelectionResult& result, std::string& error)
+	{
+		std::lock_guard<std::mutex> guard(m_mutex);
+		result = {};
+		error.clear();
+		if (!m_initialized)
+		{
+			error = "unified profile runtime is not initialized";
+			return false;
+		}
+		if (m_temporaryOrigins.empty())
+		{
+			result.snapshot = std::atomic_load(&m_snapshot);
+			return true;
+		}
+		const auto current = std::atomic_load(&m_snapshot);
+		RendererProfileConfig::Selections manual = current ?
+			current->manualSelections : RendererProfileConfig::Selections();
+		std::set<std::string> sessionOverrides = m_sessionOverrideGroups;
+		for (const auto& entry : m_temporaryOrigins)
+		{
+			if (entry.second.hadManual) manual[entry.first] = entry.second.manual;
+			else manual.erase(entry.first);
+			if (entry.second.hadOverride) sessionOverrides.insert(entry.first);
+			else sessionOverrides.erase(entry.first);
+			result.selections.push_back({ entry.first,
+				entry.second.hadManual ? entry.second.manual : RendererProfileConfig::Selection(), false });
+		}
+		if (!PublishUnpersisted(manual, std::move(sessionOverrides), sourceValues, result, error))
+			return false;
+		m_temporaryOrigins.clear();
+		return true;
+	}
+
 	bool Runtime::PrepareManualAction(const std::string& requestedName,
 		ActionInvocation& invocation, std::string& error) const
 	{
