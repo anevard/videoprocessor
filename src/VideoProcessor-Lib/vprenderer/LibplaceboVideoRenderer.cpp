@@ -5730,6 +5730,96 @@ struct LibplaceboVideoRenderer::Impl
 		return true;
 	}
 
+	// A source plugin's raw output (VP_SOURCE_STATE_RAW_OUTPUT, the pattern
+	// generator's "Raw output: no VP processing"): RenderLocked calls this in
+	// place of the libplacebo render, after the target was acquired and
+	// cleared, and the rest of the frame (repeat cache, Ctrl+Alt+S, present,
+	// presentation record) runs as for any frame. The R10L codes, as VP's R10L
+	// unpack left them in the source texture, are copied 1:1 to the output: a
+	// 10-bit output stores each code, an 8-bit output each 8-bit code (the
+	// source carries it as code << 2). No scaling, range change, LUT, dither
+	// or overlay. What cannot be copied exactly stays black, its reason logged
+	// when it starts or changes. Always true: the cleared target is the frame.
+	std::string rawOutputStatus;
+	uint64_t rawOutputLastPresentedFrame = UINT64_MAX;
+	bool RenderRawOutput(const VideoState& state, bool nativeRgbUpload,
+		const pl_frame& image, const pl_frame& target)
+	{
+		if (rawOutputStatus.empty())
+			temporalRenderer.Clear();
+		const pl_tex source = image.planes[0].texture;
+		const pl_tex output = target.planes[0].texture;
+		const pl_fmt format = output ? output->params.format : nullptr;
+		const int outputBits = format && format->type == PL_FMT_UNORM ?
+			format->component_depth[0] : 0;
+		std::string refusal;
+		if (!nativeRgbUpload || !source ||
+			state.videoFrameEncoding != VideoFrameEncoding::R10l)
+			refusal = "the frame is not R10L";
+		else if (outputBits != 10 && outputBits != 8)
+			refusal = "the output buffer is neither 10-bit nor 8-bit";
+		else if (outputBits == 8 && state.rawOutputBits != 8)
+			refusal = "10-bit codes on the 8-bit swapchain";
+		else if (source->params.w != output->params.w ||
+			source->params.h != output->params.h)
+			refusal = "the frame is " + std::to_string(source->params.w) + "x" +
+				std::to_string(source->params.h) + ", the output " +
+				std::to_string(output->params.w) + "x" +
+				std::to_string(output->params.h);
+		else if (EncodingLevels(actualOutput.encoding) != PL_COLOR_LEVELS_LIMITED)
+			refusal = "the output range is not limited";
+		else if (!nativeRgbDispatch || !output->params.renderable)
+			refusal = "the output cannot take the copy";
+
+		if (refusal.empty())
+		{
+			pl_shader sh = pl_dispatch_begin(nativeRgbDispatch);
+			struct pl_sample_src sample{};
+			sample.tex = source;
+			// Each source component is code / 1023; written back as the
+			// code (10-bit output) or code / 4 (8-bit output).
+			struct pl_custom_shader copy{};
+			copy.description = "raw output copy";
+			copy.body = outputBits == 10 ?
+				"color = vec4(round(color.rgb * 1023.0) / 1023.0, 1.0);\n" :
+				"color = vec4(round(color.rgb * 1023.0) / 1020.0, 1.0);\n";
+			copy.input = PL_SHADER_SIG_COLOR;
+			copy.output = PL_SHADER_SIG_COLOR;
+			struct pl_dispatch_params run{};
+			run.shader = &sh;
+			run.target = output;
+			if (!pl_shader_sample_nearest(sh, &sample) || !pl_shader_custom(sh, &copy))
+			{
+				pl_dispatch_abort(nativeRgbDispatch, &sh);
+				refusal = "the GPU copy could not be built";
+			}
+			else if (!pl_dispatch_finish(nativeRgbDispatch, &run))
+			{
+				refusal = "the GPU copy failed";
+				const float black[] = { 0.0f, 0.0f, 0.0f };
+				pl_frame_clear(d3d11->gpu, &target, black);
+			}
+		}
+
+		const std::string status = refusal.empty() ?
+			"on " + std::to_string(state.rawOutputBits) + "-bit codes to the " +
+				std::to_string(outputBits) + "-bit output" :
+			"refused: " + refusal;
+		if (status != rawOutputStatus)
+		{
+			rawOutputStatus = status;
+			if (refusal.empty())
+				DebugLog::Log(
+					"PATGEN raw output: on, %u-bit R10L codes copied to the %d-bit output %dx%d, no libplacebo pass, no overlays%s",
+					state.rawOutputBits, outputBits, output->params.w, output->params.h,
+					state.eotf == EOTF::PQ ?
+						"; PQ codes on a wire VP declares SDR (set the display to PQ by hand)" : "");
+			else
+				DebugLog::Log("PATGEN raw output: refused, black: %s", refusal.c_str());
+		}
+		return true;
+	}
+
 	void LoadShaderCache()
 	{
 		shaderCachePath = ShaderCachePath();
@@ -19766,7 +19856,16 @@ releaseDriftBaseRetention =
         const pl_hook* submittedNls = nullptr;
         for(int i=0;i<renderParams.num_hooks;++i)
             if(renderParams.hooks[i]==nlsHook)submittedNls=nlsHook;
-        const auto hookRender = NlsHookRecovery::Render(temporalRenderer.ProcessingRenderer(renderer), d3d11->gpu,
+        // A source plugin's raw output replaces only this render (RenderRawOutput).
+        const bool rawOutput = state.rawOutputBits != 0;
+        if (!rawOutput && !rawOutputStatus.empty())
+        {
+            DebugLog::Log("PATGEN raw output: off, VP processes the picture again");
+            rawOutputStatus.clear();
+        }
+        const auto hookRender = rawOutput ?
+            NlsHookRecovery::Result{ RenderRawOutput(state, nativeRgbUpload, image, baseTarget) } :
+            NlsHookRecovery::Render(temporalRenderer.ProcessingRenderer(renderer), d3d11->gpu,
             renderImage, target, baseTarget, renderParams, submittedNls, [&]()
             {
                 runtimeRejectedNlsHookSignature = nlsHookSignature;
@@ -19842,6 +19941,7 @@ releaseDriftBaseRetention =
         RendererHdrStatus renderedHdrStatus;
         if(rendered && !temporalRenderer.HdrStatusSnapshot(renderedHdrStatus))
             renderedHdrStatus=FrameHdrStatus::Capture(directHdrSource,renderer,renderParams.peak_detect_params!=nullptr);
+        if (rawOutput) renderedHdrStatus = {}; // no libplacebo pass ran
         LogHdrPeakAnalysisMetrics(hdrPeakAnalysisDecision,sourceSequence,rendered,renderedHdrStatus);
 		const double renderMs = std::chrono::duration<double, std::milli>(
 			SteadyClock::now() - renderStart).count();
@@ -19850,6 +19950,7 @@ releaseDriftBaseRetention =
         calibrationStatusAvailable = rendered;
         if (rendered) lastRenderedTargetTransfer = ToSdrTransfer(baseTarget.color.transfer);
         calibrationLutAttached = rendered && targetLutApplied;
+        if (rawOutput) calibrationStatusAvailable = calibrationLutAttached = false; // no LUT ran
         if (rendered)
             CacheDisplayFrame(baseTarget.planes[0].texture, frameGeneration,
                 viewportRequestSerial, startupFrameRevision);
@@ -20366,6 +20467,17 @@ releaseDriftBaseRetention =
 			record.releaseReason = AlphaSourceReleaseReason::Submitted;
 
             const AlphaDxgiPresentationSample sample = ObservePresent(record);
+            // One line per new raw frame on screen (A251 R8): the source's
+            // frame counter beside the presents, for the exactness check.
+            if (rawOutput && record.sourceFrameNumber != rawOutputLastPresentedFrame)
+            {
+                rawOutputLastPresentedFrame = record.sourceFrameNumber;
+                DebugLog::Log("PATGEN raw output presented: source_frame=%llu vp_presents=%llu dxgi_present_count=%u dxgi_stats=%d submit_qpc=%lld",
+                    static_cast<unsigned long long>(record.sourceFrameNumber),
+                    static_cast<unsigned long long>(successfulPresentCount),
+                    sample.presentCount, sample.available ? 1 : 0,
+                    static_cast<long long>(swapStartQpc));
+            }
             if (displayRepeatValid) displayRepeatRecord = record;
 			const AlphaPresentationSnapshot presentationSnapshot =
 				presentationTelemetry.Snapshot();
@@ -21343,6 +21455,7 @@ bool LibplaceboVideoRenderer::OnVideoState(VideoStateComPtr& videoState)
 		 videoState->videoFrameEncoding != m_videoState->videoFrameEncoding ||
 		 videoState->dolbyVisionTunnel != m_videoState->dolbyVisionTunnel ||
          videoState->tunnelSdrRgbRange != m_videoState->tunnelSdrRgbRange ||
+		 videoState->rawOutputBits != m_videoState->rawOutputBits ||
 		 videoState->eotf != m_videoState->eotf ||
 		 videoState->colorspace != m_videoState->colorspace);
 	if (materialSourceTransition && m_impl)
