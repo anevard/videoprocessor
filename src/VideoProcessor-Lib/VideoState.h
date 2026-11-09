@@ -35,6 +35,10 @@ public:
 	VideoFrameEncoding videoFrameEncoding = VideoFrameEncoding::UNKNOWN;
 	EOTF eotf = EOTF::UNKNOWN;
 	ColorSpace colorspace = ColorSpace::UNKNOWN;
+	// A source plugin's raw output (VP_SOURCE_STATE_RAW_OUTPUT): 0, VP
+	// processes the picture; 8 or 10, the source's own depth, its R10L codes
+	// go to the output unprocessed. Capture cards leave it 0.
+	uint32_t rawOutputBits = 0;
 	bool invertedVertical = false;
 	// Capture must clear this when its processing can remap RGB tunnel bytes.
 	bool rgbTunnelBytesPreserved = true;

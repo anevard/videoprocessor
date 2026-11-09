@@ -17,6 +17,7 @@ VideoState::VideoState(const VideoState& other)
 	valid = other.valid;
 	displayMode = other.displayMode;
 	videoFrameEncoding = other.videoFrameEncoding;
+	rawOutputBits = other.rawOutputBits;
 	eotf = other.eotf;
 	colorspace = other.colorspace;
 	invertedVertical = other.invertedVertical;
