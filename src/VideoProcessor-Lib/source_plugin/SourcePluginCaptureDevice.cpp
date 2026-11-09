@@ -700,6 +700,10 @@ void SourcePluginCaptureDevice::SendVideoState()
 		// A plugin older than version 4 has no flags; VP zeroed the field.
 		videoState->exactSignal = m_api->abi_version >= 4 &&
 			(state.flags & VP_SOURCE_STATE_EXACT_SIGNAL) != 0;
+		// Raw output only with the exact-signal flag, carrying the source's
+		// own depth; the renderer refuses (black) what it cannot copy.
+		videoState->rawOutputBits = m_api->abi_version >= 5 && videoState->exactSignal &&
+			(state.flags & VP_SOURCE_STATE_RAW_OUTPUT) != 0 ? bitDepth : 0;
 
 		if (state.hdr10.has_mastering)
 		{
