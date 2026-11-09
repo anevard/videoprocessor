@@ -11590,6 +11590,88 @@ QWidget* ConfigEditorWindow::createPatternPage()
                 interlock();
             });
         };
+
+        // The other live boxes (A261), the raw box's rules without its
+        // interlock: never saved, so each shows the generator's live state,
+        // read on the status tick; only the user's click sends.
+        const auto liveSwitch = [this, status, layout](const QString& card, const QString& cardNote,
+            const QString& name, const QString& label, const QString& help, const QString& verb,
+            const char* stateCommand, const char* offText) -> std::function<void()>
+        {
+            auto* body = new QWidget;
+            auto* bodyLayout = new QVBoxLayout(body);
+            bodyLayout->setContentsMargins(0, 0, 0, 0);
+            bodyLayout->setSpacing(10);
+            auto* box = new QCheckBox(label);
+            box->setObjectName(name);
+            bodyLayout->addWidget(box);
+            bodyLayout->addWidget(helpLabel(help));
+            layout->addWidget(createCard(card, cardNote, body));
+            const auto clicks = std::make_shared<uint64_t>(0);
+            connect(box, &QCheckBox::clicked, this, [this, box, status, verb, clicks](bool on)
+            {
+                ++*clicks;
+                const QString command = verb + (on ? QStringLiteral(" on") : QStringLiteral(" off"));
+                if (noTarget_ || testMode_)
+                {
+                    box->setChecked(!on);
+                    status->setText(QStringLiteral("No target VP to send %1 to.").arg(command));
+                    return;
+                }
+                status->setText(QStringLiteral("Sending %1...").arg(command));
+                runTargetAction(QStringLiteral("pattern.") + command,
+                    [box, status, command, on](bool sent, const QString& error)
+                {
+                    status->setText(sent ? QStringLiteral("Sent: %1").arg(command) : error);
+                    if (!sent && box->isChecked() == on)
+                        box->setChecked(!on);
+                });
+            });
+            const auto asking = std::make_shared<bool>(false);
+            return [this, box, asking, clicks, stateCommand, offText]
+            {
+                if (*asking || noTarget_ || testMode_) return;
+                *asking = true;
+                const uint64_t askedAfter = *clicks;
+                runTargetAction(QStringLiteral("pattern.") + QString::fromUtf8(stateCommand),
+                    [box, asking, clicks, askedAfter, offText](bool sent, const QString& error)
+                {
+                    *asking = false;
+                    if (*clicks != askedAfter) return;
+                    if (sent) box->setChecked(true);
+                    else if (error == QString::fromUtf8(offText)) box->setChecked(false);
+                });
+            };
+        };
+        // ColourSpace's patches 1:1 (A261 L1b, question 1d; operator: back on
+        // at every VP start).
+        const auto readOneToOne = liveSwitch(QStringLiteral("ColourSpace patches 1:1"),
+            QStringLiteral("Takes effect at once. Never saved: on whenever VP starts."),
+            QStringLiteral("config.pattern.one_to_one"),
+            QStringLiteral("Show ColourSpace's patches 1:1: no resize, no crop"),
+            QStringLiteral("On: each patch reaches the output pixel for pixel, the Screen and Zoom profiles set aside, "
+                "so no resampling touches its codes. Off: the patches go through the Screen and Zoom profiles as "
+                "configured, the path a film takes."),
+            QStringLiteral("one_to_one"),
+            PatgenRawOutput::OneToOneStateCommand, PatgenRawOutput::OneToOneOff);
+        // The loopback harness's arm switch (A261 L5): armed, a "loop run"
+        // request may start a run; off at every VP start.
+        const auto readLoopArm = liveSwitch(QStringLiteral("Loopback harness"),
+            QStringLiteral("Takes effect at once. Never saved: off whenever VP starts."),
+            QStringLiteral("config.pattern.loop_arm"),
+            QStringLiteral("Armed: a run request may start a measurement run"),
+            QStringLiteral("While armed, a request sent to VP starts a run of the named request file from the build's "
+                "loopback\\requests folder; the generator steps its patches and records what VP put on its output. "
+                "Off: every run request is refused."),
+            QStringLiteral("loop_arm"),
+            PatgenRawOutput::LoopArmStateCommand, PatgenRawOutput::LoopArmOff);
+        const std::function<void()> readRaw = readPatternRawOutput_;
+        readPatternRawOutput_ = [readRaw, readOneToOne, readLoopArm]
+        {
+            readRaw();
+            readOneToOne();
+            readLoopArm();
+        };
     }
 
     // ColourSpace: used from the input's next start. Closed until opened: it is
