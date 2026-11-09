@@ -62,6 +62,7 @@
 #include <CaptureVideoStatePolicy.h>
 #include <ConfigEditorCore.h>
 #include "ConfigurationRpcServer.h"
+#include "SourcePluginHostCalls.h"
 #include "ModernOperatorView.h"
 
 #include "resource.h"
@@ -90,6 +91,8 @@
 #define WM_MESSAGE_RENDERER_ACTION_EVENT                 (WM_APP + 20)
 #define WM_MESSAGE_RENDERER_QUEUE_CONTRACT_CHANGED       (WM_APP + 21)
 #define WM_MESSAGE_CONFIGURATION_RPC_REQUEST             (WM_APP + 22)
+#define WM_MESSAGE_SOURCE_PLUGIN_HOST_CALL               (WM_APP + 23)
+#define WM_MESSAGE_SOURCE_NATIVE_RASTER                  (WM_APP + 24)
 
 static_assert(WM_MESSAGE_DIRECTSHOW_NOTIFICATION !=
 	WM_MESSAGE_DIRECTSHOW_OWNER_COMPLETION,
@@ -625,6 +628,12 @@ protected:
 	// Native-raster charts shown 1:1, no switch (PatgenNoCrop.h, A201).
 	bool m_patgenOneToOneChart = false;       // the chart Config last showed is one of them
 	bool m_patgenOneToOne = false;            // Screen and Zoom are set aside now
+	// A source plugin asks for its frames 1:1 (VP_SOURCE_STATE_NATIVE_RASTER,
+	// version 6): set aside the same way, any plugin, no switch of VP's.
+	bool m_sourceNativeRaster = false;
+	// A source plugin's version 6 host calls (SourcePluginHostCalls.h).
+	SourcePluginHostCalls m_sourcePluginHostCalls;
+	void RunSourcePluginHostJob(SourcePluginHostCalls::Job& job);
 
 	VideoStateComPtr m_builtVideoState = nullptr;  // This is what we make of it
 	OsdInputColorInfo::AcceptedState m_osdAcceptedInputColor;
@@ -1209,6 +1218,8 @@ protected:
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
 	afx_msg LRESULT OnConfigurationEditorHotkey(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnConfigurationRpcRequest(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnSourcePluginHostCall(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnSourceNativeRaster(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnConfigurationEditorAssociation(WPARAM wParam,
 		LPARAM lParam);
 	afx_msg LRESULT OnConfigurationEditorPresentationTargetAcknowledgement(

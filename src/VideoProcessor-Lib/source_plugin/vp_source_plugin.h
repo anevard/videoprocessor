@@ -31,6 +31,10 @@
  *     create and destroy. VP may hold several frames at once and release
  *     them in any order, after stop has returned.
  *   - host->log: the plugin may call it from any thread.
+ *   - host->readback, wait_presented, select_profile, get_profile (version
+ *     6): the plugin's own threads only, never VP's GUI thread or its
+ *     reader (never from send_command or wait_frame): each blocks until VP
+ *     has done it, and VP's GUI thread or reader is what does it.
  *
  * Timing: the plugin is the input's clock, as a capture card is. Every
  * frame timestamp is on that clock, in clock_ticks_per_second ticks.
@@ -74,7 +78,7 @@
 extern "C" {
 #endif
 
-#define VP_SOURCE_PLUGIN_ABI_VERSION        5u
+#define VP_SOURCE_PLUGIN_ABI_VERSION        6u
 #define VP_SOURCE_PLUGIN_ABI_VERSION_OLDEST 2u   /* oldest VP still loads */
 
 #if defined(_WIN32)
@@ -89,6 +93,8 @@ extern "C" {
 #define VP_SOURCE_ERROR_ARGUMENT   -2
 #define VP_SOURCE_ERROR_STATE      -3   /* e.g. wait_frame before start */
 #define VP_SOURCE_ERROR_UNSUPPORTED -4
+#define VP_SOURCE_ERROR_TIMEOUT     -5  /* version 6: a host call's wait ran
+                                           out; nothing was done */
 
 /* wait_frame outcomes (non-negative). */
 #define VP_SOURCE_WAIT_FRAME          0   /* *frame filled; release it later */
@@ -152,6 +158,14 @@ extern "C" {
                                                        when it cannot (R10L
                                                        at the output's size,
                                                        limited range) */
+#define VP_SOURCE_STATE_NATIVE_RASTER   (1u << 2)   /* version 6: show the
+                                                       frames 1:1, pixel for
+                                                       pixel: VP sets its
+                                                       Screen and Zoom
+                                                       profiles aside (no
+                                                       resize, no crop, no
+                                                       zoom) while it is set;
+                                                       nothing is saved */
 
 /* Log levels for host->log. */
 #define VP_SOURCE_LOG_ERROR   0u
@@ -207,7 +221,7 @@ typedef struct vp_source_state {
     vp_source_hdr10    hdr10;
     vp_source_raw_tags raw;
     uint32_t flags;             /* VP_SOURCE_STATE_* (version 4; RAW_OUTPUT
-                                   version 5) */
+                                   version 5; NATIVE_RASTER version 6) */
 } vp_source_state;
 
 /* One cue image on a frame (see Cues at the top). id == 0: none; ignore
@@ -242,13 +256,90 @@ typedef struct vp_source_frame {
     vp_source_cue message;      /* a short on-screen message */
 } vp_source_frame;
 
-/* Services VP offers the plugin. Valid from create until destroy returns. */
+/* A rectangle of VP's output, in output pixels, top-left origin (version 6). */
+typedef struct vp_source_rect {
+    uint32_t x, y;
+    uint32_t width, height;
+} vp_source_rect;
+
+/* host->readback flags (version 6). */
+#define VP_SOURCE_READBACK_PNG  (1u << 0)   /* also write VP's whole-frame
+                                               capture of the same frame (as
+                                               Ctrl+Alt+S does); its path is
+                                               returned */
+
+/* What host->readback read: VP's output as it was about to be presented,
+ * after every stage of VP's processing, before the display. */
+typedef struct vp_source_readback {
+    uint32_t struct_size;       /* set by the plugin */
+    uint32_t bits;              /* the output's code depth: 10 (only 10-bit
+                                   R10G10B10A2 output can be read) */
+    uint64_t source_frame;      /* the frame counter read (at least the one
+                                   asked for) */
+    uint32_t output_width;      /* the whole output, pixels */
+    uint32_t output_height;
+    uint32_t min[3];            /* per channel R, G, B, over the rectangle */
+    uint32_t max[3];
+    double   mean[3];
+    uint64_t hash;              /* FNV-1a 64 of the rectangle's pixels as
+                                   32-bit words, row by row */
+    uint64_t vp_present;        /* VP's present count for the present it
+                                   rode; 0 if that present failed */
+    uint32_t dxgi_present_id;   /* DXGI's present count after it */
+    uint32_t reserved0;
+    char     png_path[520];     /* UTF-8; READBACK_PNG only, else empty:
+                                   the file VP is writing (it may still be
+                                   being written when readback returns) */
+} vp_source_readback;
+
+/* What host->wait_presented saw: a frame handed to the display. */
+typedef struct vp_source_presented {
+    uint32_t struct_size;       /* set by the plugin */
+    uint32_t dxgi_stats;        /* 1: the DXGI fields below are valid */
+    uint64_t source_frame;      /* the frame counter presented (at least the
+                                   one asked for) */
+    uint64_t vp_present;        /* VP's present count */
+    int64_t  submit_qpc;        /* QueryPerformanceCounter at Present */
+    uint32_t dxgi_present_id;   /* DXGI's present count after Present */
+    uint32_t dxgi_shown_id;     /* DXGI's last present on the screen then */
+    int64_t  dxgi_shown_qpc;    /* and when it went on the screen */
+} vp_source_presented;
+
+/* Services VP offers the plugin. Valid from create until destroy returns.
+ * The version 6 functions are there only when abi_version >= 6 and
+ * struct_size covers them; each answers VP_SOURCE_ERROR_UNSUPPORTED when
+ * VP's renderer cannot do it. See Threads at the top. */
 typedef struct vp_source_host {
     uint32_t abi_version;       /* the version this plugin answered */
     uint32_t struct_size;
     void*    context;           /* pass back unchanged */
     const char* plugin_dir;     /* UTF-8; the folder holding the plugin DLL */
     void (*log)(void* context, uint32_t level, const char* message_utf8);
+
+    /* Version 6. Waits until VP has rendered a frame of this input whose
+     * counter is source_frame or later, reads rect of its output and
+     * returns its statistics in *out. A rect outside the output:
+     * VP_SOURCE_ERROR_ARGUMENT. One readback at a time per VP:
+     * VP_SOURCE_ERROR_STATE while another waits. */
+    int32_t (*readback)(void* context, uint64_t source_frame,
+                        const vp_source_rect* rect, uint32_t flags,
+                        uint32_t timeout_ms, vp_source_readback* out);
+    /* Version 6. Waits until VP has presented a frame of this input whose
+     * counter is source_frame or later, in a present made after this call
+     * began, and returns that present in *out. */
+    int32_t (*wait_presented)(void* context, uint64_t source_frame,
+                              uint32_t timeout_ms, vp_source_presented* out);
+    /* Version 6. Selects profile in profile group group (as named in VP's
+     * configuration), as a keypress would, but never saved; VP applies it
+     * before returning. profile NULL releases every pick this plugin made:
+     * each group goes back to exactly what it had before the first one. */
+    int32_t (*select_profile)(void* context, const char* group_utf8,
+                              const char* profile_utf8);
+    /* Version 6. The profiles in force in group, comma separated, into
+     * buffer (size bytes, NUL included); VP_SOURCE_ERROR_ARGUMENT when the
+     * group is unknown or the buffer too small. */
+    int32_t (*get_profile)(void* context, const char* group_utf8,
+                           char* buffer, uint32_t size);
 } vp_source_host;
 
 typedef struct vp_source_instance vp_source_instance;
