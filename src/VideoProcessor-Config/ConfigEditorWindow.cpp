@@ -25,6 +25,7 @@
 #include "PatternLiveKeys.h"
 #include "PatternChartSignal.h"
 #include <source_plugin/PatgenChartShowing.h>
+#include <source_plugin/PatgenRawOutput.h>
 #include <ConfigurationApplyPolicy.h>
 #include <ConfigurationIdentity.h>
 #include <ConfigurationLiveApply.h>
@@ -2761,6 +2762,8 @@ void ConfigEditorWindow::applyActiveProfileIndicators(bool available,
     if (checkPatternChartShowing_) checkPatternChartShowing_();
     // A newly built Patterns page reads "Pick a chart"; so does the screen (A219 (2)).
     if (available && clearPatternChartOnOpen_) clearPatternChartOnOpen_();
+    // The Patterns page's raw box follows the generator (A255).
+    if (available && readPatternRawOutput_) readPatternRawOutput_();
 
     refreshRendererAutoStatus();
 }
@@ -11479,15 +11482,106 @@ QWidget* ConfigEditorWindow::createPatternPage()
         auto* signalBodyLayout = new QVBoxLayout(signalBody);
         signalBodyLayout->setContentsMargins(0, 0, 0, 0);
         signalBodyLayout->setSpacing(10);
-        signalBodyLayout->addWidget(fieldWithHelp(QStringLiteral("Depth and range"),
-            bindChoiceField(section, QStringLiteral("mode"),
-                { QStringLiteral("r10l_legal_10"), QStringLiteral("r10l_legal_8"), QStringLiteral("bgra8_full_8") },
-                { QStringLiteral("RGB 10-bit, limited range"), QStringLiteral("RGB 8-bit, limited range"),
-                  QStringLiteral("RGB 8-bit, full range") }),
+        QComboBox* mode = bindChoiceField(section, QStringLiteral("mode"),
+            { QStringLiteral("r10l_legal_10"), QStringLiteral("r10l_legal_8"), QStringLiteral("bgra8_full_8") },
+            { QStringLiteral("RGB 10-bit, limited range"), QStringLiteral("RGB 8-bit, limited range"),
+              QStringLiteral("RGB 8-bit, full range") });
+        signalBodyLayout->addWidget(fieldWithHelp(QStringLiteral("Depth and range"), mode,
             QStringLiteral("Every chart and every ColourSpace patch. Set ColourSpace to the same depth and range; "
                 "a patch at another depth is refused. The charts need a limited-range signal.")));
         layout->addWidget(createCard(QStringLiteral("Signal"),
             QStringLiteral("Used when the VP TPG input starts."), signalBody));
+
+        // Raw output (A255): VP writes the generator's codes to the screen
+        // unprocessed. Never saved and off at every start, so the box shows
+        // the generator's live state (PatgenRawOutput.h), read when the page
+        // is built and on the status tick; only the user's click sends, so a
+        // page build, a refresh or a read never switches it off (operator).
+        auto* rawBody = new QWidget;
+        auto* rawLayout = new QVBoxLayout(rawBody);
+        rawLayout->setContentsMargins(0, 0, 0, 0);
+        rawLayout->setSpacing(10);
+        auto* raw = new QCheckBox(QStringLiteral("Raw output: no VP processing"));
+        raw->setObjectName(QStringLiteral("config.pattern.raw"));
+        rawLayout->addWidget(raw);
+        rawLayout->addWidget(helpLabel(QStringLiteral(
+            "The generator's codes reach the screen exactly as made: no tone or gamut mapping, no calibration "
+            "LUT, no scaling, no overlays. 10-bit and 8-bit limited range only; the frame size must match the "
+            "output, otherwise the screen goes black and vp.log says why.")));
+        auto* rawLock = helpLabel(QString());
+        rawLock->setObjectName(QStringLiteral("config.pattern.raw.lock"));
+        rawLock->hide();
+        rawLayout->addWidget(rawLock);
+        layout->addWidget(createCard(QStringLiteral("Raw output"),
+            QStringLiteral("Takes effect at once. Never saved: off whenever VP or the VP TPG input starts."), rawBody));
+
+        // Full range cannot go raw: each greys the other (operator, A255). A
+        // box already on stays clickable, so it can always be switched off.
+        const int fullIndex = mode->findData(QStringLiteral("bgra8_full_8"));
+        const auto interlock = [mode, raw, rawLock, fullIndex]
+        {
+            const bool fullSelected = fullIndex >= 0 && mode->currentIndex() == fullIndex;
+            raw->setEnabled(!fullSelected || raw->isChecked());
+            if (auto* model = qobject_cast<QStandardItemModel*>(mode->model()))
+                if (QStandardItem* full = fullIndex >= 0 ? model->item(fullIndex) : nullptr)
+                    full->setEnabled(!raw->isChecked());
+            const QString why = raw->isChecked() ?
+                QStringLiteral("RGB 8-bit, full range cannot be chosen while raw output is on.") :
+                fullSelected ? QStringLiteral("Raw output needs a limited-range signal; RGB 8-bit, full range is chosen.") :
+                QString();
+            rawLock->setText(why);
+            rawLock->setVisible(!why.isEmpty());
+        };
+        interlock();
+        connect(mode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [interlock](int) { interlock(); });
+
+        // The user's click: the only thing that sends. Refused or unsent, the
+        // box goes back; the next read shows the generator's state anyway.
+        const auto rawClicks = std::make_shared<uint64_t>(0);
+        connect(raw, &QCheckBox::clicked, this, [this, raw, status, interlock, rawClicks](bool on)
+        {
+            ++*rawClicks;
+            const QString command = on ? QStringLiteral("raw on") : QStringLiteral("raw off");
+            if (noTarget_ || testMode_)
+            {
+                raw->setChecked(!on);
+                interlock();
+                status->setText(QStringLiteral("No target VP to send %1 to.").arg(command));
+                return;
+            }
+            interlock();
+            status->setText(QStringLiteral("Sending %1...").arg(command));
+            runTargetAction(QStringLiteral("pattern.") + command,
+                [raw, status, interlock, command, on](bool sent, const QString& error)
+            {
+                status->setText(sent ? QStringLiteral("Sent: %1").arg(command) : error);
+                if (!sent && raw->isChecked() == on)
+                {
+                    raw->setChecked(!on);
+                    interlock();
+                }
+            });
+        });
+
+        // The read: moves the box, never sends. An answer overtaken by a click
+        // is dropped; another input or an older generator leaves the box alone.
+        const auto rawAsking = std::make_shared<bool>(false);
+        readPatternRawOutput_ = [this, raw, interlock, rawAsking, rawClicks]
+        {
+            if (*rawAsking || noTarget_ || testMode_) return;
+            *rawAsking = true;
+            const uint64_t askedAfter = *rawClicks;
+            runTargetAction(QStringLiteral("pattern.") + QString::fromUtf8(PatgenRawOutput::StateCommand),
+                [raw, interlock, rawAsking, rawClicks, askedAfter](bool sent, const QString& error)
+            {
+                *rawAsking = false;
+                if (*rawClicks != askedAfter) return;
+                if (sent) raw->setChecked(true);
+                else if (error == QString::fromUtf8(PatgenRawOutput::Off)) raw->setChecked(false);
+                else return;
+                interlock();
+            });
+        };
     }
 
     // ColourSpace: used from the input's next start. Closed until opened: it is

@@ -351,6 +351,9 @@ private:
     // On the first status tick that reaches VP after the Patterns page is
     // built: a chart an earlier page left up is taken off (A219 (2)).
     std::function<void()> clearPatternChartOnOpen_;
+    // On the status tick: the Patterns page's raw box shows the generator's
+    // live raw state (A255, PatgenRawOutput.h); it never sends.
+    std::function<void()> readPatternRawOutput_;
     // Rendering / DTM: before Save or Apply, writes every rendering profile's
     // settings explicitly so none inherits from the default profile.
     std::function<void()> freezeRenderingProfiles_;
