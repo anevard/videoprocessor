@@ -3277,15 +3277,16 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;
 			}
-			// The Patterns page's raw box reads the generator's live state
-			// (PatgenRawOutput.h): OK for on, refused with Off for off.
-			if (command == PatgenRawOutput::StateCommand)
+			// The Patterns page's live boxes (raw, ColourSpace 1:1, harness
+			// armed) read the generator's state (PatgenRawOutput.h): OK for
+			// on, refused with that box's off text for off.
+			if (const char* offText = PatgenRawOutput::OffTextFor(command))
 			{
 				if (PatgenRawOutput::IsOff(result))
-					return ConfigurationRpcError(operation, PatgenRawOutput::Off);
+					return ConfigurationRpcError(operation, offText);
 				if (!PatgenRawOutput::IsOn(result))
 					return ConfigurationRpcError(operation,
-						"The pattern generator did not answer raw_state (" + std::to_string(result) + ").");
+						"The pattern generator did not answer " + command + " (" + std::to_string(result) + ").");
 				Frame response;
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;

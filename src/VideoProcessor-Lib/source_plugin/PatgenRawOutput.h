@@ -15,6 +15,7 @@
 // leaves the box as it is.
 
 #include <cstdint>
+#include <string>
 
 namespace PatgenRawOutput
 {
@@ -29,5 +30,23 @@ namespace PatgenRawOutput
 	inline bool IsOff(int32_t answer)
 	{
 		return answer == 0;
+	}
+
+	// The Patterns page's other live switches, read the same way (A261):
+	// "ColourSpace patches 1:1" (on at every VP start) and the loopback
+	// harness's arm switch (off at every VP start). Neither is saved.
+	constexpr const char* OneToOneStateCommand = "one_to_one_state";
+	constexpr const char* OneToOneOff = "ColourSpace patches 1:1 is off.";
+	constexpr const char* LoopArmStateCommand = "loop_arm_state";
+	constexpr const char* LoopArmOff = "The loopback harness is not armed.";
+
+	// For a state command: its refusal text for off; nullptr for any other
+	// command.
+	inline const char* OffTextFor(const std::string& command)
+	{
+		if (command == StateCommand) return Off;
+		if (command == OneToOneStateCommand) return OneToOneOff;
+		if (command == LoopArmStateCommand) return LoopArmOff;
+		return nullptr;
 	}
 }
