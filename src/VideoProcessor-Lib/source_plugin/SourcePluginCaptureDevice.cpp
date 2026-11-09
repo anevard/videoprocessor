@@ -19,6 +19,9 @@
 
 #include "SourcePluginBackend.h"
 #include "SourcePluginCaptureDevice.h"
+#include "SourcePluginHostServices.h"
+
+#include <cstring>
 
 
 namespace
@@ -329,6 +332,11 @@ SourcePluginCaptureDevice::SourcePluginCaptureDevice(
 	m_host.context = this;
 	m_host.plugin_dir = m_pluginDirUtf8.c_str();
 	m_host.log = &SourcePluginCaptureDevice::HostLog;
+	// Version 6: always filled; a plugin reads them only when it answered 6.
+	m_host.readback = &SourcePluginCaptureDevice::HostReadback;
+	m_host.wait_presented = &SourcePluginCaptureDevice::HostWaitPresented;
+	m_host.select_profile = &SourcePluginCaptureDevice::HostSelectProfile;
+	m_host.get_profile = &SourcePluginCaptureDevice::HostGetProfile;
 
 	if (m_api->create(&m_host, &m_instance) != VP_SOURCE_OK || !m_instance)
 		throw std::runtime_error("Source plugin: create failed");
@@ -704,6 +712,9 @@ void SourcePluginCaptureDevice::SendVideoState()
 		// own depth; the renderer refuses (black) what it cannot copy.
 		videoState->rawOutputBits = m_api->abi_version >= 5 && videoState->exactSignal &&
 			(state.flags & VP_SOURCE_STATE_RAW_OUTPUT) != 0 ? bitDepth : 0;
+		// Shown 1:1 (version 6): the main window reads it with this state.
+		m_nativeRaster.store(m_api->abi_version >= 6 &&
+			(state.flags & VP_SOURCE_STATE_NATIVE_RASTER) != 0, std::memory_order_release);
 
 		if (state.hdr10.has_mastering)
 		{
@@ -914,4 +925,59 @@ void SourcePluginCaptureDevice::HostLog(void* context, uint32_t level, const cha
 		device ? device->m_nameUtf8.c_str() : "?",
 		LogLevelName(level),
 		messageUtf8 ? messageUtf8 : "");
+}
+
+
+// Version 6 host calls: forwarded to VP's main window
+// (SourcePluginHostServices.h); unsupported before it registers.
+int32_t SourcePluginCaptureDevice::HostReadback(void*, uint64_t sourceFrame,
+	const vp_source_rect* rect, uint32_t flags, uint32_t timeoutMs, vp_source_readback* out)
+{
+	if (!rect || !out || out->struct_size == 0)
+		return VP_SOURCE_ERROR_ARGUMENT;
+	ISourcePluginHostServices* services = SourcePluginHostServices::Get();
+	return services ? services->Readback(sourceFrame, *rect, flags, timeoutMs, *out) :
+		VP_SOURCE_ERROR_UNSUPPORTED;
+}
+
+
+int32_t SourcePluginCaptureDevice::HostWaitPresented(void*, uint64_t sourceFrame,
+	uint32_t timeoutMs, vp_source_presented* out)
+{
+	if (!out || out->struct_size == 0)
+		return VP_SOURCE_ERROR_ARGUMENT;
+	ISourcePluginHostServices* services = SourcePluginHostServices::Get();
+	return services ? services->WaitPresented(sourceFrame, timeoutMs, *out) :
+		VP_SOURCE_ERROR_UNSUPPORTED;
+}
+
+
+int32_t SourcePluginCaptureDevice::HostSelectProfile(void*, const char* groupUtf8,
+	const char* profileUtf8)
+{
+	if (profileUtf8 && (!groupUtf8 || !*groupUtf8 || !*profileUtf8))
+		return VP_SOURCE_ERROR_ARGUMENT;
+	ISourcePluginHostServices* services = SourcePluginHostServices::Get();
+	return services ? services->SelectProfile(groupUtf8, profileUtf8) :
+		VP_SOURCE_ERROR_UNSUPPORTED;
+}
+
+
+int32_t SourcePluginCaptureDevice::HostGetProfile(void*, const char* groupUtf8,
+	char* buffer, uint32_t size)
+{
+	if (!groupUtf8 || !*groupUtf8 || !buffer || size == 0)
+		return VP_SOURCE_ERROR_ARGUMENT;
+	buffer[0] = '\0';
+	ISourcePluginHostServices* services = SourcePluginHostServices::Get();
+	if (!services)
+		return VP_SOURCE_ERROR_UNSUPPORTED;
+	std::string profiles;
+	const int32_t result = services->GetProfile(groupUtf8, profiles);
+	if (result != VP_SOURCE_OK)
+		return result;
+	if (profiles.size() + 1 > size)
+		return VP_SOURCE_ERROR_ARGUMENT;
+	std::memcpy(buffer, profiles.c_str(), profiles.size() + 1);
+	return VP_SOURCE_OK;
 }
