@@ -572,6 +572,17 @@ namespace
 		}
 	}
 
+	const char* AlphaCadenceSnapSourceText(AlphaCadenceSnapSource source)
+	{
+		switch (source)
+		{
+		case AlphaCadenceSnapSource::Depth:
+			return "depth";
+		default:
+			return "none";
+		}
+	}
+
 	const char* AlphaPresentationEvidenceText(
 		AlphaPresentationEvidence evidence)
 	{
@@ -4407,6 +4418,11 @@ struct LibplaceboVideoRenderer::Impl
 {
 	SceneDetector sceneDetector;
 	AlphaCadenceCorrectionPolicy cadenceCorrectionPolicy;
+	// The last successful DXGI frame-statistics pair, for the cadence
+	// policy's count of repeated refreshes. Backlog recovery keeps it.
+	uint32_t cadenceDxgiPresentCount = 0;
+	uint32_t cadenceDxgiPresentRefreshCount = 0;
+	bool cadenceDxgiSampleValid = false;
 	AlphaPresentationTelemetry presentationTelemetry;
 	uint64_t lastFramePacingGeneration = 0;
 	int64_t lastFramePacingSubmitQpc = 0;
@@ -5246,7 +5262,7 @@ struct LibplaceboVideoRenderer::Impl
 			decision.action != AlphaCadenceAction::None
 				? decision.action : decision.predictedAction;
 		DebugLog::Log(
-			"Alpha cadence policy: event=%s action_id=%llu policy_generation=%llu detector_generation=%llu presentation_generation=%llu queue_generation=%llu source=%llu present_id=%u evidence=%s rate_samples=%u action=%s authorized=%d reason=%s phase=%.9f deadline_s=%+.6f raw_ppm=%+.3f filtered_ppm=%.3f capture_hz=%.6f display_hz=%.6f queue=%zu/%zu oldest_ms=%.3f debt=%llu scene_event=%llu scene_safe=%d scene_fresh=%d scene_authorized=%d planned_frames=%u fallback_frames=%u fallback_mature=%d fallback_eligible=%d cooldown_frames=%u verification_pending=%d",
+			"Alpha cadence policy: event=%s action_id=%llu policy_generation=%llu detector_generation=%llu presentation_generation=%llu queue_generation=%llu source=%llu present_id=%u evidence=%s rate_samples=%u action=%s authorized=%d reason=%s phase=%.9f deadline_s=%+.6f raw_ppm=%+.3f filtered_ppm=%.3f capture_hz=%.6f display_hz=%.6f queue=%zu/%zu oldest_ms=%.3f debt=%llu scene_event=%llu scene_safe=%d scene_fresh=%d scene_authorized=%d planned_frames=%u fallback_frames=%u fallback_mature=%d fallback_eligible=%d cooldown_frames=%u verification_pending=%d rep_refresh=%llu flushed=%llu premature=%llu ref_shift=%lld rebase=%llu snap=%s above_floor=%.6f",
 			event,
 			static_cast<unsigned long long>(actionId),
 			static_cast<unsigned long long>(snapshot.policyGeneration),
@@ -5280,7 +5296,14 @@ struct LibplaceboVideoRenderer::Impl
 			snapshot.fallbackMature ? 1 : 0,
 			snapshot.fallbackEligible ? 1 : 0,
 			snapshot.cooldownFrames,
-			decision.verificationPending ? 1 : 0);
+			decision.verificationPending ? 1 : 0,
+			static_cast<unsigned long long>(snapshot.repeatedRefreshes),
+			static_cast<unsigned long long>(snapshot.framesFlushed),
+			static_cast<unsigned long long>(snapshot.prematureDrops),
+			static_cast<long long>(snapshot.referenceShiftFrames),
+			static_cast<unsigned long long>(snapshot.dxgiRebases),
+			AlphaCadenceSnapSourceText(snapshot.snapSource),
+			snapshot.aboveFloorFrames);
 	}
 
 	void UpdateCadenceDiagnostics(
@@ -5477,12 +5500,14 @@ struct LibplaceboVideoRenderer::Impl
 				"caller_release_pending");
 	}
 
-	void ResetTimingAfterBacklogRecovery(uint64_t queueGeneration)
+	void ResetTimingAfterBacklogRecovery(
+		uint64_t queueGeneration, size_t framesFlushed)
 	{
         displayRepeatValid = false;
         displayVsyncClock.Reset();
 		temporalRenderer.ResetHistoryAfterSourceGap();
-        cadenceCorrectionPolicy.Reset(queueGeneration);
+		cadenceCorrectionPolicy.OnBacklogRecovery(
+			static_cast<uint32_t>(framesFlushed));
 		presentationTelemetry.Reset(queueGeneration);
 		renderLoadMeter.DiscardPendingSamples();
 		coreRenderLoadMeter.DiscardPendingSamples();
@@ -7926,6 +7951,7 @@ struct LibplaceboVideoRenderer::Impl
         displayCadenceRecovery.OutputChanged();
         ++displayCadenceOutputEpoch;
         presentationTelemetry.Reset(displayCadenceSourceGeneration);
+        cadenceCorrectionPolicy.OnOutputChanged();
         analysisWorkBudget = {};
         lastFramePacingStatsAvailable = false;
         lastFramePacingSubmitQpc = 0;
@@ -13449,6 +13475,10 @@ struct LibplaceboVideoRenderer::Impl
 			correctionInput.presentationDebt =
 				presentation.sourceToPresentDebt;
 			correctionInput.lastPresentId = presentation.lastPresentId;
+			correctionInput.dxgiPresentCount = cadenceDxgiPresentCount;
+			correctionInput.dxgiPresentRefreshCount =
+				cadenceDxgiPresentRefreshCount;
+			correctionInput.dxgiSampleValid = cadenceDxgiSampleValid;
 			correctionInput.safeSceneBoundary =
 				sceneDetectionEnabled && sceneResult.safeBoundary;
 			correctionInput.sceneEventId = sceneDetectionEnabled
@@ -20645,6 +20675,9 @@ releaseDriftBaseRetention =
                 statistics.PresentRefreshCount;
                 sample.syncRefreshCount = statistics.SyncRefreshCount;
                 sample.syncQpc = statistics.SyncQPCTime.QuadPart;
+                cadenceDxgiPresentCount = sample.presentCount;
+                cadenceDxgiPresentRefreshCount = sample.presentRefreshCount;
+                cadenceDxgiSampleValid = true;
             }
             else
             {
@@ -25879,7 +25912,8 @@ void LibplaceboVideoRenderer::RenderLoop()
 							m_droppedFrames.fetch_add(
 								droppedFrames, std::memory_order_relaxed) +
 							droppedFrames;
-						m_impl->ResetTimingAfterBacklogRecovery(frameGeneration);
+						m_impl->ResetTimingAfterBacklogRecovery(
+							frameGeneration, droppedFrames);
 						m_presentationTargetTimingKnown.store(
 							false, std::memory_order_release);
 						presentationTargetTimingKnown = false;
