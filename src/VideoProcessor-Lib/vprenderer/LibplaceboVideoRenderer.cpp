@@ -4578,6 +4578,9 @@ struct LibplaceboVideoRenderer::Impl
     };
 
 	pl_tex textures[2] = { nullptr, nullptr };
+	// R10l/R10b words repacked for upload (AlphaNativeRgbIngress.h); reused
+	// while the frame size holds.
+	std::vector<uint32_t> nativeRgbRepackWords;
 	double sourceUploadCpuLastMs = 0.0;
 	double sourceUploadCpuIntervalTotalMs = 0.0;
 	double sourceUploadCpuIntervalPeakMs = 0.0;
@@ -14092,15 +14095,35 @@ struct LibplaceboVideoRenderer::Impl
         if (!sourceUploadReused) {
         if (nativeRgbUpload)
 		{
+			// R10l and R10b match no D3D11 texture format; their words are
+			// repacked on the CPU first (AlphaNativeRgbIngress.h).
+			const bool nativeRgbRepack = AlphaNativeRgbNeedsRepack(nativeRgbLayout);
+			// Not const: pl_plane_data_from_mask takes a mutable mask array.
+			AlphaNativeRgbLayout uploadLayout = nativeRgbRepack ?
+				AlphaNativeRgbRepackedLayout(nativeRgbLayout) : nativeRgbLayout;
+			const void* uploadPixels = videoFrame.GetData();
+			size_t uploadRowStride = state.BytesPerRow();
+			if (nativeRgbRepack)
+			{
+				nativeRgbRepackWords.resize(
+					static_cast<size_t>(width) * static_cast<size_t>(height));
+				AlphaRepackR10ToRgb10a2(
+					static_cast<const uint8_t*>(videoFrame.GetData()),
+					state.BytesPerRow(), nativeRgbRepackWords.data(),
+					static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+					nativeRgbLayout.swapped);
+				uploadPixels = nativeRgbRepackWords.data();
+				uploadRowStride = static_cast<size_t>(width) * sizeof(uint32_t);
+			}
 			struct pl_plane_data plane{};
 			plane.type = PL_FMT_UNORM;
 			plane.width = width;
 			plane.height = height;
 			plane.pixel_stride = 4;
-			plane.row_stride = state.BytesPerRow();
-			plane.pixels = videoFrame.GetData();
-			plane.swapped = nativeRgbLayout.swapped;
-			pl_plane_data_from_mask(&plane, nativeRgbLayout.masks);
+			plane.row_stride = uploadRowStride;
+			plane.pixels = uploadPixels;
+			plane.swapped = uploadLayout.swapped;
+			pl_plane_data_from_mask(&plane, uploadLayout.masks);
 			frameGpuTiming.BeginStage(
 				AlphaD3D11FrameGpuTimer::Stage::SourceUpload);
 			const bool sourceUploaded = pl_upload_plane(d3d11->gpu,
@@ -14115,6 +14138,8 @@ struct LibplaceboVideoRenderer::Impl
 			std::string resolvedIngressStatus = tunnelRgbFallback ?
 				"Dolby Vision tunnel SDR RGB8 passthrough" :
 				nativeRgbLayout.label;
+			if (nativeRgbRepack)
+				resolvedIngressStatus += " (CPU repack)";
 			if (!analysisSource.IsValid())
 				resolvedIngressStatus += " (analysis unavailable)";
 			setIngressStatus(std::move(resolvedIngressStatus));
