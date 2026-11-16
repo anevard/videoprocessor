@@ -46,6 +46,7 @@
 #include <vprenderer/AlphaD3D11FrameGpuTimer.h>
 #include <vprenderer/AlphaRenderLoadMeter.h>
 #include <vprenderer/AlphaNativeRgbIngress.h>
+#include <source_plugin/PatgenRawCopy.h>
 #include <P210FrameLayout.h>
 #include <vprenderer/AlphaSourceCropPolicy.h>
 #include <vprenderer/SubtitleAspectRetention.h>
@@ -5724,7 +5725,7 @@ struct LibplaceboVideoRenderer::Impl
 				pl_tex_destroy(d3d11->gpu, &sourceMessageTexture);
 				pl_tex_destroy(d3d11->gpu, &sourceCuePanelTexture);
 				pl_tex_destroy(d3d11->gpu, &sourceCueBorderTexture);
-				pl_dispatch_destroy(&rawOutputDispatch);
+				pl_tex_destroy(d3d11->gpu, &rawOutputTexture);
 				for (pl_tex& texture : textures)
 					pl_tex_destroy(d3d11->gpu, &texture);
 			}
@@ -5855,82 +5856,93 @@ struct LibplaceboVideoRenderer::Impl
 	// generator's "Raw output: no VP processing"): RenderLocked calls this in
 	// place of the libplacebo render, after the target was acquired and
 	// cleared, and the rest of the frame (repeat cache, Ctrl+Alt+S, present,
-	// presentation record) runs as for any frame. The R10L codes, as VP's R10L
-	// unpack left them in the source texture, are copied 1:1 to the output: a
-	// 10-bit output stores each code, an 8-bit output each 8-bit code (the
-	// source carries it as code << 2). No scaling, range change, LUT, dither
-	// or overlay. What cannot be copied exactly stays black, its reason logged
-	// when it starts or changes. Always true: the cleared target is the frame.
+	// presentation record) runs as for any frame. The frame's R10L codes are
+	// copied 1:1 to the output: a 10-bit output stores each code, an 8-bit
+	// output each 8-bit code (the source carries it as code << 2). No scaling,
+	// range change, LUT, dither or overlay. No GPU pass of ours: the CPU writes
+	// the output words (PatgenRawCopy.h) into a texture of the backbuffer's own
+	// format, and the GPU copies it to the backbuffer as it is. What cannot be
+	// copied exactly stays black, its reason logged when it starts or changes.
+	// Always true: the cleared target is the frame.
 	std::string rawOutputStatus;
 	uint64_t rawOutputLastPresentedFrame = UINT64_MAX;
-	// The copy's own GPU pass: made at the first frame it copies, destroyed
-	// with the renderer's textures.
-	pl_dispatch rawOutputDispatch = nullptr;
+	// The output words and the texture they are uploaded into: kept while the
+	// output's size and format hold, the texture destroyed with the
+	// renderer's textures.
+	std::vector<uint32_t> rawOutputWords;
+	pl_tex rawOutputTexture = nullptr;
 	// The PNG the last Ctrl+Alt+S-style capture wrote (render thread).
 	std::wstring lastRenderedCapturePng;
 	bool RenderRawOutput(const VideoState& state, bool nativeRgbUpload,
-		const pl_frame& image, const pl_frame& target)
+		const VideoFrame& videoFrame, int width, int height, const pl_frame& target)
 	{
 		if (rawOutputStatus.empty())
 			temporalRenderer.Clear();
-		const pl_tex source = image.planes[0].texture;
+		const SteadyClock::time_point copyStart = SteadyClock::now();
 		const pl_tex output = target.planes[0].texture;
 		const pl_fmt format = output ? output->params.format : nullptr;
-		const int outputBits = format && format->type == PL_FMT_UNORM ?
-			format->component_depth[0] : 0;
+		PatgenRawCopy::WordLayout layout;
+		const bool layoutKnown = format && format->type == PL_FMT_UNORM &&
+			!format->emulated && PatgenRawCopy::LayoutFor(format->num_components,
+				format->texel_size, format->host_bits, format->sample_order, layout);
+		const int outputBits = layoutKnown ? layout.bits : 0;
+		const size_t sourceStride = state.BytesPerRow();
 		std::string refusal;
-		if (!nativeRgbUpload || !source ||
+		if (!nativeRgbUpload || !videoFrame.GetData() ||
 			state.videoFrameEncoding != VideoFrameEncoding::R10l)
 			refusal = "the frame is not R10L";
-		else if (outputBits != 10 && outputBits != 8)
-			refusal = "the output buffer is neither 10-bit nor 8-bit";
+		else if (!layoutKnown)
+			refusal = "the output buffer is neither 10-bit nor 8-bit RGBA";
 		else if (outputBits == 8 && state.rawOutputBits != 8)
 			refusal = "10-bit codes on the 8-bit swapchain";
-		else if (source->params.w != output->params.w ||
-			source->params.h != output->params.h)
-			refusal = "the frame is " + std::to_string(source->params.w) + "x" +
-				std::to_string(source->params.h) + ", the output " +
+		else if (width != output->params.w || height != output->params.h)
+			refusal = "the frame is " + std::to_string(width) + "x" +
+				std::to_string(height) + ", the output " +
 				std::to_string(output->params.w) + "x" +
 				std::to_string(output->params.h);
+		else if (sourceStride < static_cast<size_t>(width) * 4)
+			refusal = "the frame's rows are shorter than its width";
 		else if (EncodingLevels(actualOutput.encoding) != PL_COLOR_LEVELS_LIMITED)
 			refusal = "the output range is not limited";
-		else if (!output->params.renderable)
-			refusal = "the output cannot take the copy";
+		else if (!output->params.blit_dst || !(format->caps & PL_FMT_CAP_BLITTABLE))
+			refusal = "the output cannot take a copy";
 
-		if (refusal.empty() && !rawOutputDispatch)
-			rawOutputDispatch = pl_dispatch_create(log, d3d11->gpu);
-		if (refusal.empty() && !rawOutputDispatch)
-			refusal = "the GPU copy could not be built";
-
+		// The texture takes the output's own format, so the copy below is a
+		// plain same-format, same-size copy (D3D11: CopySubresourceRegion);
+		// libplacebo would turn any other copy into a shader, so none is tried.
 		if (refusal.empty())
 		{
-			pl_shader sh = pl_dispatch_begin(rawOutputDispatch);
-			struct pl_sample_src sample{};
-			sample.tex = source;
-			// Each source component is code / 1023; written back as the
-			// code (10-bit output) or code / 4 (8-bit output).
-			struct pl_custom_shader copy{};
-			copy.description = "raw output copy";
-			copy.body = outputBits == 10 ?
-				"color = vec4(round(color.rgb * 1023.0) / 1023.0, 1.0);\n" :
-				"color = vec4(round(color.rgb * 1023.0) / 1020.0, 1.0);\n";
-			copy.input = PL_SHADER_SIG_COLOR;
-			copy.output = PL_SHADER_SIG_COLOR;
-			struct pl_dispatch_params run{};
-			run.shader = &sh;
-			run.target = output;
-			if (!pl_shader_sample_nearest(sh, &sample) || !pl_shader_custom(sh, &copy))
-			{
-				pl_dispatch_abort(rawOutputDispatch, &sh);
-				refusal = "the GPU copy could not be built";
-			}
-			else if (!pl_dispatch_finish(rawOutputDispatch, &run))
-			{
-				refusal = "the GPU copy failed";
-				const float black[] = { 0.0f, 0.0f, 0.0f };
-				pl_frame_clear(d3d11->gpu, &target, black);
-			}
+			struct pl_tex_params params{};
+			params.w = width;
+			params.h = height;
+			params.format = format;
+			params.host_writable = true;
+			params.blit_src = true;
+			if (!pl_tex_recreate(d3d11->gpu, &rawOutputTexture, &params))
+				refusal = "the copy's texture could not be made";
 		}
+		if (refusal.empty())
+		{
+			rawOutputWords.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
+			PatgenRawCopy::WriteWords(static_cast<const uint8_t*>(videoFrame.GetData()),
+				sourceStride, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+				layout, rawOutputWords.data());
+			struct pl_tex_transfer_params upload{};
+			upload.tex = rawOutputTexture;
+			upload.row_pitch = static_cast<size_t>(width) * sizeof(uint32_t);
+			upload.ptr = rawOutputWords.data();
+			if (!pl_tex_upload(d3d11->gpu, &upload))
+				refusal = "the copy's upload failed";
+		}
+		if (refusal.empty())
+		{
+			struct pl_tex_blit_params copy{};
+			copy.src = rawOutputTexture;
+			copy.dst = output;
+			pl_tex_blit(d3d11->gpu, &copy);
+		}
+		const double copyMs = std::chrono::duration<double, std::milli>(
+			SteadyClock::now() - copyStart).count();
 
 		const std::string status = refusal.empty() ?
 			"on " + std::to_string(state.rawOutputBits) + "-bit codes to the " +
@@ -5941,8 +5953,9 @@ struct LibplaceboVideoRenderer::Impl
 			rawOutputStatus = status;
 			if (refusal.empty())
 				DebugLog::Log(
-					"PATGEN raw output: on, %u-bit R10L codes copied to the %d-bit output %dx%d, no libplacebo pass, no overlays%s",
+					"PATGEN raw output: on, %u-bit R10L codes copied to the %d-bit output %dx%d, no GPU pass (CPU words, %s copy), no overlays; first frame %.2f ms%s",
 					state.rawOutputBits, outputBits, output->params.w, output->params.h,
+					format->name, copyMs,
 					state.eotf == EOTF::PQ ?
 						"; PQ codes on a wire VP declares SDR (set the display to PQ by hand)" : "");
 			else
@@ -20676,7 +20689,7 @@ releaseDriftBaseRetention =
             rawOutputStatus.clear();
         }
         const auto hookRender = rawOutput ?
-            NlsHookRecovery::Result{ RenderRawOutput(state, nativeRgbUpload, image, baseTarget) } :
+            NlsHookRecovery::Result{ RenderRawOutput(state, nativeRgbUpload, videoFrame, width, height, baseTarget) } :
             NlsHookRecovery::Render(temporalRenderer.ProcessingRenderer(renderer), d3d11->gpu,
             renderImage, target, baseTarget, renderParams, submittedNls, [&]()
             {
