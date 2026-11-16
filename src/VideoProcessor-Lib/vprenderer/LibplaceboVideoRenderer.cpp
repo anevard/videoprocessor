@@ -5709,6 +5709,7 @@ struct LibplaceboVideoRenderer::Impl
 				pl_tex_destroy(d3d11->gpu, &sourceMessageTexture);
 				pl_tex_destroy(d3d11->gpu, &sourceCuePanelTexture);
 				pl_tex_destroy(d3d11->gpu, &sourceCueBorderTexture);
+				pl_dispatch_destroy(&rawOutputDispatch);
 				for (pl_tex& texture : textures)
 					pl_tex_destroy(d3d11->gpu, &texture);
 			}
@@ -5847,6 +5848,9 @@ struct LibplaceboVideoRenderer::Impl
 	// when it starts or changes. Always true: the cleared target is the frame.
 	std::string rawOutputStatus;
 	uint64_t rawOutputLastPresentedFrame = UINT64_MAX;
+	// The copy's own GPU pass: made at the first frame it copies, destroyed
+	// with the renderer's textures.
+	pl_dispatch rawOutputDispatch = nullptr;
 	// The PNG the last Ctrl+Alt+S-style capture wrote (render thread).
 	std::wstring lastRenderedCapturePng;
 	bool RenderRawOutput(const VideoState& state, bool nativeRgbUpload,
@@ -5875,12 +5879,17 @@ struct LibplaceboVideoRenderer::Impl
 				std::to_string(output->params.h);
 		else if (EncodingLevels(actualOutput.encoding) != PL_COLOR_LEVELS_LIMITED)
 			refusal = "the output range is not limited";
-		else if (!nativeRgbDispatch || !output->params.renderable)
+		else if (!output->params.renderable)
 			refusal = "the output cannot take the copy";
+
+		if (refusal.empty() && !rawOutputDispatch)
+			rawOutputDispatch = pl_dispatch_create(log, d3d11->gpu);
+		if (refusal.empty() && !rawOutputDispatch)
+			refusal = "the GPU copy could not be built";
 
 		if (refusal.empty())
 		{
-			pl_shader sh = pl_dispatch_begin(nativeRgbDispatch);
+			pl_shader sh = pl_dispatch_begin(rawOutputDispatch);
 			struct pl_sample_src sample{};
 			sample.tex = source;
 			// Each source component is code / 1023; written back as the
@@ -5897,10 +5906,10 @@ struct LibplaceboVideoRenderer::Impl
 			run.target = output;
 			if (!pl_shader_sample_nearest(sh, &sample) || !pl_shader_custom(sh, &copy))
 			{
-				pl_dispatch_abort(nativeRgbDispatch, &sh);
+				pl_dispatch_abort(rawOutputDispatch, &sh);
 				refusal = "the GPU copy could not be built";
 			}
-			else if (!pl_dispatch_finish(nativeRgbDispatch, &run))
+			else if (!pl_dispatch_finish(rawOutputDispatch, &run))
 			{
 				refusal = "the GPU copy failed";
 				const float black[] = { 0.0f, 0.0f, 0.0f };
