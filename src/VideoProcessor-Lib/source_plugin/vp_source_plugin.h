@@ -332,7 +332,9 @@ typedef struct vp_source_host {
     /* Version 6. Selects profile in profile group group (as named in VP's
      * configuration), as a keypress would, but never saved; VP applies it
      * before returning. profile NULL releases every pick this plugin made:
-     * each group goes back to exactly what it had before the first one. */
+     * each group goes back to exactly what it had before the first one.
+     * VP_SOURCE_ERROR_STATE: VP's renderer kept the change back (its
+     * profile_update_mode never); a refused pick releases every pick made. */
     int32_t (*select_profile)(void* context, const char* group_utf8,
                               const char* profile_utf8);
     /* Version 6. The profiles in force in group, comma separated, into

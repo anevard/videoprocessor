@@ -1169,7 +1169,8 @@ protected:
 	DisplayRuleExpression::ValueLookup GetUnifiedProfileSourceLookup();
 	void RefreshUnifiedProfilesForRuleContext(const char* reason);
 	void PublishActiveProfileStatus();
-	void ApplyUnifiedProfileSnapshot(
+	// false: the VP renderer kept the snapshot back (SourcePluginKeptBack.h).
+	bool ApplyUnifiedProfileSnapshot(
 		const std::shared_ptr<const UnifiedProfileRuntime::Snapshot>& snapshot,
 		bool allowRestart, bool queueProfileResetPending = false);
 	void PublishProfileChangeOverlay(
