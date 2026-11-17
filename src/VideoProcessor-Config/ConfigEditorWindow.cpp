@@ -27,6 +27,7 @@
 #include <source_plugin/PatgenChartShowing.h>
 #include <source_plugin/PatgenRawOutput.h>
 #include <source_plugin/PatgenLowLatency.h>
+#include <source_plugin/SourcePluginStartTiming.h>
 #include <ConfigurationApplyPolicy.h>
 #include <ConfigurationIdentity.h>
 #include <ConfigurationLiveApply.h>
@@ -11490,6 +11491,39 @@ QWidget* ConfigEditorWindow::createPatternPage()
         signalBodyLayout->addWidget(fieldWithHelp(QStringLiteral("Depth and range"), mode,
             QStringLiteral("Every chart and every ColourSpace patch. Set ColourSpace to the same depth and range; "
                 "a patch at another depth is refused. The charts need a limited-range signal.")));
+        // Timing (A356 (B)(b); operator, 2026-11-17: written for any rig):
+        // "Same as the display", then the allowed display modes of the
+        // Output display profiles on the advanced policy, the modes VP
+        // switches to; VP checks the pick again at the input's start
+        // (SourcePluginStartTiming.h). A saved pick no longer listed stays
+        // shown (bindChoiceField) and VP starts at the display's mode.
+        QStringList timingValues{ QString::fromLatin1(SourcePluginStartTiming::Display) };
+        QStringList timingLabels{ QStringLiteral("Same as the display") };
+        for (const QString& outputSection : profileSections(QStringLiteral("output_display")))
+        {
+            if (value(outputSection, QStringLiteral("mode_policy")).compare(
+                    QStringLiteral("advanced"), Qt::CaseInsensitive) != 0)
+                continue;
+            std::vector<DisplayOutputMode> modes;
+            std::string error;
+            if (!ParseDisplayOutputModeList(value(outputSection, QStringLiteral("allowed_modes")).toStdString(),
+                    modes, error))
+                continue;
+            for (const DisplayOutputMode& outputMode : modes)
+            {
+                const QString text = QString::fromStdString(FormatDisplayOutputMode(outputMode));
+                if (timingValues.contains(text, Qt::CaseInsensitive)) continue;
+                timingValues.push_back(text);
+                timingLabels.push_back(QString::fromStdString(FormatDisplayOutputModeLabel(outputMode)));
+            }
+        }
+        QComboBox* timing = bindChoiceField(section, QString::fromLatin1(SourcePluginStartTiming::Key),
+            timingValues, timingLabels);
+        signalBodyLayout->addWidget(fieldWithHelp(QStringLiteral("Timing"), timing,
+            QStringLiteral("The size and frame rate the VP TPG input draws at. Same as the display: the display's "
+                "own mode when the input starts. The other choices are the allowed display modes of your Output "
+                "display profiles: VP switches the display to the one you pick, and back to the desktop mode when "
+                "the input stops. To add a choice, add the mode on the Output display page.")));
         layout->addWidget(createCard(QStringLiteral("Signal"),
             QStringLiteral("Used when the VP TPG input starts."), signalBody));
 
