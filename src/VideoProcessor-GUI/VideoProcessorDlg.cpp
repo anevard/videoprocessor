@@ -81,6 +81,7 @@ static UINT vpUpdateExitMessage = RegisterWindowMessageW(L"VideoProcessor.Update
 #include <source_plugin/PatgenChartShowing.h>
 #include <source_plugin/PatgenRawOutput.h>
 #include <source_plugin/PatgenLowLatency.h>
+#include <source_plugin/SourcePluginKeptBack.h>
 #include <MainConfigSchema.h>
 #include <UnifiedProfileRuntime.h>
 
@@ -3081,7 +3082,9 @@ LRESULT CVideoProcessorDlg::OnSourcePluginHostCall(WPARAM id, LPARAM)
 
 // select_profile is a temporary pick (UnifiedProfileRuntime::
 // SelectTemporaryProfile): never saved, released back to exactly what each
-// group had; applied as the Config RPC's SelectProfile applies a pick.
+// group had; applied as the Config RPC's SelectProfile applies a pick. A pick
+// the renderer keeps back is refused, every pick put back
+// (SourcePluginKeptBack.h).
 void CVideoProcessorDlg::RunSourcePluginHostJob(SourcePluginHostCalls::Job& job)
 {
 	using Kind = SourcePluginHostCalls::Job::Kind;
@@ -3126,21 +3129,42 @@ void CVideoProcessorDlg::RunSourcePluginHostJob(SourcePluginHostCalls::Job& job)
 		job.kind == Kind::Select ? job.group.c_str() : "",
 		job.kind == Kind::Select ? job.profile.c_str() : "",
 		result.changed ? "" : " (no change)");
-	if (result.changed)
+	// false: the renderer kept the selection back (SourcePluginKeptBack.h).
+	const auto apply = [this](const UnifiedProfileRuntime::SelectionResult& applied, const std::string& source)
 	{
 		bool queueReset = false;
-		for (const auto& selection : result.selections)
-			queueReset = queueReset || (result.snapshot &&
+		for (const auto& selection : applied.selections)
+			queueReset = queueReset || (applied.snapshot &&
 				QueueProfileRestartPolicy::RequiresResetAfterManualSelection(
-					selection.group == "queue", result.snapshot->queue.profile, true));
-		ApplyUnifiedProfileSnapshot(result.snapshot, true, queueReset);
+					selection.group == "queue", applied.snapshot->queue.profile, true));
+		const bool taken = ApplyUnifiedProfileSnapshot(applied.snapshot, true, queueReset);
 		if (!EventActionLauncher::IsRenderingSelectionFeedback(
-			m_profileActionProcessActive.load(), result.selections, false))
-			ScheduleUnifiedProfileActions(result.actions);
+			m_profileActionProcessActive.load(), applied.selections, false))
+			ScheduleUnifiedProfileActions(applied.actions);
 		if (queueReset)
-			QueueUnifiedQueueProfileReset(result.snapshot, "source-plugin:" + job.group);
+			QueueUnifiedQueueProfileReset(applied.snapshot, source);
+		return taken;
+	};
+	const bool keptBack = result.changed && !apply(result, "source-plugin:" + job.group);
+	const SourcePluginKeptBack::Answer answer =
+		SourcePluginKeptBack::ForSelection(job.kind == Kind::Release, result.changed, keptBack);
+	job.result = answer.result;
+	if (!keptBack)
+		return;
+	if (!answer.putBack)
+	{
+		DebugLog::Log("Source plugin profile picks released, but the renderer kept the change back "
+			"(its line above says why); it keeps the picks' settings until it takes a later change or rebuilds");
+		return;
 	}
-	job.result = VP_SOURCE_OK;
+	UnifiedProfileRuntime::SelectionResult putBack;
+	const bool released = m_profileRuntime.ReleaseTemporaryProfiles(GetUnifiedProfileSourceLookup(), putBack, error);
+	const bool putBackTaken = released && (!putBack.changed || apply(putBack, "source-plugin:put back"));
+	DebugLog::Log("Source plugin profile pick refused: %s = %s, kept back by the renderer (its line above says why); "
+		"every pick of this plugin put back%s%s",
+		job.group.c_str(), job.profile.c_str(),
+		!released ? " FAILED: " : putBackTaken ? "" : ", but the renderer kept that back too",
+		released ? "" : error.c_str());
 }
 
 // A source plugin asks for its frames 1:1, or no longer does (posted by the
@@ -3264,6 +3288,8 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 					return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
 				if (command != PatgenLowLatency::StateCommand)
 					UpdatePatgenLowLatency(lowLatency, lowLatency ? "switch on" : "switch off");
+				if (lowLatency && !m_patgenLowLatency)
+					return ConfigurationRpcError(operation, PatgenLowLatency::KeptBack);
 				Frame response;
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;
@@ -12915,12 +12941,12 @@ void CVideoProcessorDlg::ClearProfileChangeOverlay()
 	m_profileChangeOverlayFadeUntil = 0;
 }
 
-void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
+bool CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
 	const std::shared_ptr<const UnifiedProfileRuntime::Snapshot>& requested,
 	bool allowRestart, bool queueProfileResetPending)
 {
 	if (!requested)
-		return;
+		return true;
 	PublishActiveProfileStatus();
 	PublishProfileChangeOverlay(requested);
 	// Config's "Low latency" box (PatgenLowLatency.h, A356 (5)): from here on,
@@ -13033,7 +13059,7 @@ void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
 				selectedRendererName.GetString(),
 			snapshot->queue.profile.empty() ? "(none)" :
 				snapshot->queue.profile.c_str());
-		return;
+		return true;
 	}
 
 	bool lldvPolicyChanged = false;
@@ -13081,7 +13107,7 @@ void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
 	}
 
 	if (!m_videoRenderer)
-		return;
+		return true;
 	bool shaderRestartRequired = false;
 	CString activeRule;
 	if (m_hasRequestedShaderProfiles &&
@@ -13258,9 +13284,11 @@ void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
 			zoom.c_str(), m_patgenExactCrop.c_str(), snapshot->viewport.zoomProfile.c_str(),
 			snapshot->viewport.profile.c_str());
 	}
+	// false from the VP renderer: kept back (SourcePluginKeptBack.h); from a
+	// DirectShow renderer: IRenderer's default, for every snapshot.
 	if (!m_videoRenderer->ApplyApplicationState(
 		cropping || m_patgenOneToOne ? exactCrop : *snapshot, activeState, rendererRestartRequired, liveResetRequired))
-		return;
+		return m_activeRendererIsDirectShow;
 	rendererRestartRequired = rendererRestartRequired || shaderRestartRequired;
 
 	DebugLog::Log("Applied unified profile state: %s",
@@ -13312,6 +13340,7 @@ void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
 			RendererResetOrigin::AutomaticProfile,
 			snapshot ? snapshot->generation : 0);
 	}
+	return true;
 }
 
 
@@ -16184,9 +16213,24 @@ void CVideoProcessorDlg::UpdatePatgenNoCrop(const char* reason)
 	if (oneToOne != m_patgenOneToOne)
 		DebugLog::Log("PATGEN 1:1 chart: %s (%s)",
 			oneToOne ? "on, viewport and zoom set aside" : "off, viewport and zoom restored", reason);
+	const std::string ratioBefore = m_patgenExactCrop;
+	const bool oneToOneBefore = m_patgenOneToOne;
 	m_patgenExactCrop = ratio;
 	m_patgenOneToOne = oneToOne;
-	ApplyUnifiedProfileSnapshot(m_profileRuntime.GetSnapshot(), true);
+	// A copy the renderer keeps back (SourcePluginKeptBack.h): one that turns
+	// the crop or 1:1 on goes back to what the renderer still shows.
+	const bool keptBack = !ApplyUnifiedProfileSnapshot(m_profileRuntime.GetSnapshot(), true);
+	if (SourcePluginKeptBack::PutBack(oneToOne || !ratio.empty(), keptBack))
+	{
+		m_patgenExactCrop = ratioBefore;
+		m_patgenOneToOne = oneToOneBefore;
+		DebugLog::Log("PATGEN crop and 1:1: kept back by the renderer (its line above says why); "
+			"back to crop %s, 1:1 %s", ratioBefore.empty() ? "off" : ratioBefore.c_str(),
+			oneToOneBefore ? "on" : "off");
+	}
+	else if (keptBack)
+		DebugLog::Log("PATGEN crop and 1:1 off: kept back by the renderer (its line above says why); "
+			"it keeps them until it takes a later change or rebuilds");
 }
 
 // Config's "Low latency" box (PatgenLowLatency.h, A356 (5)): each change
@@ -16202,6 +16246,20 @@ void CVideoProcessorDlg::UpdatePatgenLowLatency(bool on, const char* reason)
 	m_patgenLowLatency = on;
 	DebugLog::Log("PATGEN low latency: %s (%s)",
 		on ? "on" : "off, the user's queue and renderer settings restored", reason);
+	const bool keptBack = !ApplyUnifiedProfileSnapshot(m_profileRuntime.GetSnapshot(), true);
+	if (!SourcePluginKeptBack::PutBack(on, keptBack))
+	{
+		if (keptBack)
+			DebugLog::Log("PATGEN low latency off: kept back by the renderer (its line above says why); "
+				"it keeps the mode's settings until it takes a later change or rebuilds");
+		return;
+	}
+	// The renderer kept the copy back (SourcePluginKeptBack.h): the box goes
+	// back off, and the user's queue, which VP applied before the renderer
+	// answered, is applied back. Once: off is never put back.
+	m_patgenLowLatency = false;
+	DebugLog::Log("PATGEN low latency: back off, kept back by the renderer (its line above says why); "
+		"the user's queue applied back");
 	ApplyUnifiedProfileSnapshot(m_profileRuntime.GetSnapshot(), true);
 }
 
