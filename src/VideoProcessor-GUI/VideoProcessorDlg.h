@@ -628,6 +628,10 @@ protected:
 	// Native-raster charts shown 1:1, no switch (PatgenNoCrop.h, A201).
 	bool m_patgenOneToOneChart = false;       // the chart Config last showed is one of them
 	bool m_patgenOneToOne = false;            // Screen and Zoom are set aside now
+	// Config's "Low latency" box (PatgenLowLatency.h, A356 (5)).
+	bool m_patgenLowLatency = false;          // the box is on (only while the generator is the input)
+	bool m_patgenLowLatencyQueue = false;     // the queue VP last applied is PATGEN's
+	std::string m_patgenLowLatencyLogged;     // the copy vp.log last described
 	// A source plugin asks for its frames 1:1 (VP_SOURCE_STATE_NATIVE_RASTER,
 	// version 6): set aside the same way, any plugin, no switch of VP's.
 	bool m_sourceNativeRaster = false;
@@ -1081,6 +1085,9 @@ protected:
 	void UpdatePatgenSdrGamma();
 	void UpdatePatgenTargetNits();
 	void UpdatePatgenNoCrop(const char* reason);
+	void UpdatePatgenLowLatency(bool on, const char* reason);
+	std::shared_ptr<const UnifiedProfileRuntime::Snapshot> PatgenLowLatencySnapshot(
+		const std::shared_ptr<const UnifiedProfileRuntime::Snapshot>& requested);
 	void PollAspectRatioOsd();
 	void LogMadVRPostStallResetDiagnostics(const StatsData& stats,
 		double measuredCaptureRateHz);
