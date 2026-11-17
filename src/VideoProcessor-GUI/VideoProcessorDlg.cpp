@@ -80,6 +80,7 @@ static UINT vpUpdateExitMessage = RegisterWindowMessageW(L"VideoProcessor.Update
 #include <source_plugin/PatgenNoCrop.h>
 #include <source_plugin/PatgenChartShowing.h>
 #include <source_plugin/PatgenRawOutput.h>
+#include <source_plugin/PatgenLowLatency.h>
 #include <MainConfigSchema.h>
 #include <UnifiedProfileRuntime.h>
 
@@ -3246,6 +3247,23 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 			{
 				m_patgenExactCropWanted = exactCrop;
 				UpdatePatgenNoCrop(exactCrop ? "switch on" : "switch off");
+				Frame response;
+				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+				return response;
+			}
+			// The "Low latency" box is VP's own too (PatgenLowLatency.h, A356
+			// (5)): its state, and on or off, on only while the generator is
+			// the input.
+			bool lowLatency = false;
+			if (command == PatgenLowLatency::StateCommand || PatgenLowLatency::ParseCommand(command, lowLatency))
+			{
+				if (command == PatgenLowLatency::StateCommand && !m_patgenLowLatency)
+					return ConfigurationRpcError(operation, PatgenLowLatency::Off);
+				if (lowLatency && !SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
+					SourcePluginBackend::PATTERN_PLUGIN_NAME))
+					return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
+				if (command != PatgenLowLatency::StateCommand)
+					UpdatePatgenLowLatency(lowLatency, lowLatency ? "switch on" : "switch off");
 				Frame response;
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;
@@ -8907,6 +8925,16 @@ void CVideoProcessorDlg::UpdateState()
 			m_captureDevice->SetCallbackHandler(this);
 			m_captureDevice->SetFrameOffsetMs(GetTimingClockFrameOffsetMs());
 
+			// No other input inherits the "Low latency" box, whatever path
+			// led here (PatgenLowLatency.h).
+			if (m_patgenLowLatency && !SourcePluginBackend::IsSourcePluginNamed(
+				m_captureDevice, SourcePluginBackend::PATTERN_PLUGIN_NAME))
+			{
+				DebugLog::Log("PATGEN low latency: off, another input; the next renderer starts with the user's settings");
+				m_patgenLowLatency = PatgenLowLatency::After(m_patgenLowLatency,
+					PatgenLowLatency::Event::OtherInputStarted);
+			}
+
 			RefreshInputConnectionCombo();
 
 			m_captureInputCombo.EnableWindow(TRUE);
@@ -9537,6 +9565,12 @@ void CVideoProcessorDlg::CaptureRemove()
 	assert(m_rendererState == RendererState::RENDERSTATE_UNKNOWN ||
 		   m_rendererState == RendererState::RENDERSTATE_FAILED);
 
+	// A restart of this same input (UpdateState's m_wantToRestartCapture, the
+	// device to come back being this one) keeps the "Low latency" box
+	// (PatgenLowLatency.h); read before the device is released below.
+	const PatgenLowLatency::Event lowLatencyStop = PatgenLowLatency::StopEvent(
+		m_wantToRestartCapture, m_desiredCaptureDevice.IsEqualObject(m_captureDevice));
+
 	m_captureDeviceState = CaptureDeviceState::CAPTUREDEVICESTATE_UNKNOWN;
 	// The pattern generator's run ends with its device (PatgenSdrGamma.h): a
 	// capture Restart finishes between two ticks of its timer, and the
@@ -9566,6 +9600,16 @@ void CVideoProcessorDlg::CaptureRemove()
 	m_patgenOneToOneChart = false;
 	m_patgenOneToOne = false;
 	m_sourceNativeRaster = false;
+	// The "Low latency" box (PatgenLowLatency.h) stays on through a restart of
+	// this same input, so the next renderer is built at low latency at once;
+	// it goes off when the input stops for good (another input, VP closing),
+	// and the next renderer gets the user's queue and configuration back. A
+	// renderer restart never comes here.
+	if (m_patgenLowLatency)
+		DebugLog::Log(lowLatencyStop == PatgenLowLatency::Event::InputRestarted ?
+			"PATGEN low latency: kept, the input restarts; the next renderer starts at low latency" :
+			"PATGEN low latency: off, the input stopped; the next renderer starts with the user's settings");
+	m_patgenLowLatency = PatgenLowLatency::After(m_patgenLowLatency, lowLatencyStop);
 
 	m_desiredCaptureInputId = INVALID_CAPTURE_INPUT_ID;
 	m_currentCaptureInputId = INVALID_CAPTURE_INPUT_ID;
@@ -12872,13 +12916,17 @@ void CVideoProcessorDlg::ClearProfileChangeOverlay()
 }
 
 void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
-	const std::shared_ptr<const UnifiedProfileRuntime::Snapshot>& snapshot,
+	const std::shared_ptr<const UnifiedProfileRuntime::Snapshot>& requested,
 	bool allowRestart, bool queueProfileResetPending)
 {
-	if (!snapshot)
+	if (!requested)
 		return;
 	PublishActiveProfileStatus();
-	PublishProfileChangeOverlay(snapshot);
+	PublishProfileChangeOverlay(requested);
+	// Config's "Low latency" box (PatgenLowLatency.h, A356 (5)): from here on,
+	// the copy, its queue and its configuration; the selections are the
+	// user's, so the overlay above shows no change of its own.
+	const std::shared_ptr<const UnifiedProfileRuntime::Snapshot> snapshot = PatgenLowLatencySnapshot(requested);
 
     if (!snapshot->outputDisplayMonitor.empty())
     {
@@ -13164,6 +13212,9 @@ void CVideoProcessorDlg::ApplyUnifiedProfileSnapshot(
 				videoProcessorApp.GetActivePictureLookaheadFrames(),
 				m_queueResetDelaySeconds, m_queueResetHighWaterPercent);
 	}
+	// The queue just applied is PATGEN's, or the user's again (PatgenLowLatency.h).
+	if (!snapshot->queue.profile.empty())
+		m_patgenLowLatencyQueue = snapshot->queue.profile == PatgenLowLatency::QueueProfile;
 
 	CString activeState;
 	bool rendererRestartRequired = false;
@@ -16136,6 +16187,60 @@ void CVideoProcessorDlg::UpdatePatgenNoCrop(const char* reason)
 	m_patgenExactCrop = ratio;
 	m_patgenOneToOne = oneToOne;
 	ApplyUnifiedProfileSnapshot(m_profileRuntime.GetSnapshot(), true);
+}
+
+// Config's "Low latency" box (PatgenLowLatency.h, A356 (5)): each change
+// re-applies the profile runtime's current snapshot, which
+// ApplyUnifiedProfileSnapshot hands the renderer through
+// PatgenLowLatencySnapshot. The presentation depth and the motion keys
+// restart the renderer, his own restart (operator, question 1); the new
+// renderer is built from the same copy, so nothing restarts again.
+void CVideoProcessorDlg::UpdatePatgenLowLatency(bool on, const char* reason)
+{
+	if (on == m_patgenLowLatency)
+		return;
+	m_patgenLowLatency = on;
+	DebugLog::Log("PATGEN low latency: %s (%s)",
+		on ? "on" : "off, the user's queue and renderer settings restored", reason);
+	ApplyUnifiedProfileSnapshot(m_profileRuntime.GetSnapshot(), true);
+}
+
+// The snapshot the renderer gets (PatgenLowLatency.h). Off: the user's, as it
+// is; once after the box goes off, if the user's snapshot names no queue
+// profile, a copy whose queue gives back VP's own values. On: a copy with his
+// [queue.Low_Latency] values and a configuration copy with the presentation
+// depth and the frame-state keys set aside; the selections and everything
+// else are the user's. The runtime's snapshot and the file are untouched; the
+// 1:1 and crop set-asides build on this copy.
+std::shared_ptr<const UnifiedProfileRuntime::Snapshot> CVideoProcessorDlg::PatgenLowLatencySnapshot(
+	const std::shared_ptr<const UnifiedProfileRuntime::Snapshot>& requested)
+{
+	if (!m_patgenLowLatency)
+	{
+		m_patgenLowLatencyLogged.clear();
+		if (!m_patgenLowLatencyQueue || !requested->queue.profile.empty())
+			return requested;
+		auto restore = std::make_shared<UnifiedProfileRuntime::Snapshot>(*requested);
+		PatgenLowLatency::RestoreQueue(restore->queue);
+		return restore;
+	}
+	auto copy = std::make_shared<UnifiedProfileRuntime::Snapshot>(*requested);
+	PatgenLowLatency::SetQueue(copy->queue);
+	std::string described = "queue only, the snapshot holds no configuration";
+	if (requested->configuration)
+	{
+		auto configuration = std::make_shared<ConfigFile>(*requested->configuration);
+		described = PatgenLowLatency::Describe(PatgenLowLatency::SetAside(*configuration,
+			RendererProfileConfig::IsTargetModel(*requested->configuration),
+			RendererProfileConfig::IsRendererChildNamespace));
+		copy->configuration = configuration;
+	}
+	if (described != m_patgenLowLatencyLogged)
+	{
+		DebugLog::Log("PATGEN low latency: the renderer's copy: %s", described.c_str());
+		m_patgenLowLatencyLogged = described;
+	}
+	return copy;
 }
 
 // The pattern generator's SDR gamma follows VP (PatgenSdrGamma.h): while its

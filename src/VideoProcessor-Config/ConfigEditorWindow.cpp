@@ -26,6 +26,7 @@
 #include "PatternChartSignal.h"
 #include <source_plugin/PatgenChartShowing.h>
 #include <source_plugin/PatgenRawOutput.h>
+#include <source_plugin/PatgenLowLatency.h>
 #include <ConfigurationApplyPolicy.h>
 #include <ConfigurationIdentity.h>
 #include <ConfigurationLiveApply.h>
@@ -11603,21 +11604,26 @@ QWidget* ConfigEditorWindow::createPatternPage()
         };
 
         // The other live boxes (A261), the raw box's rules without its
-        // interlock: never saved, so each shows the generator's live state,
-        // read on the status tick; only the user's click sends.
-        const auto liveSwitch = [this, status, layout](const QString& card, const QString& cardNote,
-            const QString& name, const QString& label, const QString& help, const QString& verb,
-            const char* stateCommand, const char* offText) -> std::function<void()>
+        // interlock: never saved, so each shows its live state (the
+        // generator's, or VP's own for Low latency), read on the status tick;
+        // only the user's click sends. A card may hold more than one (A356 (5)).
+        const auto liveCard = [this, layout](const QString& card, const QString& cardNote) -> QVBoxLayout*
         {
             auto* body = new QWidget;
             auto* bodyLayout = new QVBoxLayout(body);
             bodyLayout->setContentsMargins(0, 0, 0, 0);
             bodyLayout->setSpacing(10);
+            layout->addWidget(createCard(card, cardNote, body));
+            return bodyLayout;
+        };
+        const auto liveSwitch = [this, status](QVBoxLayout* bodyLayout,
+            const QString& name, const QString& label, const QString& help, const QString& verb,
+            const char* stateCommand, const char* offText) -> std::function<void()>
+        {
             auto* box = new QCheckBox(label);
             box->setObjectName(name);
             bodyLayout->addWidget(box);
             bodyLayout->addWidget(helpLabel(help));
-            layout->addWidget(createCard(card, cardNote, body));
             const auto clicks = std::make_shared<uint64_t>(0);
             connect(box, &QCheckBox::clicked, this, [this, box, status, verb, clicks](bool on)
             {
@@ -11655,9 +11661,13 @@ QWidget* ConfigEditorWindow::createPatternPage()
             };
         };
         // ColourSpace's patches 1:1 (A261 L1b, question 1d; operator: back on
-        // at every VP start).
-        const auto readOneToOne = liveSwitch(QStringLiteral("ColourSpace patches 1:1"),
-            QStringLiteral("Takes effect at once. Never saved: on whenever VP starts."),
+        // at every VP start), and Low latency beside it (A356 (5); operator:
+        // a second box in this card; 2026-11-17: kept through a restart of
+        // the VP TPG input, off when VP starts or another input is chosen).
+        QVBoxLayout* patches = liveCard(QStringLiteral("ColourSpace patches 1:1"),
+            QStringLiteral("Never saved. 1:1 takes effect at once and is on whenever VP starts; "
+                "Low latency is off whenever VP starts or another input is chosen."));
+        const auto readOneToOne = liveSwitch(patches,
             QStringLiteral("config.pattern.one_to_one"),
             QStringLiteral("Show ColourSpace's patches 1:1: no resize, no crop"),
             QStringLiteral("On: each patch reaches the output pixel for pixel, the Screen and Zoom profiles set aside, "
@@ -11665,10 +11675,22 @@ QWidget* ConfigEditorWindow::createPatternPage()
                 "configured, the path a film takes."),
             QStringLiteral("one_to_one"),
             PatgenRawOutput::OneToOneStateCommand, PatgenRawOutput::OneToOneOff);
+        const auto readLowLatency = liveSwitch(patches,
+            QStringLiteral("config.pattern.low_latency"),
+            QStringLiteral("Low latency"),
+            QStringLiteral("On: VP holds no frames back for the VP TPG input: one frame queued, one present waiting "
+                "for the screen, no frame blending and no HDR peak smoothing, so each patch reaches the screen "
+                "sooner. Switching it on or off restarts the renderer, a pause of up to a few seconds. It stays on "
+                "while the VP TPG input stays the input, through a restart of that input too, and goes off by "
+                "itself whenever VP starts or another input is chosen. "
+                "Your own queue and renderer settings are never changed and come back as they were."),
+            QStringLiteral("low_latency"),
+            PatgenLowLatency::StateCommand, PatgenLowLatency::Off);
         // The loopback harness's arm switch (A261 L5): armed, a "loop run"
         // request may start a run; off at every VP start.
-        const auto readLoopArm = liveSwitch(QStringLiteral("Loopback harness"),
-            QStringLiteral("Takes effect at once. Never saved: off whenever VP starts."),
+        QVBoxLayout* harness = liveCard(QStringLiteral("Loopback harness"),
+            QStringLiteral("Takes effect at once. Never saved: off whenever VP starts."));
+        const auto readLoopArm = liveSwitch(harness,
             QStringLiteral("config.pattern.loop_arm"),
             QStringLiteral("Armed: a run request may start a measurement run"),
             QStringLiteral("While armed, a request sent to VP starts a run of the named request file from the build's "
@@ -11677,10 +11699,11 @@ QWidget* ConfigEditorWindow::createPatternPage()
             QStringLiteral("loop_arm"),
             PatgenRawOutput::LoopArmStateCommand, PatgenRawOutput::LoopArmOff);
         const std::function<void()> readRaw = readPatternRawOutput_;
-        readPatternRawOutput_ = [readRaw, readOneToOne, readLoopArm]
+        readPatternRawOutput_ = [readRaw, readOneToOne, readLowLatency, readLoopArm]
         {
             readRaw();
             readOneToOne();
+            readLowLatency();
             readLoopArm();
         };
     }
