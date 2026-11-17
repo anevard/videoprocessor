@@ -20,6 +20,7 @@
 #include "SourcePluginBackend.h"
 #include "SourcePluginCaptureDevice.h"
 #include "SourcePluginHostServices.h"
+#include "SourcePluginStartTiming.h"
 
 #include <cstring>
 
@@ -187,7 +188,8 @@ namespace
 				if (dot != std::string::npos &&
 					ConfigFile::TryParseIndexedKey(key, key.substr(0, dot), index))
 					indexed[{ key.substr(0, dot), index }] = value;
-				else if (key != "log_dir" && key != "log_retention" && key != "idle_format")
+				else if (key != "log_dir" && key != "log_retention" && key != "idle_format" &&
+					key != SourcePluginStartTiming::Key)
 				{
 					AppendSetting(line, key, value);
 					++entries;
@@ -217,11 +219,25 @@ namespace
 		AppendSetting(line, "log_retention", std::to_string(DebugLogRetention::ResolveSetting(
 			hasRetention ? &retention : nullptr, false, false).count));
 
-		std::string why;
-		const std::string format = SourcePluginBackend::DesktopModeFormat(why);
+		// The section's "timing" pick, when an Output display profile lists
+		// it, in place of the desktop mode (SourcePluginStartTiming.h).
+		std::string why, pick, note;
+		const std::string desktop = SourcePluginBackend::DesktopModeFormat(why);
+		if (values)
+		{
+			const auto timing = values->find(SourcePluginStartTiming::Key);
+			if (timing != values->end())
+				pick = timing->second;
+		}
+		const std::string format = SourcePluginStartTiming::Choose(pick,
+			SourcePluginStartTiming::AllowedModes(config), desktop, note);
 		if (!format.empty())
 			AppendSetting(line, "idle_format", format);
 		idle = format.empty() ? "none (" + why + ")" : format;
+		if (format != desktop)
+			idle += " (timing " + pick + ", the display's mode " + (desktop.empty() ? "unknown" : desktop) + ")";
+		if (!note.empty())
+			idle += "; " + note + "; the display's mode is used";
 
 		if (line.back() == SETTINGS_SEPARATOR)
 			line.pop_back();
