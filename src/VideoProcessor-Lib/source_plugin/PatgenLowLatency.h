@@ -47,6 +47,9 @@ namespace PatgenLowLatency
 	constexpr const char* Command = "low_latency";
 	constexpr const char* StateCommand = "low_latency_state";
 	constexpr const char* Off = "Low latency is off.";
+	// "low_latency on" refused: the renderer kept the copy back
+	// (SourcePluginKeptBack.h), so the box went back off.
+	constexpr const char* KeptBack = "Low latency stays off: VP's renderer kept its current settings; vp.log says why.";
 
 	// The queue profile names the renderer's copy carries, so vp.log's
 	// "Queue profile applied" line says whose values these are. Profile names
