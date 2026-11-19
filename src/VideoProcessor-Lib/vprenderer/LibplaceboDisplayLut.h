@@ -86,6 +86,9 @@ namespace LibplaceboDisplayLut
             const std::string& constrainedBaseDirectory = {});
         void RejectRender(const std::string& path,
             const std::string& constrainedBaseDirectory);
+        // True when every file held here still has the size and write time it
+        // had when read, so an explicit Apply has nothing new to read.
+        bool FilesUnchanged() const;
         void Clear() { entries_.clear(); }
     private:
         using Key = std::pair<std::string, std::string>;

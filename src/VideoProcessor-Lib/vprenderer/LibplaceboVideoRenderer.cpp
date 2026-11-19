@@ -8420,6 +8420,17 @@ struct LibplaceboVideoRenderer::Impl
         const uint64_t requested = displayLutApplyRequested.load(std::memory_order_acquire);
         if (requested == displayLutApplyConsumed) return;
         const auto started = SteadyClock::now();
+        // No LUT file read so far has changed on disk: a reload would parse the
+        // same bytes again on the render thread, so keep everything as it is.
+        if (displayLutParsed && displayLut && displayLutCache.FilesUnchanged())
+        {
+            displayLutApplyConsumed = requested;
+            DebugLog::Log("display calibration LUT files unchanged at explicit Apply: request=%llu elapsed_ms=%.3f file=%s; nothing reloaded",
+                static_cast<unsigned long long>(requested),
+                std::chrono::duration<double, std::milli>(SteadyClock::now() - started).count(),
+                displayLutPath.c_str());
+            return;
+        }
         // Active rendering retains its own shared snapshot while the cache is
         // refreshed. Cache failures too: fixing a file alone never retries it.
         displayLutCache.Clear();
