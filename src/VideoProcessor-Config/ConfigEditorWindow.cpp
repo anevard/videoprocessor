@@ -27,6 +27,7 @@
 #include <source_plugin/PatgenChartShowing.h>
 #include <source_plugin/PatgenRawOutput.h>
 #include <source_plugin/PatgenLowLatency.h>
+#include <source_plugin/PatgenLiveSave.h>
 #include <source_plugin/SourcePluginStartTiming.h>
 #include <ConfigurationApplyPolicy.h>
 #include <ConfigurationIdentity.h>
@@ -11453,12 +11454,16 @@ QWidget* ConfigEditorWindow::createPatternPage()
     // (A202, below).
     const auto chartCommands = std::make_shared<uint64_t>(0);
     const auto chartPending = std::make_shared<int>(0);
-    // Sends one command to the pattern generator now; the answer shows under the charts.
-    const auto send = [this, status, chartCommands, chartPending](const QString& command)
+    // Sends one command to the pattern generator now; the answer shows under
+    // the charts, then goes to done when given (no target VP: not sent).
+    const auto send = [this, status, chartCommands, chartPending](const QString& command,
+        std::function<void(bool, const QString&)> done = {})
     {
         if (noTarget_ || testMode_)
         {
-            status->setText(QStringLiteral("No target VP to send %1 to.").arg(command));
+            const QString error = QStringLiteral("No target VP to send %1 to.").arg(command);
+            status->setText(error);
+            if (done) done(false, error);
             return;
         }
         const bool chartCommand = command.startsWith(QStringLiteral("chart "));
@@ -11469,10 +11474,11 @@ QWidget* ConfigEditorWindow::createPatternPage()
         }
         status->setText(QStringLiteral("Sending %1...").arg(command));
         runTargetAction(QStringLiteral("pattern.") + command,
-            [status, command, chartCommand, chartPending](bool sent, const QString& error)
+            [status, command, chartCommand, chartPending, done](bool sent, const QString& error)
         {
             if (chartCommand) --*chartPending;
             status->setText(sent ? QStringLiteral("Sent: %1").arg(command) : error);
+            if (done) done(sent, error);
         });
     };
 
@@ -11754,10 +11760,11 @@ QWidget* ConfigEditorWindow::createPatternPage()
         QStringLiteral("Used when the VP TPG input starts."), signal, false));
 
     // Chart settings. Each is sent at once (PATGEN redraws the chart on screen
-    // if it uses it) and saved in [pattern] at once, without Apply (A183 (1),
-    // PatternLiveKeys.h), and shows only while a chart that uses it is picked
-    // (PLAN.md Phase 3; ledger Decision 2026-11-04 patgen-11). A typed field
-    // sends its placeholder, the default, when empty, and saves nothing then.
+    // if it uses it) and saved in [pattern] after VP's answer, without Apply
+    // (A183 (1), PatternLiveKeys.h, PatgenLiveSave.h), and shows only while a
+    // chart that uses it is picked (PLAN.md Phase 3; ledger Decision
+    // 2026-11-04 patgen-11). A typed field sends its placeholder, the
+    // default, when empty, and saves nothing then.
     const auto entered = [](const QLineEdit* field)
     {
         const QString text = field->text().trimmed();
@@ -11774,10 +11781,10 @@ QWidget* ConfigEditorWindow::createPatternPage()
         field->setMaximumWidth(108);
         return field;
     };
-    const auto storeLive = [this, section](const QLineEdit* field, const QString& key)
+    // A typed field's text, as sent, into the editor and saved; true when saved.
+    const auto storeLive = [this, section](const QString& key, const QString& text)
     {
-        if (!document_) return;
-        const QString text = field->text().trimmed();
+        if (!document_) return false;
         const std::string sectionText = section.toStdString();
         const std::string keyText = key.toStdString();
         if (text.isEmpty()) document_->RemoveKnown(sectionText, keyText.c_str());
@@ -11786,7 +11793,60 @@ QWidget* ConfigEditorWindow::createPatternPage()
             document_->AddSection(sectionText);
             document_->SetKnown(sectionText, keyText.c_str(), text.toLocal8Bit().constData());
         }
-        if (!saveLiveSetting(section, key)) markDirty();
+        if (saveLiveSetting(section, key)) return true;
+        markDirty();
+        return false;
+    };
+    // A bound control set back: its key goes back to what the file holds, so
+    // a key the file never had lights no Apply.
+    const auto restoreSaved = [this, section](const QString& key)
+    {
+        if (!document_) return;
+        const std::string sectionText = section.toStdString();
+        const std::string keyText = key.toStdString();
+        ConfigEditorCore::ConfigDocument saved;
+        saved.LoadBytes(document_->path, document_->loadedBytes);
+        size_t line = 0, start = 0, end = 0;
+        if (!saved.Find(sectionText, keyText, line, start, end))
+            document_->RemoveKnown(sectionText, keyText.c_str());
+        else
+        {
+            const std::string kept = saved.Get(sectionText.c_str(), keyText.c_str());
+            if (!document_->SetKnown(sectionText, keyText.c_str(), kept))
+            {
+                document_->AddSection(sectionText);
+                document_->SetKnown(sectionText, keyText.c_str(), kept);
+            }
+        }
+        markDirty();
+    };
+    // A live setting is sent first and saved after VP's answer
+    // (PatgenLiveSave.h; A366 (3), operator: "1"): taken, or refused only
+    // because VP TPG is not the active input, save runs; any other refusal
+    // saves nothing and goBack sets the control back. While a control goes
+    // back its binder rewrites the editor and nothing is sent. Only a
+    // control's newest change acts on its answer (changes counts them), so
+    // one overtaken, by a wheel over a drop-down say, neither saves the
+    // newer value early nor sets it back; nor does an answer that comes
+    // after the page was rebuilt.
+    const auto reverting = std::make_shared<bool>(false);
+    const auto sendLive = [send, status, reverting, page = QPointer<QWidget>(content)](
+        const std::shared_ptr<uint64_t>& changes, const QString& command,
+        std::function<bool()> save, std::function<void()> goBack)
+    {
+        const uint64_t change = ++*changes;
+        send(command, [status, save, goBack, reverting, page, changes, change](bool sent, const QString& error)
+        {
+            if (!page || *changes != change) return;
+            if (PatgenLiveSave::Saved(sent, error.toStdString()))
+            {
+                if (save() && !sent) status->setText(QStringLiteral("Saved; used when VP TPG starts."));
+                return;
+            }
+            *reverting = true;
+            goBack();
+            *reverting = false;
+        });
     };
     const auto newPanel = [content]
     {
@@ -11797,30 +11857,75 @@ QWidget* ConfigEditorWindow::createPatternPage()
         panel->hide();
         return panel;
     };
-    const auto typedField = [this, send, entered, liveTextField, storeLive](const QString& key, const QString& fallback)
+    // Set back, a typed field shows the editor's value again: it is written
+    // there only once saved.
+    const auto typedField = [this, sendLive, section, entered, liveTextField, storeLive](const QString& key, const QString& fallback)
     {
         QLineEdit* field = liveTextField(key, fallback);
-        connect(field, &QLineEdit::editingFinished, this, [send, field, key, entered, storeLive]
+        const auto changes = std::make_shared<uint64_t>(0);
+        connect(field, &QLineEdit::editingFinished, this, [this, sendLive, section, field, key, entered, storeLive, changes]
         {
-            storeLive(field, key);
-            send(QStringLiteral("%1 %2").arg(key, entered(field)));
+            const QString text = field->text().trimmed();
+            sendLive(changes, QStringLiteral("%1 %2").arg(key, entered(field)),
+                [storeLive, key, text] { return storeLive(key, text); },
+                [this, section, field, key, text]
+                {
+                    if (field->text().trimmed() == text) field->setText(value(section, key));
+                });
         });
         return field;
     };
-    // A bound drop-down or tick box: bound as any other, then saved at once.
+    // A bound drop-down or tick box: bound as any other, then saved once VP
+    // has answered; set back, it shows the value last kept.
     const auto saveLive = [this, section](const QString& key)
     {
-        saveLiveSetting(section, key);
+        return saveLiveSetting(section, key);
     };
-    const auto choiceField = [this, send, section, saveLive](const QString& key, const QStringList& values, const QStringList& labels)
+    const auto choiceField = [this, sendLive, section, saveLive, reverting, restoreSaved](const QString& key,
+        const QStringList& values, const QStringList& labels)
     {
         QComboBox* combo = bindChoiceField(section, key, values, labels);
-        connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this, [send, combo, key, saveLive](int)
+        const auto kept = std::make_shared<QString>(combo->currentData().toString());
+        const auto changes = std::make_shared<uint64_t>(0);
+        connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [sendLive, combo, key, saveLive, reverting, restoreSaved, kept, changes](int)
         {
-            saveLive(key);
-            send(QStringLiteral("%1 %2").arg(key, combo->currentData().toString()));
+            if (*reverting) return;
+            const QString chosen = combo->currentData().toString();
+            sendLive(changes, QStringLiteral("%1 %2").arg(key, chosen),
+                [saveLive, key, kept, chosen]
+                {
+                    *kept = chosen;
+                    return saveLive(key);
+                },
+                [combo, key, kept, restoreSaved]
+                {
+                    combo->setCurrentIndex(combo->findData(*kept));
+                    restoreSaved(key);
+                });
         });
         return combo;
+    };
+    // A bound tick box, sent as "<key> on" or "<key> off".
+    const auto checkField = [this, sendLive, saveLive, reverting, restoreSaved](QCheckBox* box, const QString& key)
+    {
+        const auto kept = std::make_shared<bool>(box->isChecked());
+        const auto changes = std::make_shared<uint64_t>(0);
+        connect(box, &QCheckBox::toggled, this, [sendLive, box, key, saveLive, reverting, restoreSaved, kept, changes](bool on)
+        {
+            if (*reverting) return;
+            sendLive(changes, key + (on ? QStringLiteral(" on") : QStringLiteral(" off")),
+                [saveLive, key, kept, on]
+                {
+                    *kept = on;
+                    return saveLive(key);
+                },
+                [box, key, kept, restoreSaved]
+                {
+                    box->setChecked(*kept);
+                    restoreSaved(key);
+                });
+        });
     };
     // Side by side from the left at their own widths, labels on one line,
     // whatever the window's width (A197 (b), A219 (6)): a cell never grows,
@@ -11864,11 +11969,7 @@ QWidget* ConfigEditorWindow::createPatternPage()
             const QSignalBlocker quiet(block);
             block->setChecked(false);
         }
-        connect(block, &QCheckBox::toggled, this, [send, saveLive](bool on)
-        {
-            saveLive(QStringLiteral("hdr10"));
-            send(on ? QStringLiteral("hdr10 on") : QStringLiteral("hdr10 off"));
-        });
+        checkField(block, QStringLiteral("hdr10"));
         hdr10Panel->layout()->addWidget(block);
         hdr10Panel->layout()->addWidget(helpLabel(QStringLiteral(
             "Carried by the PQ charts, in the Chart signal's primaries: P3 for P3 in BT.2020 PQ, else BT.2020. "
@@ -11900,14 +12001,6 @@ QWidget* ConfigEditorWindow::createPatternPage()
     {
         QLineEdit* from = liveTextField(QStringLiteral("nits_from"), QStringLiteral("0"));
         QLineEdit* to = liveTextField(QStringLiteral("nits_to"), QStringLiteral("75"));
-        const auto sendRange = [send, from, to, entered, storeLive]
-        {
-            storeLive(from, QStringLiteral("nits_from"));
-            storeLive(to, QStringLiteral("nits_to"));
-            send(QStringLiteral("nits_range %1 %2").arg(entered(from), entered(to)));
-        };
-        connect(from, &QLineEdit::editingFinished, this, sendRange);
-        connect(to, &QLineEdit::editingFinished, this, sendRange);
 
         // The display peak is VP's target nits, as saved (PatternDisplayPeak.h);
         // empty, and its two entries greyed, while VP names no active
@@ -11955,6 +12048,29 @@ QWidget* ConfigEditorWindow::createPatternPage()
             }
             if (range->currentIndex() != match) range->setCurrentIndex(match);
         };
+        // From and To go as one command; set back, both show the editor's
+        // values again and Range names their entry.
+        const auto sendRange = [this, section, sendLive, from, to, entered, storeLive, matchRange,
+            changes = std::make_shared<uint64_t>(0)]
+        {
+            const QString low = from->text().trimmed();
+            const QString high = to->text().trimmed();
+            sendLive(changes, QStringLiteral("nits_range %1 %2").arg(entered(from), entered(to)),
+                [storeLive, low, high]
+                {
+                    const bool lowSaved = storeLive(QStringLiteral("nits_from"), low);
+                    return storeLive(QStringLiteral("nits_to"), high) && lowSaved;
+                },
+                [this, section, from, to, low, high, matchRange]
+                {
+                    if (from->text().trimmed() != low || to->text().trimmed() != high) return;
+                    from->setText(value(section, QStringLiteral("nits_from")));
+                    to->setText(value(section, QStringLiteral("nits_to")));
+                    matchRange();
+                });
+        };
+        connect(from, &QLineEdit::editingFinished, this, sendRange);
+        connect(to, &QLineEdit::editingFinished, this, sendRange);
         // Entry labels carry their numbers, so they follow the display peak and
         // the peak mastering luminance.
         const auto labelRange = [range, entryRange]
@@ -12032,7 +12148,8 @@ QWidget* ConfigEditorWindow::createPatternPage()
     {
         QLineEdit* from = liveTextField(QStringLiteral("sdr_from"), QStringLiteral("0"));
         QLineEdit* to = liveTextField(QStringLiteral("sdr_to"), QStringLiteral("100"));
-        const auto sendRange = [send, from, to, entered, storeLive]
+        const auto sendRange = [this, section, sendLive, from, to, entered, storeLive,
+            changes = std::make_shared<uint64_t>(0)]
         {
             // Above 109.5 is set to 109.5, never refused (A219 (3)(d)); the
             // generator does the same.
@@ -12042,9 +12159,20 @@ QWidget* ConfigEditorWindow::createPatternPage()
                 if (field->text().trimmed().toDouble(&number) > 109.5 && number)
                     field->setText(QStringLiteral("109.5"));
             }
-            storeLive(from, QStringLiteral("sdr_from"));
-            storeLive(to, QStringLiteral("sdr_to"));
-            send(QStringLiteral("sdr_range %1 %2").arg(entered(from), entered(to)));
+            const QString low = from->text().trimmed();
+            const QString high = to->text().trimmed();
+            sendLive(changes, QStringLiteral("sdr_range %1 %2").arg(entered(from), entered(to)),
+                [storeLive, low, high]
+                {
+                    const bool lowSaved = storeLive(QStringLiteral("sdr_from"), low);
+                    return storeLive(QStringLiteral("sdr_to"), high) && lowSaved;
+                },
+                [this, section, from, to, low, high]
+                {
+                    if (from->text().trimmed() != low || to->text().trimmed() != high) return;
+                    from->setText(value(section, QStringLiteral("sdr_from")));
+                    to->setText(value(section, QStringLiteral("sdr_to")));
+                });
         };
         connect(from, &QLineEdit::editingFinished, this, sendRange);
         connect(to, &QLineEdit::editingFinished, this, sendRange);
@@ -12239,18 +12367,10 @@ QWidget* ConfigEditorWindow::createPatternPage()
         {
             QCheckBox* flash = bindCheckField(QStringLiteral("Flash the bars (0.75 s on, 0.75 s off)"),
                 section, QStringLiteral("flash"));
-            connect(flash, &QCheckBox::toggled, this, [send, saveLive](bool on)
-            {
-                saveLive(QStringLiteral("flash"));
-                send(on ? QStringLiteral("flash on") : QStringLiteral("flash off"));
-            });
+            checkField(flash, QStringLiteral("flash"));
             QCheckBox* labels = bindCheckField(QStringLiteral("Code and % under each bar"),
                 section, QStringLiteral("text"), true);
-            connect(labels, &QCheckBox::toggled, this, [send, saveLive](bool on)
-            {
-                saveLive(QStringLiteral("text"));
-                send(on ? QStringLiteral("text on") : QStringLiteral("text off"));
-            });
+            checkField(labels, QStringLiteral("text"));
             bodyLayout->addWidget(row({ flash, labels }));
         }
         if (title == QStringLiteral("Aspect"))
@@ -12321,7 +12441,8 @@ QWidget* ConfigEditorWindow::createPatternPage()
         return kept;
     };
     fillPickers(chartSignal->currentData().toString());
-    // A new Chart signal (choiceField has saved and sent it): the lists and
+    // A new Chart signal (choiceField has sent it; a refused one set back
+    // comes here again): the lists and
     // the HDR10 card follow it. A colour ramp or twin on screen has followed
     // it in the generator too, so its settings follow here. Any other chart
     // on screen that is not drawn for it stays the page's chart: the
