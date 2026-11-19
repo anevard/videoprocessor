@@ -350,6 +350,17 @@ namespace LibplaceboDisplayLut
         entries_[key] = std::move(rejected);
     }
 
+    bool AppliedCache::FilesUnchanged() const
+    {
+        for (const auto& entry : entries_)
+        {
+            if (!SameFileVersion(entry.second->result.fileVersion,
+                ProbeFileVersion(entry.first.first)))
+                return false;
+        }
+        return true;
+    }
+
 	const char* ShortReason(Rejection rejection)
 	{
 		switch (rejection)
