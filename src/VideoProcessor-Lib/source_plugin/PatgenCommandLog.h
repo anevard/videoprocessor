@@ -11,10 +11,11 @@
 // LogPatternCommand and that function's one call in HandleClient (all marked
 // TEMPORARY).
 //
-// Not logged: the page's once-a-second "pattern.chart_showing",
-// "pattern.raw_state", "pattern.one_to_one_state" and
-// "pattern.loop_arm_state" polls (PatgenChartShowing.h, PatgenRawOutput.h),
-// which would bury the commands.
+// Not logged: the page's polls "pattern.chart_showing", "pattern.raw_state",
+// "pattern.one_to_one_state", "pattern.loop_arm_state" and
+// "pattern.low_latency_state" (PatgenChartShowing.h, PatgenRawOutput.h,
+// PatgenLowLatency.h), which would bury the commands. "low_latency on" and
+// "low_latency off" are commands and stay logged.
 
 #include <string>
 
@@ -25,12 +26,13 @@ namespace PatgenCommandLog
 	constexpr const char* RawPoll = "pattern.raw_state";
 	constexpr const char* OneToOnePoll = "pattern.one_to_one_state";
 	constexpr const char* LoopArmPoll = "pattern.loop_arm_state";
+	constexpr const char* LowLatencyPoll = "pattern.low_latency_state";
 
 	// The RunAction names to log: every "pattern.<command>" but the polls.
 	inline bool Logged(const std::string& action)
 	{
 		return action.rfind(Prefix, 0) == 0 && action != Poll && action != RawPoll &&
-			action != OneToOnePoll && action != LoopArmPoll;
+			action != OneToOnePoll && action != LoopArmPoll && action != LowLatencyPoll;
 	}
 
 	// One vp.log line, e.g.
