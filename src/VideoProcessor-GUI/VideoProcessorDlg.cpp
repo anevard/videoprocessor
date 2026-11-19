@@ -81,6 +81,7 @@ static UINT vpUpdateExitMessage = RegisterWindowMessageW(L"VideoProcessor.Update
 #include <source_plugin/PatgenChartShowing.h>
 #include <source_plugin/PatgenRawOutput.h>
 #include <source_plugin/PatgenLowLatency.h>
+#include <source_plugin/PatgenLiveSave.h>
 #include <source_plugin/SourcePluginKeptBack.h>
 #include <MainConfigSchema.h>
 #include <UnifiedProfileRuntime.h>
@@ -3250,7 +3251,7 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, player ?
 				SourcePluginBackend::PLAYER_PLUGIN_NAME : SourcePluginBackend::PATTERN_PLUGIN_NAME))
 				return ConfigurationRpcError(operation, player ? "The Player is not the active input." :
-					"The pattern generator is not the active input.");
+					PatgenLiveSave::NotActiveInput);
 			if (name == "player.restart" || name == "pattern.restart")
 			{
 				DebugLog::Log("%s restart requested by Config", player ? "Player" : "Pattern generator");
@@ -3286,7 +3287,7 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 					return ConfigurationRpcError(operation, PatgenLowLatency::Off);
 				if (lowLatency && !SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
 					SourcePluginBackend::PATTERN_PLUGIN_NAME))
-					return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
+					return ConfigurationRpcError(operation, PatgenLiveSave::NotActiveInput);
 				if (command != PatgenLowLatency::StateCommand)
 					UpdatePatgenLowLatency(lowLatency, lowLatency ? "switch on" : "switch off");
 				if (lowLatency && !m_patgenLowLatency)
@@ -3297,7 +3298,7 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 			}
 			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
 				SourcePluginBackend::PATTERN_PLUGIN_NAME))
-				return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
+				return ConfigurationRpcError(operation, PatgenLiveSave::NotActiveInput);
 			int32_t result = 0;
 			SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command.c_str(), &result);
 			// The Patterns page's "is my chart still showing?" (A202,
