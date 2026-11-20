@@ -291,5 +291,76 @@ namespace Tests
 			Assert::AreEqual(static_cast<int32_t>(0x80004005L),
 				snapshot.frameStatisticsResult);
 		}
+
+		TEST_METHOD(ArrivalToScreenIsMeasuredOnlyOnTheNewestPresentsOwnRefresh)
+		{
+			AlphaPresentationTelemetry telemetry;
+			Assert::IsTrue(
+				telemetry.Snapshot().lastPresentedArrivalToScreenMs < 0.0);
+			for (uint64_t sequence = 1; sequence <= 4; ++sequence)
+			{
+				AlphaPresentationRecord record = Record(sequence);
+				record.enqueueQpc = 860 + static_cast<int64_t>(sequence) * 40;
+				record.cadenceRepeat = sequence == 4;
+				telemetry.RecordSubmission(record);
+			}
+
+			// Present 1 on its own refresh: arrival 900, screen 1000.
+			telemetry.Observe(Sample(1, 1000));
+			Assert::AreEqual(100.0,
+				telemetry.Snapshot().lastPresentedArrivalToScreenMs, 0.001);
+
+			// Presents 2 and 3 are reached past, 4 is a cadence repeat.
+			telemetry.Observe(Sample(4, 1080));
+			Assert::AreEqual(100.0,
+				telemetry.Snapshot().lastPresentedArrivalToScreenMs, 0.001);
+
+			// The sync sample is a later refresh than the present's.
+			AlphaPresentationRecord fifth = Record(5);
+			fifth.enqueueQpc = 1060;
+			telemetry.RecordSubmission(fifth);
+			AlphaDxgiPresentationSample later = Sample(5, 1120);
+			later.syncRefreshCount = 6;
+			telemetry.Observe(later);
+			Assert::AreEqual(100.0,
+				telemetry.Snapshot().lastPresentedArrivalToScreenMs, 0.001);
+
+			AlphaPresentationRecord sixth = Record(6);
+			sixth.enqueueQpc = 1100;
+			telemetry.RecordSubmission(sixth);
+			AlphaDxgiPresentationSample own = Sample(7, 1160);
+			own.presentCount = 6;
+			telemetry.Observe(own);
+			Assert::AreEqual(60.0,
+				telemetry.Snapshot().lastPresentedArrivalToScreenMs, 0.001);
+		}
+
+		TEST_METHOD(ArrivalToScreenIsUnknownAfterEachReset)
+		{
+			AlphaPresentationTelemetry telemetry;
+			AlphaPresentationRecord first = Record(1);
+			first.enqueueQpc = 900;
+			telemetry.RecordSubmission(first);
+			telemetry.Observe(Sample(1, 1000));
+			Assert::AreEqual(100.0,
+				telemetry.Snapshot().lastPresentedArrivalToScreenMs, 0.001);
+
+			auto disjoint = Sample(2, 1040);
+			disjoint.disjoint = true;
+			telemetry.Observe(disjoint);
+			Assert::IsTrue(
+				telemetry.Snapshot().lastPresentedArrivalToScreenMs < 0.0);
+
+			AlphaPresentationRecord second = Record(2);
+			second.enqueueQpc = 1000;
+			telemetry.RecordSubmission(second);
+			telemetry.Observe(Sample(2, 1080));
+			Assert::AreEqual(80.0,
+				telemetry.Snapshot().lastPresentedArrivalToScreenMs, 0.001);
+
+			telemetry.RecordSubmission(Record(3, 2));
+			Assert::IsTrue(
+				telemetry.Snapshot().lastPresentedArrivalToScreenMs < 0.0);
+		}
 	};
 }

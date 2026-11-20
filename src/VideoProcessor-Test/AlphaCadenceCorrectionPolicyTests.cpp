@@ -576,5 +576,45 @@ namespace Tests
 			Assert::AreEqual(static_cast<int>(AlphaCadenceAction::Drop),
 				static_cast<int>(freshScene.action));
 		}
+
+		TEST_METHOD(SurplusSeenAtTheScreenLetsADueDropPassBelowDesiredDepth)
+		{
+			AlphaCadenceCorrectionPolicy policy;
+			AlphaCadenceCorrectionInput input = Input(60.012);
+			input.queueDepth = input.desiredQueueDepth - 1;
+			// The queue's rest of desired - 1 sources, two display periods
+			// and the 8 ms margin, then 0.5 ms over that line.
+			input.lastPresentedArrivalToScreenMs =
+				3.0 * 1000.0 / 60.012 + 2.0 * 1000.0 / 60.0 + 8.0 + 0.5;
+			const auto due = AdvanceUntilDue(policy, input);
+			Assert::AreNotEqual(
+				Reason(AlphaCadenceBlockReason::DropQueueNotAboveDesired),
+				Reason(due.blockReason));
+
+			input.safeSceneBoundary = true;
+			input.sceneEventId = 5;
+			const auto decision = policy.Evaluate(input);
+			Assert::AreEqual(static_cast<int>(AlphaCadenceAction::Drop),
+				static_cast<int>(decision.action));
+		}
+
+		TEST_METHOD(ArrivalToScreenUnderTheSurplusLineKeepsTheDepthGate)
+		{
+			AlphaCadenceCorrectionPolicy policy;
+			AlphaCadenceCorrectionInput input = Input(60.012);
+			input.queueDepth = input.desiredQueueDepth - 1;
+			input.lastPresentedArrivalToScreenMs =
+				3.0 * 1000.0 / 60.012 + 2.0 * 1000.0 / 60.0 + 8.0 - 0.5;
+			const auto due = AdvanceUntilDue(policy, input);
+			Assert::AreEqual(
+				Reason(AlphaCadenceBlockReason::DropQueueNotAboveDesired),
+				Reason(due.blockReason));
+
+			input.safeSceneBoundary = true;
+			input.sceneEventId = 5;
+			const auto decision = policy.Evaluate(input);
+			Assert::AreEqual(static_cast<int>(AlphaCadenceAction::None),
+				static_cast<int>(decision.action));
+		}
 	};
 }
