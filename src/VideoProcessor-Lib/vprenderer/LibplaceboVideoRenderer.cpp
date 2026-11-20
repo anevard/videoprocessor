@@ -13639,6 +13639,8 @@ struct LibplaceboVideoRenderer::Impl
 			correctionInput.queueDepth = queueDepthAfterDequeue;
 			correctionInput.desiredQueueDepth = desiredQueueDepth;
 			correctionInput.oldestQueuedAgeMs = oldestQueuedAgeMs;
+			correctionInput.lastPresentedArrivalToScreenMs =
+				presentation.lastPresentedArrivalToScreenMs;
 			correctionInput.presentationDebt =
 				presentation.sourceToPresentDebt;
 			correctionInput.lastPresentId = presentation.lastPresentId;

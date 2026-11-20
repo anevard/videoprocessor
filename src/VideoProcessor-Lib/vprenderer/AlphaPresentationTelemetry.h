@@ -118,6 +118,10 @@ struct AlphaPresentationSnapshot
 	double observedDisplayHz = 0.0;
 	double measuredDisplayHz = 0.0;
 	uint32_t cadenceSamples = 0;
+	// Arrival (enqueue) to the refresh that showed it, for the newest source
+	// seen on its own refresh that is not a cadence repeat. Negative until
+	// one is seen after a reset.
+	double lastPresentedArrivalToScreenMs = -1.0;
 };
 
 class AlphaPresentationTelemetry
@@ -163,4 +167,5 @@ private:
 	int64_t m_lastSyncQpc = 0;
 	int64_t m_qpcFrequency = 0;
 	double m_measuredDisplayHz = 0.0;
+	double m_lastPresentedArrivalToScreenMs = -1.0;
 };
