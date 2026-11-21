@@ -33,8 +33,8 @@ namespace PatgenRawOutput
 	}
 
 	// The Patterns page's other live switches, read the same way (A261):
-	// "ColourSpace patches 1:1" (on at every VP start) and the loopback
-	// harness's arm switch (off at every VP start). Neither is saved.
+	// "Show ColourSpace's patches 1:1" (on at every VP start) and the
+	// Loopback group's "Armed" (off at every VP start). Neither is saved.
 	constexpr const char* OneToOneStateCommand = "one_to_one_state";
 	constexpr const char* OneToOneOff = "ColourSpace patches 1:1 is off.";
 	constexpr const char* LoopArmStateCommand = "loop_arm_state";

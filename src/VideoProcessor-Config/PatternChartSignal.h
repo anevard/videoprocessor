@@ -113,8 +113,9 @@ namespace PatternChartSignal
         return gamut == "bt2020_pq" || gamut == "p3_bt2020_pq";
     }
 
-    // The HDR10 block card, one for the charts and the patches, shows while
-    // the Chart signal or the patches' Gamut is PQ (A230 (1)).
+    // The HDR10 block, one for the charts and the patches, last in the
+    // Patterns page's Signal section, shows while the Chart signal or the
+    // patches' Gamut is PQ (A230 (1)).
     inline bool Hdr10CardShown(const std::string& chartSignal, const std::string& gamut)
     {
         const Signal* found = Find(chartSignal);
