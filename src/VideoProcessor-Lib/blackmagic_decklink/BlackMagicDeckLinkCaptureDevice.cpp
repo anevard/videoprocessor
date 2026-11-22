@@ -1153,6 +1153,7 @@ bool BlackMagicDeckLinkCaptureDevice::SendVideoStateCallback(
 				videoState->displayMode->FrameHeight());
 			videoState->invertedVertical = m_videoInvertedVertical;
 			videoState->videoFrameEncoding = Translate(m_bmdPixelFormat, videoState->colorspace);
+			videoState->rgb8LimitedRange = m_formatPreferences.rgb8LimitedRange;
 
 			// Build a fresh copy of the HDR data if valid
 			if (hasValidHdrData)

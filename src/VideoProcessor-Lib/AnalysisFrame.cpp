@@ -49,7 +49,7 @@ namespace
     }
 
     void NativeContract(PreparedAnalysisFrame& result,
-        VideoFrameEncoding encoding)
+        VideoFrameEncoding encoding, bool rgb8LimitedRange)
     {
         const bool rgb8 = encoding == VideoFrameEncoding::BGRA_8BIT ||
             encoding == VideoFrameEncoding::ARGB_8BIT;
@@ -59,8 +59,8 @@ namespace
             encoding == VideoFrameEncoding::HDYC;
         result.colorDepth = rgb12 ? 12 : ((rgb8 || yuv8) ? 8 : 10);
         result.bitShift = (encoding == VideoFrameEncoding::P210 || encoding == VideoFrameEncoding::P010) ? 6 : 0;
-        result.sampleRange = (rgb8 || rgb12) ? VideoFrameSampleRange::FULL :
-            VideoFrameSampleRange::LIMITED;
+        result.sampleRange = ((rgb8 && !rgb8LimitedRange) || rgb12) ?
+            VideoFrameSampleRange::FULL : VideoFrameSampleRange::LIMITED;
     }
 }
 
@@ -192,7 +192,7 @@ PreparedAnalysisFrame PrepareAnalysisFrame(const AnalysisFrameInput& input, cons
                 AnalysisFrameDomain::NativeYuv420 : AnalysisFrameDomain::NativeYuv422;
         }
         result.sourceOwner = input.nativeOwner;
-        NativeContract(result, input.encoding);
+        NativeContract(result, input.encoding, input.rgb8LimitedRange);
     }
 
     if (!result.sourceOwner || !backing.IsValid())

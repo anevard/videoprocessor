@@ -9239,6 +9239,7 @@ struct LibplaceboVideoRenderer::Impl
         input.converted422 = converted422;
         input.dolbyVisionTunnel = state.dolbyVisionTunnel;
         input.tunnelSdrRgbRange = state.tunnelSdrRgbRange;
+        input.rgb8LimitedRange = state.rgb8LimitedRange;
         if (converted) {
             input.convertedData = converted->pixels.data();
             input.convertedBytes = converted->pixels.size();
@@ -13344,9 +13345,10 @@ struct LibplaceboVideoRenderer::Impl
 				nativeRgbAnalysisLoggedWidth = width;
 				nativeRgbAnalysisLoggedHeight = height;
 				DebugLog::Log(
-					"Alpha native RGB analysis: ingress=%s color_space=%d eotf=%d range=full representation=%s %dx%d source_transform=identity encoded_luma=BT.%s bounded_active_samples=<30000 scene_samples=576 generation=%llu consumers[nls=%s scene=%s scope_subtitle=%s]",
+					"Alpha native RGB analysis: ingress=%s color_space=%d eotf=%d range=%s representation=%s %dx%d source_transform=identity encoded_luma=BT.%s bounded_active_samples=<30000 scene_samples=576 generation=%llu consumers[nls=%s scene=%s scope_subtitle=%s]",
 					nativeRgbLayout.label,
 					static_cast<int>(state.colorspace), static_cast<int>(state.eotf),
+					analysisSource.range == AnalysisLumaRange::Limited ? "limited" : "full",
 					AnalysisLumaFormatName(analysisSource), width, height,
 					state.colorspace == ColorSpace::BT_2020 ? "2020" : "709",
 					static_cast<unsigned long long>(frameGeneration),
@@ -14245,8 +14247,9 @@ struct LibplaceboVideoRenderer::Impl
 		image.repr.levels = nativeRgbUpload ?
 			(tunnelRgbFallback ? (state.tunnelSdrRgbRange == TunnelSdrRgbRange::Limited ?
                 PL_COLOR_LEVELS_LIMITED : PL_COLOR_LEVELS_FULL) :
-				(nativeRgbLayout.limitedRange ? PL_COLOR_LEVELS_LIMITED :
-				PL_COLOR_LEVELS_FULL)) :
+				(nativeRgbLayout.limitedRange ||
+					(nativeRgb8Upload && state.rgb8LimitedRange) ?
+				PL_COLOR_LEVELS_LIMITED : PL_COLOR_LEVELS_FULL)) :
 			(formattedContract.sampleRange == VideoFrameSampleRange::FULL ?
 				PL_COLOR_LEVELS_FULL : PL_COLOR_LEVELS_LIMITED);
 		image.repr.alpha = PL_ALPHA_NONE;

@@ -2303,8 +2303,9 @@ CVideoProcessorDlg::CVideoProcessorDlg():
 		profileConfig, deckLinkFormatPreferences, deckLinkFormatError))
 		throw std::runtime_error(deckLinkFormatError);
 	DebugLog::Log(
-		"DeckLink capture packing preferences: rgb8=%s rgb10=%s rgb12=%s",
+		"DeckLink capture packing preferences: rgb8=%s rgb8_range=%s rgb10=%s rgb12=%s",
 		DeckLinkPixelFormatName(deckLinkFormatPreferences.rgb8),
+		deckLinkFormatPreferences.rgb8LimitedRange ? "LIMITED" : "FULL",
 		DeckLinkPixelFormatName(deckLinkFormatPreferences.rgb10),
 		DeckLinkPixelFormatName(deckLinkFormatPreferences.rgb12));
 	m_blackMagicDeviceDiscoverer = new BlackMagicDeckLinkCaptureDeviceDiscoverer(

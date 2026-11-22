@@ -39,6 +39,9 @@ public:
 	// Capture must clear this when its processing can remap RGB tunnel bytes.
 	bool rgbTunnelBytesPreserved = true;
 	TunnelSdrRgbRange tunnelSdrRgbRange = TunnelSdrRgbRange::Full;
+	// Native 8-bit RGB (ARGB/BGRA) carries 16-235 levels, as configured for
+	// the capture; other encodings and the Dolby Vision tunnel ignore it.
+	bool rgb8LimitedRange = false;
 	// TV-led Dolby Vision HDMI RGB tunnel in a supported raw RGB layout.
 	bool dolbyVisionTunnel = false;
 	// The source generates this signal and states it exactly (a test pattern

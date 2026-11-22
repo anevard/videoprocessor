@@ -53,13 +53,23 @@ bool ReadDeckLinkCaptureFormatPreferences(const ConfigFile& config,
 {
 	preferences = {};
 	error.clear();
-	return ReadPacking(config, "rgb_8bit_packing", preferences.rgb8,
+	if (!(ReadPacking(config, "rgb_8bit_packing", preferences.rgb8,
 		{ { "ARGB", bmdFormat8BitARGB }, { "BGRA", bmdFormat8BitBGRA } }, error) &&
 		ReadPacking(config, "rgb_10bit_packing", preferences.rgb10,
 		{ { "R210", bmdFormat10BitRGB }, { "R10B", bmdFormat10BitRGBX },
 			{ "R10L", bmdFormat10BitRGBXLE } }, error) &&
 		ReadPacking(config, "rgb_12bit_packing", preferences.rgb12,
-		{ { "R12B", bmdFormat12BitRGB }, { "R12L", bmdFormat12BitRGBLE } }, error);
+		{ { "R12B", bmdFormat12BitRGB }, { "R12L", bmdFormat12BitRGBLE } }, error)))
+		return false;
+	std::string range;
+	if (!config.TryGetString("decklink", "rgb_8bit_range", range))
+		return true;
+	const std::string normalized = ConfigFile::NormalizeName(range);
+	preferences.rgb8LimitedRange = normalized == "limited";
+	if (preferences.rgb8LimitedRange || normalized == "full")
+		return true;
+	error = "Invalid [decklink] rgb_8bit_range='" + range + "'";
+	return false;
 }
 
 
