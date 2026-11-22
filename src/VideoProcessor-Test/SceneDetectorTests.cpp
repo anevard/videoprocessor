@@ -263,6 +263,53 @@ namespace Tests
 			Assert::IsFalse(afterReset.safeBoundary);
 			Assert::AreEqual(static_cast<uint64_t>(2), afterReset.generation);
 		}
+
+		TEST_METHOD(LimitedFootroomBarsDoNotDelayAHardCutConfirmation)
+		{
+			// 64x36 P010 declared Limited. Rows 0-3 and 32-35 are bars at 10-bit
+			// 60 and 64 on alternate frames: four of the 18 sample rows. The
+			// picture cuts from 256 to 768 at frame 5.
+			constexpr int width = 64;
+			constexpr int height = 36;
+			SceneDetector detector;
+			std::vector<uint16_t> frame(width * height * 3 / 2, static_cast<uint16_t>(512 << 6));
+			SceneDetectorResult confirmed;
+			for (uint64_t sequence = 1; sequence <= 9 && !confirmed.hardCutConfirmed; ++sequence)
+			{
+				const int bar = sequence % 2 ? 60 : 64;
+				const int picture = sequence < 5 ? 256 : 768;
+				for (int y = 0; y < height; ++y)
+				{
+					const int luma = y < 4 || y >= 32 ? bar : picture;
+					std::fill_n(frame.begin() + y * width, width, static_cast<uint16_t>(luma << 6));
+				}
+				AnalysisLumaSource source;
+				source.data = reinterpret_cast<const uint8_t*>(frame.data());
+				source.dataBytes = frame.size() * sizeof(uint16_t);
+				source.width = width;
+				source.height = height;
+				source.rowBytes = width * sizeof(uint16_t);
+				source.chromaRowBytes = width * sizeof(uint16_t);
+				source.range = AnalysisLumaRange::Limited;
+				SceneDetectorInput input;
+				input.analysisSource = &source;
+				input.width = width;
+				input.height = height;
+				input.strideBytes = width * sizeof(uint16_t);
+				input.sourceSequence = sequence;
+				input.timestamp = static_cast<int64_t>(sequence * 417083);
+				input.generation = 1;
+				input.frameDuration = 417083;
+				input.enabled = true;
+				const SceneDetectorResult result = detector.Analyze(input);
+				if (result.hardCutConfirmed)
+					confirmed = result;
+			}
+
+			Assert::IsTrue(confirmed.hardCutConfirmed);
+			Assert::AreEqual(1U, static_cast<unsigned int>(confirmed.eventFramesBack));
+			Assert::AreEqual(static_cast<uint64_t>(6), confirmed.sourceSequence);
+		}
 	};
 	// These tests characterize fresh HDMI capture IDs carrying identical pixels.
 	// They intentionally do not mark repeated pictures as queue cadence repeats.
