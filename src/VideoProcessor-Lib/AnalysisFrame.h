@@ -55,6 +55,7 @@ struct AnalysisFrameInput
     bool converted422 = false;
     bool dolbyVisionTunnel = false;
     TunnelSdrRgbRange tunnelSdrRgbRange = TunnelSdrRgbRange::Full;
+    bool rgb8LimitedRange = false;
 };
 
 // The prepared source retains the selected frame pixels while sampling them

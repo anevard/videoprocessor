@@ -28,6 +28,8 @@ struct DeckLinkCaptureFormatPreferences
 	BMDPixelFormat rgb8 = bmdFormat8BitARGB;
 	BMDPixelFormat rgb10 = bmdFormat10BitRGB;
 	BMDPixelFormat rgb12 = bmdFormat12BitRGB;
+	// DeckLink reports no RGB quantization range; 8-bit RGB is full unless set.
+	bool rgb8LimitedRange = false;
 };
 
 bool ReadDeckLinkCaptureFormatPreferences(const ConfigFile& config,

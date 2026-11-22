@@ -24,6 +24,7 @@ VideoState::VideoState(const VideoState& other)
 	exactSignal = other.exactSignal;
 	rgbTunnelBytesPreserved = other.rgbTunnelBytesPreserved;
 	tunnelSdrRgbRange = other.tunnelSdrRgbRange;
+	rgb8LimitedRange = other.rgb8LimitedRange;
 
 	// Deepcopy
 	if (other.hdrData)
