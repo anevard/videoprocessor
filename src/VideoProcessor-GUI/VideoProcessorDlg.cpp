@@ -3261,6 +3261,19 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 			return response;
 		}
+		// Ctrl+Alt+S from another PC (A402): the same capture, whatever the
+		// input; refused with VP's reason when none can be queued. The dot
+		// keeps the name apart from a profile action's.
+		if (name == "vp.capture_rendered_output")
+		{
+			CString status;
+			if (!QueueRenderedOutputCapture(status))
+				return ConfigurationRpcError(operation,
+					ConfigurationRpcUtf8(static_cast<LPCWSTR>(status)));
+			Frame response;
+			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+			return response;
+		}
 		// Config's Pattern page, live: "pattern.<command>" goes to the
 		// pattern generator as "<command>" (e.g. "pattern.chart grey_steps").
 		if (name.rfind("pattern.", 0) == 0)
@@ -8372,6 +8385,13 @@ void CVideoProcessorDlg::OnCommandToggleStatsOverlay()
 void CVideoProcessorDlg::OnCommandCaptureRenderedOutput()
 {
 	CString status;
+	QueueRenderedOutputCapture(status);
+}
+
+// Ctrl+Alt+S, and Config's RPC action "vp.capture_rendered_output" (A402):
+// one capture of the next rendered frame, whatever the input.
+bool CVideoProcessorDlg::QueueRenderedOutputCapture(CString& status)
+{
 	const bool accepted = m_videoRenderer &&
 		m_videoRenderer->RequestRenderedOutputCapture(status);
 	if (status.IsEmpty())
@@ -8383,6 +8403,7 @@ void CVideoProcessorDlg::OnCommandCaptureRenderedOutput()
 		static_cast<LPCWSTR>(status));
 	OnRendererDetailString(
 		status, m_rendererGeneration.load(std::memory_order_acquire));
+	return accepted;
 }
 
 void CVideoProcessorDlg::OnCommandCaptureAnalysisDiagnostics(bool includeFrames)
