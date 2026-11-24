@@ -2582,6 +2582,97 @@ void ConfigEditorWindow::runTargetCommand(const QString& group,
 	manualCommandThread_->start();
 }
 
+// The line above Capture device and Input connection; empty text hides its row.
+static void setRunningCaptureLine(QObject* window, const QString& text)
+{
+    auto* note = window->findChild<QLabel*>(QStringLiteral("config.general.capture_running"));
+    if (!note) return;
+    note->setText(text);
+    if (auto* form = qobject_cast<QFormLayout*>(note->property("captureForm").value<QObject*>()))
+        form->setRowVisible(note->parentWidget(), !text.isEmpty());
+}
+
+// Capture device and Input connection hold the saved start-up input. While VP
+// captures another one (a capture shortcut or VP's own window chose it for the
+// session), they show that one, with a line naming the start-up input, and
+// nothing is written: the saved input stays what OK and Apply save.
+void ConfigEditorWindow::refreshRunningCaptureSelection(const QString& device,
+    const QString& input)
+{
+    runningCaptureDevice_ = device.trimmed();
+    runningCaptureInput_ = input.trimmed();
+    auto* deviceBox = findChild<QComboBox*>(controlName(QStringLiteral("general"),
+        QStringLiteral("capture_device")));
+    if (!deviceBox || !document_ || !refillCaptureConnections_) return;
+    const auto saved = [this](const QString& key)
+    {
+        for (const auto& section : savedSnapshot_)
+            if (QString::fromStdString(section.first).compare(QStringLiteral("general"),
+                Qt::CaseInsensitive) == 0)
+                for (const auto& setting : section.second)
+                    if (QString::fromStdString(setting.first).compare(key, Qt::CaseInsensitive) == 0)
+                        return QString::fromLocal8Bit(setting.second.c_str()).trimmed();
+        return QString();
+    };
+    const QString savedDevice = saved(QStringLiteral("capture_device"));
+    const QString savedInput = saved(QStringLiteral("capture_input"));
+    const QString editedDevice = value(QStringLiteral("general"),
+        QStringLiteral("capture_device")).trimmed();
+    const QString editedInput = value(QStringLiteral("general"),
+        QStringLiteral("capture_input")).trimmed();
+    // An unsaved pick in either box is the operator's: it stays as picked.
+    const bool edited = editedDevice.compare(savedDevice, Qt::CaseInsensitive) != 0 ||
+        editedInput.compare(savedInput, Qt::CaseInsensitive) != 0;
+    const bool otherDevice = !runningCaptureDevice_.isEmpty() &&
+        runningCaptureDevice_.compare(savedDevice, Qt::CaseInsensitive) != 0;
+    const bool otherInput = !runningCaptureDevice_.isEmpty() && !otherDevice &&
+        !runningCaptureInput_.isEmpty() && !savedInput.isEmpty() &&
+        runningCaptureInput_.compare(savedInput, Qt::CaseInsensitive) != 0;
+    const bool show = !edited && (otherDevice || otherInput) &&
+        deviceBox->findData(runningCaptureDevice_, Qt::UserRole, Qt::MatchFixedString) >= 0;
+    const QString line = show ? (savedDevice.isEmpty() ?
+        QStringLiteral("Selected in VP, not saved.") :
+        QStringLiteral("Selected in VP, not saved. VP starts on %1").arg(savedInput.isEmpty() ?
+            savedDevice : QStringLiteral("%1, %2").arg(savedDevice, savedInput))) : QString();
+    const QString shownFor = show ? QStringLiteral("%1\n%2\n%3").arg(
+        runningCaptureDevice_, runningCaptureInput_, line) : QString();
+    if (shownFor == runningCaptureShownFor_) return;
+    runningCaptureShownFor_ = shownFor;
+    {
+        const QSignalBlocker blocker(deviceBox);
+        const int index = deviceBox->findData(show ? runningCaptureDevice_ : editedDevice,
+            Qt::UserRole, Qt::MatchFixedString);
+        if (index >= 0) deviceBox->setCurrentIndex(index);
+    }
+    refillCaptureConnections_(deviceBox->currentText());
+    setRunningCaptureLine(this, line);
+}
+
+// A pick in Capture device or Input connection while they show the input VP
+// runs: that input, connection included, becomes an unsaved edit, so a pick
+// of the shown entry saves it at OK or Apply like any other choice.
+void ConfigEditorWindow::adoptRunningCaptureSelection()
+{
+    if (runningCaptureShownFor_.isEmpty() || !document_) return;
+    runningCaptureShownFor_.clear();
+    setRunningCaptureLine(this, QString());
+    const auto set = [this](const char* key, const QString& text)
+    {
+        const QByteArray bytes = text.toLocal8Bit();
+        if (!document_->SetKnown("general", key, bytes.constData()))
+        {
+            document_->AddSection("general");
+            document_->SetKnown("general", key, bytes.constData());
+        }
+    };
+    set("capture_device", runningCaptureDevice_);
+    auto* connectionBox = findChild<QComboBox*>(controlName(QStringLiteral("general"),
+        QStringLiteral("capture_input")));
+    if (connectionBox && connectionBox->isEnabled() && !runningCaptureInput_.isEmpty())
+        set("capture_input", runningCaptureInput_);
+    markDirty();
+}
+
 void ConfigEditorWindow::refreshActiveProfileIndicators()
 {
     // A combo popup has its own transient native window. Avoid unrelated model
@@ -2632,6 +2723,9 @@ void ConfigEditorWindow::refreshActiveProfileIndicators()
                         profiles.push_back(QString::fromLocal8Bit(section.c_str()));
                 applyActiveProfileIndicators(available, profiles, shaders,
                     available && status.shaderAvailable);
+                refreshRunningCaptureSelection(
+                    available ? QString::fromLocal8Bit(status.captureDevice.c_str()) : QString(),
+                    available ? QString::fromLocal8Bit(status.captureInput.c_str()) : QString());
 			});
 		activeProfileThread_->start();
 		return;
@@ -2674,6 +2768,9 @@ void ConfigEditorWindow::refreshActiveProfileIndicators()
         for (uint32_t index = 0; index < active.profileCount; ++index)
             profiles.push_back(QString::fromLocal8Bit(active.profiles[index]));
     applyActiveProfileIndicators(available, profiles, shaders, shaderAvailable);
+    refreshRunningCaptureSelection(
+        available ? QString::fromLocal8Bit(active.captureDevice) : QString(),
+        available ? QString::fromLocal8Bit(active.captureInput) : QString());
     refreshRendererAutoStatus();
     refreshCalibrationControls();
     if (auto* label = findChild<QLabel*>(QStringLiteral("config.color_output.live_status")))
@@ -4699,6 +4796,28 @@ QWidget* ConfigEditorWindow::createStartupPage()
     hardwareForm->setContentsMargins(0, 0, 0, 0);
     hardwareForm->setHorizontalSpacing(18);
     hardwareForm->setVerticalSpacing(8);
+    // Shown only while VP captures an input other than the saved one, which
+    // the two boxes below then show (refreshRunningCaptureSelection).
+    runningCaptureShownFor_.clear();
+    auto* runningCapture = new QLabel;
+    runningCapture->setObjectName(QStringLiteral("config.general.capture_running"));
+    runningCapture->setWordWrap(true);
+    runningCapture->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    runningCapture->setStyleSheet(QStringLiteral(
+        "color: #e0b867; background: #19160f; border: 1px solid #5e4c28;"
+        " border-radius: 3px; padding: 0px 6px; font-size: 11px;"));
+    runningCapture->setToolTip(QStringLiteral(
+        "A capture shortcut or VP's own window chose this input for the session. "
+        "Pick an input below and press OK or Apply to save it as the start-up input."));
+    runningCapture->setProperty("captureForm",
+        QVariant::fromValue<QObject*>(hardwareForm));
+    auto* runningCaptureRow = new QWidget;
+    auto* runningCaptureLayout = new QHBoxLayout(runningCaptureRow);
+    runningCaptureLayout->setContentsMargins(0, 0, 0, 0);
+    runningCaptureLayout->addWidget(runningCapture);
+    runningCaptureLayout->addStretch(1);
+    hardwareForm->addRow(runningCaptureRow);
+    hardwareForm->setRowVisible(runningCaptureRow, false);
 	persistDiscoveredDefault(QStringLiteral("capture_device"), captureDevices_);
 	auto* captureDevice = bindChoiceField(QStringLiteral("general"),
         QStringLiteral("capture_device"), captureDevices_.isEmpty() ?
@@ -4731,8 +4850,9 @@ QWidget* ConfigEditorWindow::createStartupPage()
                 continue;
             uniqueConnections.push_back(normalized);
         }
-        const QString configured = value(QStringLiteral("general"),
-            QStringLiteral("capture_input"));
+        const QString configured = runningCaptureShownFor_.isEmpty() ?
+            value(QStringLiteral("general"), QStringLiteral("capture_input")) :
+            runningCaptureInput_;
         if (uniqueConnections.size() == 1)
         {
             captureConnection->addItem(uniqueConnections.front(),
@@ -4767,12 +4887,26 @@ QWidget* ConfigEditorWindow::createStartupPage()
         }
     };
     updateCaptureConnections(captureDevice->currentText());
+    refillCaptureConnections_ = updateCaptureConnections;
+    // While the box shows the input VP runs, a pick of another device is an
+    // ordinary edit (saved above); picking the shown one again takes it, and its
+    // connection, as the start-up input.
+    connect(captureDevice, qOverload<int>(&QComboBox::currentIndexChanged), this,
+        [this]
+    {
+        if (runningCaptureShownFor_.isEmpty()) return;
+        runningCaptureShownFor_.clear();
+        setRunningCaptureLine(this, QString());
+    });
     connect(captureDevice, &QComboBox::currentTextChanged, this,
         updateCaptureConnections);
+    connect(captureDevice, qOverload<int>(&QComboBox::activated), this,
+        [this] { adoptRunningCaptureSelection(); });
     connect(captureConnection, qOverload<int>(&QComboBox::activated), this,
         [this, captureConnection](int index)
     {
         if (!document_ || index < 0) return;
+        adoptRunningCaptureSelection();
         const QString selected = captureConnection->itemData(index).toString();
         if (selected.isEmpty()) document_->RemoveKnown("general", "capture_input");
         else document_->SetKnown("general", "capture_input",

@@ -235,9 +235,12 @@ namespace ConfigurationRpcProtocol
 		bool shaderAvailable = false;
 		std::vector<std::string> shaders;
         std::vector<std::string> profiles;
+        // The input VP is capturing now (version 6); empty when not sent.
+        std::string captureDevice;
+        std::string captureInput;
 	};
 
-	constexpr uint8_t LiveProfileStatusVersion = 5;
+	constexpr uint8_t LiveProfileStatusVersion = 6;
 	constexpr size_t MaximumProfileSectionBytes = 96;
 	constexpr size_t MaximumProfileShaders = 16;
     constexpr size_t MaximumActiveProfiles = 32;
@@ -266,6 +269,9 @@ namespace ConfigurationRpcProtocol
         for (const auto& profile : status.profiles)
             if (profile.size() > MaximumProfileSectionBytes ||
                 !WriteString(payload, profile)) return false;
+        for (const auto* capture : { &status.captureDevice, &status.captureInput })
+            if (capture->size() > MaximumProfileSectionBytes ||
+                !WriteString(payload, *capture)) return false;
         return true;
 	}
 
@@ -328,6 +334,10 @@ namespace ConfigurationRpcProtocol
                 &parsed.subtitles, &parsed.outputDisplay, &parsed.motion })
                 if (!section->empty()) parsed.profiles.push_back(*section);
         }
+        if (payload[0] >= 6)
+            for (auto* capture : { &parsed.captureDevice, &parsed.captureInput })
+                if (!ReadString(payload, cursor, *capture) ||
+                    capture->size() > MaximumProfileSectionBytes) return false;
         if (cursor != payload.size()) return false;
         status = std::move(parsed);
 		return true;

@@ -8773,6 +8773,7 @@ void CVideoProcessorDlg::UpdateState()
 
 		m_captureDevice->SetCaptureInput(m_desiredCaptureInputId);
 		m_currentCaptureInputId = m_desiredCaptureInputId;
+		PublishActiveProfileStatus();
 
 		CaptureStart();
 		return;
@@ -9260,6 +9261,7 @@ void CVideoProcessorDlg::CaptureRemove()
 
 	m_desiredCaptureInputId = INVALID_CAPTURE_INPUT_ID;
 	m_currentCaptureInputId = INVALID_CAPTURE_INPUT_ID;
+	PublishActiveProfileStatus();
 
 	DbgLog((LOG_TRACE, 1, TEXT("CVideoProcessorDlg::CaptureRemove(): End")));
 }
@@ -12318,6 +12320,24 @@ void CVideoProcessorDlg::PublishActiveProfileStatus()
 		CStringA(ToString(m_builtVideoState->colorspace)).GetString() : std::string();
     RendererOutputContract::Status outputStatus;
     const bool outputAvailable = m_videoRenderer && m_videoRenderer->GetOutputContractStatus(outputStatus);
+	// The input capturing now, so Config can show it while it differs from the
+	// saved start-up input (a capture shortcut or this window chose it).
+	std::string captureDevice;
+	std::string captureInput;
+	if (m_captureDevice)
+	{
+		captureDevice = CStringA(m_captureDevice->GetName()).GetString();
+		for (int index = 0; index < m_captureInputCombo.GetCount(); ++index)
+		{
+			if (static_cast<CaptureInputId>(m_captureInputCombo.GetItemData(index)) !=
+				m_currentCaptureInputId)
+				continue;
+			CString name;
+			m_captureInputCombo.GetLBText(index, name);
+			captureInput = CStringA(name).GetString();
+			break;
+		}
+	}
 	ActiveProfileStatus::Publish(GetCurrentProcessId(), snapshot->generation,
 		RendererProfileConfig::FormatSelections(snapshot->effectiveSelections),
 		rendererGeneration, shaderAvailable,
@@ -12325,7 +12345,8 @@ void CVideoProcessorDlg::PublishActiveProfileStatus()
         outputAvailable && outputStatus.calibrationStatusAvailable,
         outputAvailable && outputStatus.calibrationLutAttached,
         outputAvailable ? outputStatus.calibrationConfigIdentity : 0,
-        outputAvailable ? outputStatus.calibrationConfigPath : std::string(), snapshot->configuration.get());
+        outputAvailable ? outputStatus.calibrationConfigPath : std::string(), snapshot->configuration.get(),
+		captureDevice, captureInput);
 }
 
 std::map<std::string, std::string>

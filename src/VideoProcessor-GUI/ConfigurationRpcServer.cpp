@@ -61,6 +61,8 @@ Frame ActiveProfileResponse(const Frame& request)
 		if (status.shaderAvailable)
 			for (uint32_t index = 0; index < snapshot.shaderCount; ++index)
 				status.shaders.push_back(bounded(snapshot.shaders[index]));
+		status.captureDevice = bounded(snapshot.captureDevice);
+		status.captureInput = bounded(snapshot.captureInput);
 	}
 	Frame response;
 	response.operation = static_cast<uint16_t>(request.operation | ResponseFlag);

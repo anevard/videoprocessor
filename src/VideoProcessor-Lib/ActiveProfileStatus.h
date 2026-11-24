@@ -13,8 +13,8 @@
 
 namespace ActiveProfileStatus
 {
-    constexpr uint32_t Version = 13;
-    constexpr wchar_t MappingName[] = L"Local\\VideoProcessor.ActiveProfileStatus.v13";
+    constexpr uint32_t Version = 14;
+    constexpr wchar_t MappingName[] = L"Local\\VideoProcessor.ActiveProfileStatus.v14";
     constexpr size_t MaximumActiveShaders = 16;
     constexpr size_t MaximumActiveProfiles = 32;
 
@@ -47,6 +47,10 @@ namespace ActiveProfileStatus
         uint32_t calibrationLutAttached = 0;
         uint64_t calibrationConfigIdentity = 0;
         char calibrationConfigPath[1024]{};
+        // The input VP is capturing now, which a capture shortcut or VP's own
+        // window may have chosen for this session only; empty with no device.
+        char captureDevice[96]{};
+        char captureInput[96]{};
     };
 
     inline void Copy(char* destination, size_t count, const std::string& value)
@@ -79,7 +83,8 @@ namespace ActiveProfileStatus
         bool calibrationStatusAvailable = false,
         bool calibrationLutAttached = false,
         uint64_t calibrationConfigIdentity = 0,
-        const std::string& calibrationConfigPath = {}, const ConfigFile* configuration = nullptr)
+        const std::string& calibrationConfigPath = {}, const ConfigFile* configuration = nullptr,
+        const std::string& captureDevice = {}, const std::string& captureInput = {})
     {
         static HANDLE mapping = nullptr;
         static Snapshot* shared = nullptr;
@@ -155,6 +160,8 @@ namespace ActiveProfileStatus
         next.calibrationLutAttached = calibrationLutAttached ? 1u : 0u;
         next.calibrationConfigIdentity = calibrationConfigIdentity;
         Copy(next.calibrationConfigPath, sizeof(next.calibrationConfigPath), calibrationConfigPath);
+        Copy(next.captureDevice, sizeof(next.captureDevice), captureDevice);
+        Copy(next.captureInput, sizeof(next.captureInput), captureInput);
         *shared = next;
         MemoryBarrier();
     }

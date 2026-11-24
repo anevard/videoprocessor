@@ -194,6 +194,8 @@ private:
     void setStatus(const QString& message, bool error = false);
     void setWarningStatus(const QString& message);
     void refreshActiveProfileIndicators();
+    void refreshRunningCaptureSelection(const QString& device, const QString& input);
+    void adoptRunningCaptureSelection();
     void installProfileContextMenu(QListWidget* list, const QString& sectionPrefix);
     void installActionContextMenu(QListWidget* list);
     void runTargetCommand(const QString& group, const QString& name,
@@ -345,4 +347,11 @@ private:
     QString liveCalibrationConfigPath_;
     QString liveCalibrationRenderer_;
     QString liveCalibrationColor_;
+    // The input VP captures now, from its live status. While it differs from the
+    // saved one, Capture device and Input connection show it without writing it;
+    // runningCaptureShownFor_ is then non-empty.
+    QString runningCaptureDevice_;
+    QString runningCaptureInput_;
+    QString runningCaptureShownFor_;
+    std::function<void(const QString&)> refillCaptureConnections_;
 };
