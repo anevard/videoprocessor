@@ -4632,7 +4632,12 @@ void CVideoProcessorDlg::PublishStagedRuntimeSettings()
 			"Profile change display setting applied live: previous_seconds=%u current_seconds=%u enabled=%d",
 			previousProfileDisplaySeconds, m_profileChangeDisplaySeconds,
 			m_profileChangeDisplaySeconds != 0 ? 1 : 0);
-	if (m_stagedRuntimeSettings.hasCaptureDevice)
+	// Every renderer start publishes the saved configuration again. Move the
+	// capture list only when the saved device changed: an input chosen for this
+	// session (a capture shortcut, or this window's list) stays selected while
+	// it is the one capturing.
+	if (m_stagedRuntimeSettings.hasCaptureDevice &&
+		m_stagedRuntimeSettings.captureDevice.CompareNoCase(m_initialCaptureDevice) != 0)
 	{
 		for (int index = 0; index < m_captureDeviceCombo.GetCount(); ++index)
 		{
