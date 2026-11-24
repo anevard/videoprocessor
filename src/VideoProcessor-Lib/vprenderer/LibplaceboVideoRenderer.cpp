@@ -11922,7 +11922,7 @@ struct LibplaceboVideoRenderer::Impl
                 // Record the exact gate and source-owned inputs only at scene boundaries.
                 // Diagnostics never participate in retention or presentation admission.
                 const auto& priorIdentity = boundaryMotion->identity;
-                DEBUGLOG_ENHANCED("Alpha moving boundary proof: schema=1 generation=%llu sequence=%llu event=%llu reason=%s pixel_reason=%s steps_evaluated=%d steps=%d,%d limit=%d prior_sequence=%llu prior_native_sequence=%llu pixel_proof=%d broad=%d distributed=%d continuation=%d compatible=%d trusted_available=%d analysis_valid=%d presentation_valid=%d expansion_available=%d native_class=%d vertical_state=%d vertical_complete=%d failed_bar=%d",
+                DebugLog::Log("Alpha moving boundary proof: schema=1 generation=%llu sequence=%llu event=%llu reason=%s pixel_reason=%s steps_evaluated=%d steps=%d,%d limit=%d prior_sequence=%llu prior_native_sequence=%llu pixel_proof=%d broad=%d distributed=%d continuation=%d compatible=%d trusted_available=%d analysis_valid=%d presentation_valid=%d expansion_available=%d native_class=%d vertical_state=%d vertical_complete=%d failed_bar=%d",
                     analysisSource.generation, frameNumber, motionBoundary->eventId,
                     boundaryDiagnostic.reason, boundaryDiagnostic.pixelReason,
                     boundaryDiagnostic.stepsEvaluated?1:0, boundaryDiagnostic.topStep,
@@ -11937,7 +11937,7 @@ struct LibplaceboVideoRenderer::Impl
                     static_cast<int>(movementInput.evidence.axisEvidence.vertical.state),
                     movementInput.evidence.axisEvidence.vertical.scanComplete?1:0,
                     movementInput.evidence.axisEvidence.HasFailedBar()?1:0);
-                DEBUGLOG_ENHANCED("Alpha moving boundary identity: schema=1 sequence=%llu event=%llu prior_current_fields=transport,format,domain,viewport,renderer,frame,timestamp prior=%llu,%llu,%llu,%llu,%llu,%llu,%llu current=%llu,%llu,%llu,%llu,%llu,%llu,%llu input_source=%llu input_trusted=%llu input_sequence=%llu",
+                DebugLog::Log("Alpha moving boundary identity: schema=1 sequence=%llu event=%llu prior_current_fields=transport,format,domain,viewport,renderer,frame,timestamp prior=%llu,%llu,%llu,%llu,%llu,%llu,%llu current=%llu,%llu,%llu,%llu,%llu,%llu,%llu input_source=%llu input_trusted=%llu input_sequence=%llu",
                     frameNumber, motionBoundary->eventId,
                     priorIdentity.transportGeneration, priorIdentity.sourceFormatGeneration,
                     priorIdentity.analysisDomainKey, priorIdentity.viewportGeneration,
@@ -14950,7 +14950,7 @@ struct LibplaceboVideoRenderer::Impl
             if(subtitleBoxResult.detected && (subtitleBoxResult.observations==1 ||
                 previousGlyphHeight!=subtitlePaddingGuard.GlyphHeight() ||
                 !SubtitleBoxLookahead::SameLine(previousDisplayBounds,displayBoundsNow,0)))
-                DEBUGLOG_ENHANCED("SUBTITLE PADDING: cue=%llu mode=%s glyph_height=%d padding=%d,%d,%d display=%d,%d-%d,%d revised=%d",
+                DebugLog::Log("SUBTITLE PADDING: cue=%llu mode=%s glyph_height=%d padding=%d,%d,%d display=%d,%d-%d,%d revised=%d",
                     subtitleBoxResult.cue,activeSettings.subtitlePaddingPolicy.glyphRelative?"glyph":"fixed",
                     subtitlePaddingGuard.GlyphHeight(),safeSubtitlePadding.sides,safeSubtitlePadding.top,safeSubtitlePadding.bottom,
                     displayBoundsNow.left,displayBoundsNow.top,displayBoundsNow.right,displayBoundsNow.bottom,
@@ -15078,7 +15078,7 @@ struct LibplaceboVideoRenderer::Impl
                         (move.pictureTop!=priorLayout.pictureTop || move.pictureBottom!=priorLayout.pictureBottom)?
                             "picture-boundary-change":
                         !equalRect(move.generatedCleanup,priorLayout.generatedCleanup)?"accepted-cleanup-change":"placement-or-settings-change";
-                    DEBUGLOG_ENHANCED("SUBTITLE LAYOUT: frame=%llu cue=%llu previous_cue=%llu reason=%s tracker=%s match=%s backing=%d min_coverage_pct=%u max_difference_pct=%u match_line=%d component_owned=%u component_covered=%u tiny_fringe=%u reference_refresh=%s reference_samples=%u old=%d,%d-%d,%d new=%d,%d-%d,%d scale=%.4f->%.4f translation=%.2f,%.2f->%.2f,%.2f backing_decision=%s measured_cleanup=%d,%d-%d,%d accepted_cleanup=%d,%d-%d,%d display_edges=%d,%d-%d,%d source_edges=%d,%d",
+                    DebugLog::Log("SUBTITLE LAYOUT: frame=%llu cue=%llu previous_cue=%llu reason=%s tracker=%s match=%s backing=%d min_coverage_pct=%u max_difference_pct=%u match_line=%d component_owned=%u component_covered=%u tiny_fringe=%u reference_refresh=%s reference_samples=%u old=%d,%d-%d,%d new=%d,%d-%d,%d scale=%.4f->%.4f translation=%.2f,%.2f->%.2f,%.2f backing_decision=%s measured_cleanup=%d,%d-%d,%d accepted_cleanup=%d,%d-%d,%d display_edges=%d,%d-%d,%d source_edges=%d,%d",
                         sourceSequence,subtitleBoxResult.cue,subtitleLayoutCue,reason,
                         subtitleBoxPresentation.DecisionReason(),match.reason,match.backingConfirmed?1:0,
                         match.minimumCoverage,match.maximumDifference,match.line,match.componentOwned,match.componentCovered,match.tinyFringeAllowances,subtitleBoxPresentation.ReferenceRefreshReason(),subtitleBoxPresentation.ReferenceSampleCount(),
@@ -20892,7 +20892,7 @@ releaseDriftBaseRetention =
             if(correlationNow-analysisPerformanceLogTick>=2000){
                 const auto& processed=temporalRenderer.ProcessingSnapshot();
                 const auto& oldProcessing=lastPictureProcessingStatistics;
-                DEBUGLOG_ENHANCED("VP source/output processing: manual_source_renders=%llu manual_source_reuses=%llu output_renders=%llu input_analysis_stride=%d processing_path=%s complete_library_outputs=%llu subtitles=source_packet renderer_creations=%llu history_flushes=%llu subtitle_fallback_outputs=%llu subtitle_fallback_reason=%s subtitle_packet_captures_total=%llu subtitle_packet_reuses_total=%llu subtitle_packet_revisions_total=%llu",
+                DebugLog::Log("VP source/output processing: manual_source_renders=%llu manual_source_reuses=%llu output_renders=%llu input_analysis_stride=%d processing_path=%s complete_library_outputs=%llu subtitles=source_packet renderer_creations=%llu history_flushes=%llu subtitle_fallback_outputs=%llu subtitle_fallback_reason=%s subtitle_packet_captures_total=%llu subtitle_packet_reuses_total=%llu subtitle_packet_revisions_total=%llu",
                     processed.sourceRenders-oldProcessing.sourceRenders,
                     processed.sourceReuses-oldProcessing.sourceReuses,
                     processed.outputRenders-oldProcessing.outputRenders,subtitleAnalysisStride,
@@ -20909,7 +20909,7 @@ releaseDriftBaseRetention =
                 const double workerWallMs=double(worker.wallUs-old.wallUs)/1000.0;
                 const double workerCpuMs=double(worker.cpuUs-old.cpuUs)/1000.0;
                 const auto& perf=analysisPerformance;
-                DEBUGLOG_ENHANCED("VP analysis performance: window_ms=%llu source_hz=%.5f display_hz=%.5f submissions=%llu preview_attempts=%llu preview_complete=%llu preview_skipped=%llu phase_known=%llu preview_avg_ms=%.3f preview_peak_ms=%.3f deadline_overruns=%llu deadline_overrun_peak_ms=%.3f active_avg_ms=%.3f active_peak_ms=%.3f source_period_exceeded=%llu display_period_exceeded=%llu live_prep_avg_ms=%.3f live_prep_peak_ms=%.3f render_avg_ms=%.3f render_peak_ms=%.3f swap_avg_ms=%.3f swap_peak_ms=%.3f worker_threads=1 logical_processors=%lu worker_submitted=%llu worker_completed=%llu worker_failed=%llu worker_cancelled=%llu worker_duplicate=%llu worker_contended=%llu worker_full=%llu worker_queued=%llu worker_queue_high_lifetime=%llu worker_active_age_ms=%.3f worker_queue_avg_ms=%.3f worker_queue_peak_lifetime_ms=%.3f worker_wall_avg_ms=%.3f worker_wall_peak_lifetime_ms=%.3f worker_cpu_avg_ms=%.3f worker_cpu_samples=%llu worker_completed_cpu_ms=%.3f worker_completed_wall_ms=%.3f",
+                DebugLog::Log("VP analysis performance: window_ms=%llu source_hz=%.5f display_hz=%.5f submissions=%llu preview_attempts=%llu preview_complete=%llu preview_skipped=%llu phase_known=%llu preview_avg_ms=%.3f preview_peak_ms=%.3f deadline_overruns=%llu deadline_overrun_peak_ms=%.3f active_avg_ms=%.3f active_peak_ms=%.3f source_period_exceeded=%llu display_period_exceeded=%llu live_prep_avg_ms=%.3f live_prep_peak_ms=%.3f render_avg_ms=%.3f render_peak_ms=%.3f swap_avg_ms=%.3f swap_peak_ms=%.3f worker_threads=1 logical_processors=%lu worker_submitted=%llu worker_completed=%llu worker_failed=%llu worker_cancelled=%llu worker_duplicate=%llu worker_contended=%llu worker_full=%llu worker_queued=%llu worker_queue_high_lifetime=%llu worker_active_age_ms=%.3f worker_queue_avg_ms=%.3f worker_queue_peak_lifetime_ms=%.3f worker_wall_avg_ms=%.3f worker_wall_peak_lifetime_ms=%.3f worker_cpu_avg_ms=%.3f worker_cpu_samples=%llu worker_completed_cpu_ms=%.3f worker_completed_wall_ms=%.3f",
                     correlationNow-analysisPerformanceLogTick,captureRateHz,sample.expectedDisplayHz,perf.active.count,
                     perf.attempts,perf.completed,perf.skipped,perf.phaseKnown,perf.preview.Average(),perf.preview.peak,
                     perf.deadlineOverruns,perf.deadlineOverrunPeakMs,perf.active.Average(),perf.active.peak,
@@ -20931,7 +20931,7 @@ releaseDriftBaseRetention =
             }
             if(correlationNow>=nextOutputCorrelationLogTick) {
                 nextOutputCorrelationLogTick=correlationNow+250;
-                DEBUGLOG_ENHANCED("VP output correlation: generation=%llu source=%llu selected=%llu selected_pts=%.6f output_pts=%.6f cue=%llu temporal=%d epoch=%llu present_id=%u observed_present_id=%u sync_qpc=%lld qpc_hz=%lld submit_qpc=%lld lookahead_ms=%.3f budget_ms=%.3f phase_known=%d lookahead_complete=%d",
+                DebugLog::Log("VP output correlation: generation=%llu source=%llu selected=%llu selected_pts=%.6f output_pts=%.6f cue=%llu temporal=%d epoch=%llu present_id=%u observed_present_id=%u sync_qpc=%lld qpc_hz=%lld submit_qpc=%lld lookahead_ms=%.3f budget_ms=%.3f phase_known=%d lookahead_complete=%d",
                     frameGeneration,sourceSequence,record.selectedSourceSequence,record.selectedSourcePts,record.outputPts,
                     record.subtitleSourceSequence,record.temporalActive?1:0,record.presentationEpoch,
                     record.presentId,sample.presentCount,sample.syncQpc,sample.qpcFrequency,record.submitQpc,
@@ -21257,7 +21257,7 @@ releaseDriftBaseRetention =
 					? 100.0 * static_cast<double>(load.originalPrGpuFrames) /
 						static_cast<double>(load.originalPrSubmittedFrames)
 					: 0.0;
-				DEBUGLOG_ENHANCED(
+				DebugLog::Log(
 					"Alpha presentation telemetry: generation=%llu evidence=%d timing=%s frame_stats_hr=0x%08lX retained=%zu source=%llu presented=%llu debt=%llu present_id=%u refresh=%u display_hz=%.5f display_target_hz=%.5f cadence_samples=%u queue_after=%zu oldest_ms=%.2f render_ms=%.2f swap_ms=%.2f gpu_frame_timed=%d submitted_window_frames=%zu gpu_frame_frames=%zu gpu_frame_coverage_pct=%.1f gpu_frame_ms=%.3f gpu_frame_avg_ms=%.3f gpu_frame_peak_ms=%.3f gpu_stage_source_ms=%.3f gpu_stage_overlay_ms=%.3f gpu_stage_core_ms=%.3f gpu_stage_count=%zu gpu_load_valid=%d gpu_load_avg_pct=%.1f gpu_load_pct=%.1f gpu_load_ms=%.3f gpu_load_period_ms=%.3f gpu_source=%llu gpu_submission=%llu gpu_lag_frames=%llu gpu_pending=%llu gpu_issued=%llu gpu_resolved=%llu gpu_not_ready=%llu gpu_disjoint=%llu gpu_query_failures=%llu gpu_rejected=%llu gpu_overruns=%llu gpu_unmatched=%llu gpu_invalid=%llu gpu_warmup=%llu gpu_lock_drops=%llu core_timed=%d core_submitted_window_frames=%zu core_frames=%zu core_coverage_pct=%.1f core_ms=%.3f core_avg_ms=%.3f core_peak_ms=%.3f core_load_valid=%d core_load_pct=%.1f core_load_ms=%.3f pr75_timed=%d pr75_submitted_window_frames=%zu pr75_frames=%zu pr75_coverage_pct=%.1f pr75_ms=%.3f pr75_avg_ms=%.3f pr75_peak_ms=%.3f pr75_load_valid=%d pr75_load_pct=%.1f pr75_load_ms=%.3f pr75_passes=%zu render_avg_ms=%.2f render_peak_ms=%.2f gpu_session_peak_ms=%.3f gpu_session_load_valid=%d gpu_session_pct=%.1f gpu_session_load_ms=%.3f gpu_session_load_period_ms=%.3f session_frames=%llu session_gpu_frames=%llu settling=%d window_s=%.1f frame_period_src=%s",
 					static_cast<unsigned long long>(snapshot.generation),
 					static_cast<int>(snapshot.evidence),
@@ -21353,7 +21353,7 @@ releaseDriftBaseRetention =
                     signaling.coalesced,signaling.duplicates,signaling.obsoleteCompletions,
                     signaling.pending?1:0,signaling.requestAgeUs,signaling.requestToServicePeakUs,
                     signaling.driverCalls,signaling.driverTotalUs,signaling.driverPeakUs,signaling.driverActiveAgeUs);
-                DEBUGLOG_ENHANCED("VP render load budget: source_hz=%.6f scheduled_output_hz=%.6f budget_hz=%.6f budget_ms=%.3f origin=%s",
+                DebugLog::Log("VP render load budget: source_hz=%.6f scheduled_output_hz=%.6f budget_hz=%.6f budget_ms=%.3f origin=%s",
                     budgetRateHz,scheduledOutputHz,renderBudgetHz,renderLoadFramePeriodMs,
                     scheduledOutputHz>0.0?"temporal-output":"source");
 				const double sourceUploadCpuIntervalAverageMs =
