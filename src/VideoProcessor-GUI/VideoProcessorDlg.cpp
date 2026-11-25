@@ -582,6 +582,7 @@ const ShortcutDefinition SHORTCUT_DEFINITIONS[] =
 	{ "capture_2",             ID_COMMAND_CAPTURE_2,              '2',       FCONTROL },
 	{ "capture_3",             ID_COMMAND_CAPTURE_3,              '3',       FCONTROL },
 	{ "capture_4",             ID_COMMAND_CAPTURE_4,              '4',       FCONTROL },
+	{ "capture_pattern",       ID_COMMAND_CAPTURE_PATTERN,        'T',       FCONTROL | FALT },
 	{ "video_conversion_off",  ID_COMMAND_VC_NONE,                'V',       0 },
 	{ "video_conversion_p010", ID_COMMAND_VC_P010,                'V',       FSHIFT },
 	{ "config_editor",         ID_COMMAND_CONFIG_EDITOR,          'S',       FCONTROL | FSHIFT },
@@ -2106,6 +2107,7 @@ BEGIN_MESSAGE_MAP(CVideoProcessorDlg, CDialog)
 	ON_COMMAND_RANGE(ID_COMMAND_UNIFIED_PROFILE_FIRST, ID_COMMAND_UNIFIED_PROFILE_LAST, &CVideoProcessorDlg::OnCommandDisplayRule)
 	ON_COMMAND_RANGE(ID_COMMAND_RENDERER_SELECT_FIRST, ID_COMMAND_RENDERER_SELECT_LAST, &CVideoProcessorDlg::OnCommandRendererSelect)
 	ON_COMMAND_RANGE(ID_COMMAND_CAPTURE_1, ID_COMMAND_CAPTURE_4, &CVideoProcessorDlg::OnSelectCaptureDevice)
+	ON_COMMAND(ID_COMMAND_CAPTURE_PATTERN, &CVideoProcessorDlg::OnCommandCapturePattern)
 
 
 
@@ -3124,6 +3126,23 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 				DebugLog::Log("Source plugin [%s] restart requested by Config", section.c_str());
 				OnBnClickedCaptureRestart();
 			}
+			Frame response;
+			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+			return response;
+		}
+		// Config's Pattern page, live: "pattern.<command>" goes to the
+		// pattern generator as "<command>" (e.g. "pattern.chart grey_steps").
+		if (name.rfind("pattern.", 0) == 0)
+		{
+			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
+				SourcePluginBackend::PATTERN_PLUGIN_NAME))
+				return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
+			const std::string command = name.substr(8);
+			int32_t result = 0;
+			SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command.c_str(), &result);
+			if (result != 0)
+				return ConfigurationRpcError(operation, "The pattern generator refused \"" + command +
+					"\" (" + std::to_string(result) + "); vp.log says why.");
 			Frame response;
 			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 			return response;
@@ -8943,6 +8962,13 @@ bool CVideoProcessorDlg::SelectSourcePluginInput(const char* sectionUtf8)
 		return true;
 	}
 	return false;
+}
+
+void CVideoProcessorDlg::OnCommandCapturePattern()
+{
+	if (!SelectSourcePluginInput(SourcePluginBackend::PATTERN_PLUGIN_NAME))
+		DebugLog::Log("Pattern generator input key: no %s input listed",
+			SourcePluginBackend::PATTERN_PLUGIN_NAME);
 }
 
 void CVideoProcessorDlg::SelectCaptureDevice(int n)
