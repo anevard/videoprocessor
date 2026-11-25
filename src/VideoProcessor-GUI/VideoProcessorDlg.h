@@ -294,6 +294,7 @@ public:
 	void OnCommandAutoSet();
 	void OnCommandToggleStatsOverlay();
 	void OnCommandCaptureRenderedOutput();
+	bool QueueRenderedOutputCapture(CString& status);
 	void OnCommandCaptureAnalysisDiagnostics(bool includeFrames);
 	void OnCommandConfigEditor();
 
