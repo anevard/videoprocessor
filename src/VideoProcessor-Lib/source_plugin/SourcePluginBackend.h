@@ -24,23 +24,20 @@ namespace SourcePluginBackend
 	// True if the device is a source plugin's input (by type, not by name).
 	bool IsSourcePluginDevice(ACaptureDevice* device);
 
-	// The source plugins VP's own keys and Config act on, by the name in
-	// their function table: the media player and the pattern generator.
-	constexpr const char* PLAYER_PLUGIN_NAME = "VP Player";
-	constexpr const char* PATTERN_PLUGIN_NAME = "VP TPG";
+	// True if the device is the input of the source plugin that declares
+	// that cfg section in its function table. VP's keys and Config find a
+	// plugin by its section, never by its name.
+	bool IsSourcePluginSection(ACaptureDevice* device, const char* sectionUtf8);
 
-	// True if the device is the input of the source plugin of that name.
-	bool IsSourcePluginNamed(ACaptureDevice* device, const char* nameUtf8);
-
-	// GUI thread. Sends one player command line (e.g. "pause", "seek +10")
-	// to the device's plugin. False if the device is not a source plugin;
-	// a command the plugin rejects is logged and still returns true.
-	// result, if given, receives the plugin's result.
+	// GUI thread. Sends one command line (e.g. "pause") to the device's
+	// plugin. False if the device is not a source plugin; a command the
+	// plugin rejects is logged and still returns true. result, if given,
+	// receives the plugin's result.
 	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8,
 		int32_t* result = nullptr);
 
 	// GUI thread, before each capture start. The display VP is fullscreen on,
-	// whose desktop mode the Player's idle picture takes.
+	// whose desktop mode a plugin's idle picture takes (idle_format).
 	void SetFullscreenMonitor(HMONITOR monitor);
 
 	// That display's current desktop mode as "<w>x<h>@<num>/<den> sdr|pq",

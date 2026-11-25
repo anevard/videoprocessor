@@ -116,8 +116,8 @@ private:
     QWidget* createShortcutsSetupPage();
     QWidget* createShortcutsPage();
     QWidget* createLogsPage();
-    // After a save that changed a source plugin's section ("player" or
-    // "pattern"): if that plugin's input is the target VP's active input,
+    // After a save that changed a source plugin's section (the one it
+    // declares): if that plugin's input is the target VP's active input,
     // offer to restart it. warning: what a restart interrupts, or empty.
     void offerSourcePluginRestart(const QString& section, const QString& title, const QString& warning);
     // One RunAction on the target VP, off the UI thread; done(success,

@@ -3107,20 +3107,21 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 		if (!ReadString(request.payload, cursor, name) || name.empty() ||
 			name.size() > 64 || cursor != request.payload.size())
 			return ConfigurationRpcError(operation, "Invalid action request.");
-		// Config's Apply of [player] or [pattern] settings: is that plugin's
-		// input active, and restart it through the capture Restart, which
+		// Config's Apply of a source plugin's section, "<section>.active" and
+		// "<section>.restart": is the plugin declaring that section the
+		// active input, and restart it through the capture Restart, which
 		// re-sends its section.
-		if (name == "player.active" || name == "player.restart" ||
-			name == "pattern.active" || name == "pattern.restart")
+		const size_t dot = name.find('.');
+		const std::string verb = dot == std::string::npos ? std::string() : name.substr(dot + 1);
+		if (verb == "active" || verb == "restart")
 		{
-			const bool player = name.rfind("player.", 0) == 0;
-			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, player ?
-				SourcePluginBackend::PLAYER_PLUGIN_NAME : SourcePluginBackend::PATTERN_PLUGIN_NAME))
-				return ConfigurationRpcError(operation, player ? "The Player is not the active input." :
-					"The pattern generator is not the active input.");
-			if (name == "player.restart" || name == "pattern.restart")
+			const std::string section = name.substr(0, dot);
+			if (!SourcePluginBackend::IsSourcePluginSection(m_captureDevice, section.c_str()))
+				return ConfigurationRpcError(operation,
+					"The source plugin of section [" + section + "] is not the active input.");
+			if (verb == "restart")
 			{
-				DebugLog::Log("%s restart requested by Config", player ? "Player" : "Pattern generator");
+				DebugLog::Log("Source plugin [%s] restart requested by Config", section.c_str());
 				OnBnClickedCaptureRestart();
 			}
 			Frame response;
@@ -8922,16 +8923,17 @@ void CVideoProcessorDlg::OnSelectCaptureDevice(UINT nID)
 	SelectCaptureDevice(deviceIndex);
 }
 
-// Selects a source plugin's input by its plugin's name, never by device type
-// (several plugins may be listed, in file-name order) nor by
-// SelectCaptureDevice's regex, which selects entry 0 when nothing matches.
-bool CVideoProcessorDlg::SelectSourcePluginInput(const char* nameUtf8)
+// Selects a source plugin's input by the cfg section its plugin declares,
+// never by device type (several plugins may be listed, in file-name order)
+// nor by SelectCaptureDevice's regex, which selects entry 0 when nothing
+// matches.
+bool CVideoProcessorDlg::SelectSourcePluginInput(const char* sectionUtf8)
 {
 	const int itemCount = m_captureDeviceCombo.GetCount();
 	for (int i = 0; i < itemCount; ++i)
 	{
-		if (!SourcePluginBackend::IsSourcePluginNamed(
-			static_cast<ACaptureDevice*>(m_captureDeviceCombo.GetItemDataPtr(i)), nameUtf8))
+		if (!SourcePluginBackend::IsSourcePluginSection(
+			static_cast<ACaptureDevice*>(m_captureDeviceCombo.GetItemDataPtr(i)), sectionUtf8))
 			continue;
 		if (i != m_captureDeviceCombo.GetCurSel())
 		{
@@ -9216,7 +9218,7 @@ void CVideoProcessorDlg::CaptureStart()
         (m_profileDolbyVisionTunnelOverride >= 0 ?
             m_profileDolbyVisionTunnelOverride != 0 : m_enableDolbyVisionTunnel));
 
-	// The Player's idle picture takes this display's desktop mode, read as it starts.
+	// A source plugin's idle picture takes this display's desktop mode, read as it starts.
 	if (SourcePluginBackend::IsSourcePluginDevice(m_captureDevice))
 		SourcePluginBackend::SetFullscreenMonitor(SelectFullscreenMonitor());
 

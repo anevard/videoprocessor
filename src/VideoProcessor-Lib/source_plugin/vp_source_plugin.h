@@ -20,6 +20,12 @@
  * only adds to this interface; it never changes an older version's
  * structures.
  *
+ * The host, the state and the frame carry a struct_size, set by VP to its
+ * own size of the structure. A field may be added at a structure's end
+ * without a new version: the plugin reads and fills only the fields that
+ * struct_size covers, and VP zeroes each structure it hands the plugin to
+ * fill.
+ *
  * Threads (VP keeps all of its own threading; the plugin never calls VP
  * except through vp_source_host):
  *   - create, start, stop, get_state, send_command: VP's GUI thread.
@@ -40,7 +46,7 @@
  *   P010: Y plane (width * 2 bytes x height rows), then interleaved CbCr
  *         (width * 2 bytes x height / 2 rows). 10 bits in the high bits of
  *         each little-endian 16-bit word; low 6 bits zero.
- *   R10L (version 3): one plane, one little-endian 32-bit word per pixel,
+ *   R10L: one plane, one little-endian 32-bit word per pixel,
  *         R in bits 31-22, G in 21-12, B in 11-2, bits 1-0 zero; RGB 4:4:4
  *         at limited range (64-940). Each row is VP's R10l row,
  *         ((width + 63) / 64) * 256 bytes: padded to a multiple of 64
@@ -68,8 +74,8 @@
 extern "C" {
 #endif
 
-#define VP_SOURCE_PLUGIN_ABI_VERSION        6u
-#define VP_SOURCE_PLUGIN_ABI_VERSION_OLDEST 2u   /* oldest VP still loads */
+#define VP_SOURCE_PLUGIN_ABI_VERSION        7u
+#define VP_SOURCE_PLUGIN_ABI_VERSION_OLDEST 7u   /* oldest VP still loads */
 
 #if defined(_WIN32)
 #define VP_SOURCE_PLUGIN_EXPORT __declspec(dllexport)
@@ -97,7 +103,7 @@ extern "C" {
 #define VP_SOURCE_ENCODING_P010   1u
 /* 2 is not used. */
 #define VP_SOURCE_ENCODING_BGRA8  3u
-#define VP_SOURCE_ENCODING_R10L   4u   /* version 3 */
+#define VP_SOURCE_ENCODING_R10L   4u
 
 /* Transfer functions and colour spaces. Our own numbers, not VP's enum
  * values: the adapter maps each one by name, so VP can reorder its enums
@@ -140,20 +146,6 @@ typedef struct vp_source_hdr10 {
     double   max_fall;
 } vp_source_hdr10;
 
-/* The decoder's own colour tags, untouched (libavutil AVCOL_* numbers).
- * VP does not render from these; it logs them, and they let VP check what
- * the plugin mapped into eotf and colorspace. set == 0: none known. */
-typedef struct vp_source_raw_tags {
-    uint32_t set;
-    int32_t  primaries;
-    int32_t  transfer;
-    int32_t  matrix;
-    int32_t  range;
-    int32_t  chroma_location;
-    uint32_t sar_num;           /* sample aspect ratio; 0/0 if unknown */
-    uint32_t sar_den;
-} vp_source_raw_tags;
-
 /* The signal the input is delivering now: VP's VideoState and DisplayMode
  * in plain fields. valid == 0 means no signal; ignore the rest. */
 typedef struct vp_source_state {
@@ -170,26 +162,26 @@ typedef struct vp_source_state {
                                    and R10L only); 0 = the encoding's own
                                    depth */
     vp_source_hdr10    hdr10;
-    vp_source_raw_tags raw;
 } vp_source_state;
 
 /* One frame lent to VP. VP reads data until it calls release_frame with
  * the same handle; the plugin keeps the memory valid until then. */
 typedef struct vp_source_frame {
+    uint32_t    struct_size;    /* sizeof(vp_source_frame), set by VP before
+                                   each wait_frame */
+    uint32_t    flags;          /* VP_SOURCE_FRAME_* */
     const void* data;           /* planes as described at the top */
     uint64_t    size;           /* bytes; must equal the state's frame size */
     uint64_t    counter;        /* monotonic; a gap means frames were missed */
     int64_t     timestamp;      /* plugin clock ticks: when this frame is
                                    due on screen */
-    uint32_t    flags;          /* VP_SOURCE_FRAME_* */
-    uint32_t    reserved0;
     void*       handle;         /* opaque, for release_frame */
 } vp_source_frame;
 
 /* Services VP offers the plugin. Valid from create until destroy returns. */
 typedef struct vp_source_host {
     uint32_t abi_version;       /* the version this plugin answered */
-    uint32_t struct_size;
+    uint32_t struct_size;       /* sizeof(vp_source_host), set by VP */
     void*    context;           /* pass back unchanged */
     const char* plugin_dir;     /* UTF-8; the folder holding the plugin DLL */
     void (*log)(void* context, uint32_t level, const char* message_utf8);
@@ -201,7 +193,17 @@ typedef struct vp_source_instance vp_source_instance;
 typedef struct vp_source_plugin_api {
     uint32_t abi_version;       /* VP_SOURCE_PLUGIN_ABI_VERSION */
     uint32_t struct_size;       /* sizeof(vp_source_plugin_api) */
-    const char* name;           /* UTF-8; the input's name in VP */
+    const char* name;           /* UTF-8; the plugin's name: VP's capture
+                                   device list shows it; unique among the
+                                   plugins */
+    const char* section;        /* the plugin's own cfg section, lower-case
+                                   letters, digits and _ only: VP sends
+                                   its keys at every start (see
+                                   send_command), and VP's keys and Config
+                                   find the plugin by it; unique among the
+                                   plugins */
+    const char* input_name;     /* UTF-8; the name of its one input in VP's
+                                   input list */
 
     int32_t (*create)(const vp_source_host* host, vp_source_instance** out);
     void    (*destroy)(vp_source_instance* inst);   /* any thread, after
@@ -225,8 +227,13 @@ typedef struct vp_source_plugin_api {
     uint64_t (*frames_captured)(vp_source_instance* inst);
     uint64_t (*frames_missed)(vp_source_instance* inst);
 
-    /* Player control: one UTF-8 command line, e.g. "pause", "seek +10".
-     * VP_SOURCE_ERROR_UNSUPPORTED if the plugin does not know it. */
+    /* One UTF-8 command line, from VP's keys or Config. Before each start
+     * VP sends "settings " and the plugin's section as key=value entries
+     * split by 0x1f, an indexed key (folder.1, folder.2, ...) repeated in
+     * index order, then VP's own: idle_format, the fullscreen display's
+     * desktop mode as "<w>x<h>@<num>/<den> sdr|pq" (left out when VP cannot
+     * read it). VP_SOURCE_ERROR_UNSUPPORTED if the plugin does not know
+     * the command. */
     int32_t (*send_command)(vp_source_instance* inst,
                             const char* command_utf8);
 } vp_source_plugin_api;

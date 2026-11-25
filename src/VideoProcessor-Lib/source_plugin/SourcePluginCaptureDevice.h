@@ -18,10 +18,6 @@
 #include <source_plugin/vp_source_plugin.h>
 
 
-// A plugin's one input, as the dialog and the configuration editor list it.
-#define SOURCE_PLUGIN_INPUT_NAME TEXT("Player")
-
-
 /**
  * A source plugin (plugins/sources/*.dll) shown as a capture device.
  *
@@ -56,8 +52,9 @@ public:
 	// returns the plugin's result.
 	int32_t SendCommand(const char* commandUtf8);
 
-	// The plugin's name, from its function table.
+	// The plugin's name and its cfg section, from its function table.
 	const std::string& NameUtf8() const { return m_nameUtf8; }
+	const std::string& SectionUtf8() const { return m_sectionUtf8; }
 
 	// ACaptureDevice
 	void SetCallbackHandler(ICaptureDeviceCallback*) override;
@@ -91,6 +88,8 @@ private:
 	HMODULE m_module = nullptr;
 	const vp_source_plugin_api* const m_api;
 	const std::string m_nameUtf8;
+	const std::string m_sectionUtf8;
+	const std::string m_inputNameUtf8;
 	const std::string m_pluginDirUtf8;
 	vp_source_host m_host = {};
 	vp_source_instance* m_instance = nullptr;

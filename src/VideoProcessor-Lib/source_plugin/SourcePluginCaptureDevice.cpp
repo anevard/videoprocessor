@@ -64,19 +64,13 @@ namespace
 		return result;
 	}
 
-	// abiVersion: the version the plugin answered; it may declare only the
-	// encodings that version knows.
-	bool TranslateEncoding(uint32_t encoding, uint32_t abiVersion, VideoFrameEncoding& out)
+	bool TranslateEncoding(uint32_t encoding, VideoFrameEncoding& out)
 	{
 		switch (encoding)
 		{
 		case VP_SOURCE_ENCODING_P010: out = VideoFrameEncoding::P010; return true;
 		case VP_SOURCE_ENCODING_BGRA8: out = VideoFrameEncoding::BGRA_8BIT; return true;
-		case VP_SOURCE_ENCODING_R10L:
-			if (abiVersion < 3)
-				return false;
-			out = VideoFrameEncoding::R10l;
-			return true;
+		case VP_SOURCE_ENCODING_R10L: out = VideoFrameEncoding::R10l; return true;
 		}
 		return false;
 	}
@@ -117,15 +111,19 @@ namespace
 	}
 
 	constexpr char SETTINGS_SEPARATOR = '\x1f';
-	constexpr const char* PLAYER_SECTION = "player";
-	constexpr const char* PATTERN_SECTION = "pattern";
 
-	// Each plugin's own cfg section: the pattern generator's is [pattern],
-	// every other plugin's [player]. A plugin never receives another's
-	// section (the Player's may carry its remote page's PIN).
-	const char* SettingsSection(const std::string& nameUtf8)
+	// Keys never sent from the plugin's section: VP writes each one itself,
+	// or keeps it to itself.
+	const char* const KEYS_NOT_FROM_SECTION[] = {
+		"idle_format",
+	};
+
+	bool KeyFromSection(const std::string& key)
 	{
-		return nameUtf8 == SourcePluginBackend::PATTERN_PLUGIN_NAME ? PATTERN_SECTION : PLAYER_SECTION;
+		for (const char* own : KEYS_NOT_FROM_SECTION)
+			if (key == own)
+				return false;
+		return true;
 	}
 
 	// VP's Config writes cfg values in the ANSI code page (toLocal8Bit); the
@@ -157,14 +155,14 @@ namespace
 		line += SETTINGS_SEPARATOR;
 	}
 
-	// The plugin's own section (SettingsSection), re-read at each start, as
-	// the plugin's "settings ..." line: "key=value" entries split by 0x1f.
-	// Indexed keys (folder.1, folder.2, ...) go as one repeated key in index
-	// order, since VP's parser keeps only the last of a repeated key. log_dir
-	// is VP's logs folder, log_retention VP's [logging] count and idle_format
-	// the fullscreen display's desktop mode, never section settings. idle
+	// The section the plugin declares, re-read at each start, as the
+	// plugin's "settings ..." line: "key=value" entries split by 0x1f. A
+	// plugin never receives another's section (it may carry a PIN). Indexed
+	// keys (folder.1, folder.2, ...) go as one repeated key in index order,
+	// since VP's parser keeps only the last of a repeated key. idle_format is
+	// the fullscreen display's desktop mode, never a section setting. idle
 	// receives idle_format, or why it was left out.
-	std::string PlayerSettingsCommand(const char* section, size_t& entries, std::string& idle)
+	std::string SettingsCommand(const char* section, size_t& entries, std::string& idle)
 	{
 		entries = 0;
 		std::string line = "settings ";
@@ -184,7 +182,7 @@ namespace
 				if (dot != std::string::npos &&
 					ConfigFile::TryParseIndexedKey(key, key.substr(0, dot), index))
 					indexed[{ key.substr(0, dot), index }] = value;
-				else if (key != "log_dir" && key != "log_retention" && key != "idle_format")
+				else if (KeyFromSection(key))
 				{
 					AppendSetting(line, key, value);
 					++entries;
@@ -197,6 +195,7 @@ namespace
 			}
 		}
 
+		// idle_format: the display VP is fullscreen on, its desktop mode.
 		std::string why;
 		const std::string format = SourcePluginBackend::DesktopModeFormat(why);
 		if (!format.empty())
@@ -273,12 +272,14 @@ SourcePluginCaptureDevice::SourcePluginCaptureDevice(
 	const std::string& pluginDirUtf8):
 	m_api(api),
 	m_nameUtf8(api && api->name ? api->name : ""),
+	m_sectionUtf8(api && api->section ? api->section : ""),
+	m_inputNameUtf8(api && api->input_name ? api->input_name : ""),
 	m_pluginDirUtf8(pluginDirUtf8)
 {
 	if (!module || !api)
 		throw std::runtime_error("Source plugin: no module or function table");
-	if (m_nameUtf8.empty())
-		throw std::runtime_error("Source plugin: no name");
+	if (m_nameUtf8.empty() || m_sectionUtf8.empty() || m_inputNameUtf8.empty())
+		throw std::runtime_error("Source plugin: no name, section or input name");
 
 	m_host.abi_version = m_api->abi_version;
 	m_host.struct_size = sizeof(m_host);
@@ -300,8 +301,9 @@ SourcePluginCaptureDevice::SourcePluginCaptureDevice(
 	// Owned from here on.
 	m_module = module;
 
-	DEBUGLOG("Source plugin loaded: name=%s abi=%u dir=%s clock_hz=%lld",
-		m_nameUtf8.c_str(), m_api->abi_version, m_pluginDirUtf8.c_str(),
+	DEBUGLOG("Source plugin loaded: name=%s section=%s input=%s abi=%u dir=%s clock_hz=%lld",
+		m_nameUtf8.c_str(), m_sectionUtf8.c_str(), m_inputNameUtf8.c_str(),
+		m_api->abi_version, m_pluginDirUtf8.c_str(),
 		static_cast<long long>(m_ticksPerSecond));
 }
 
@@ -380,12 +382,12 @@ void SourcePluginCaptureDevice::StartCapture(CaptureRunToken captureRunToken)
 	m_outputCaptureData.store(true, std::memory_order_release);
 
 	// Before start: the plugin reads its settings as it starts. The line
-	// may carry the remote page's PIN, so never the line itself is logged.
+	// may carry a secret (a PIN), so never the line itself is logged.
 	size_t settingEntries = 0;
 	std::string idleFormat;
-	const char* section = SettingsSection(m_nameUtf8);
+	const char* section = m_sectionUtf8.c_str();
 	const int32_t settingsResult = m_api->send_command(
-		m_instance, PlayerSettingsCommand(section, settingEntries, idleFormat).c_str());
+		m_instance, SettingsCommand(section, settingEntries, idleFormat).c_str());
 	DEBUGLOG("Source plugin settings sent: name=%s [%s] entries=%zu idle_format=%s result=%d",
 		m_nameUtf8.c_str(), section, settingEntries, idleFormat.c_str(), settingsResult);
 
@@ -439,7 +441,7 @@ CaptureInputs SourcePluginCaptureDevice::SupportedCaptureInputs()
 {
 	// One input. The dialog lists inputs by name and never reads the type.
 	CaptureInputs captureInputs;
-	captureInputs.emplace_back(0, CaptureInputType::HDMI, CString(SOURCE_PLUGIN_INPUT_NAME));
+	captureInputs.emplace_back(0, CaptureInputType::HDMI, Utf8ToCString(m_inputNameUtf8));
 	return captureInputs;
 }
 
@@ -538,6 +540,7 @@ void SourcePluginCaptureDevice::ReaderLoop()
 	while (true)
 	{
 		vp_source_frame frame = {};
+		frame.struct_size = sizeof(frame);
 		const int32_t result = m_api->wait_frame(m_instance, WAIT_TIMEOUT_MS, &frame);
 
 		if (result == VP_SOURCE_WAIT_FRAME &&
@@ -584,14 +587,11 @@ void SourcePluginCaptureDevice::SendVideoState()
 	const int32_t result = m_api->get_state(m_instance, &state);
 
 	DEBUGLOG("Source plugin state: name=%s result=%d valid=%u size=%ux%u rate=%u/%u "
-		"encoding=%u bit_depth=%u eotf=%u colorspace=%u mastering=%u light_level=%u "
-		"raw_set=%u primaries=%d transfer=%d matrix=%d range=%d chroma_location=%d sar=%u:%u",
+		"encoding=%u bit_depth=%u eotf=%u colorspace=%u mastering=%u light_level=%u",
 		m_nameUtf8.c_str(), result, state.valid, state.width, state.height,
 		state.time_scale, state.frame_duration,
 		state.encoding, state.bit_depth, state.eotf, state.colorspace,
-		state.hdr10.has_mastering, state.hdr10.has_light_level,
-		state.raw.set, state.raw.primaries, state.raw.transfer, state.raw.matrix,
-		state.raw.range, state.raw.chroma_location, state.raw.sar_num, state.raw.sar_den);
+		state.hdr10.has_mastering, state.hdr10.has_light_level);
 
 	VideoStateComPtr videoState = new VideoState();
 	videoState->valid = false;
@@ -617,7 +617,7 @@ void SourcePluginCaptureDevice::SendVideoState()
 		refusal = "get_state failed";
 	else if (!state.valid)
 		refusal = "no signal";
-	else if (!TranslateEncoding(state.encoding, m_api->abi_version, encoding))
+	else if (!TranslateEncoding(state.encoding, encoding))
 		refusal = "unknown encoding";
 	else if (bitDepth != 8 && !(bitDepth == 10 && tenBitEncoding))
 		refusal = "bit depth does not fit the encoding";

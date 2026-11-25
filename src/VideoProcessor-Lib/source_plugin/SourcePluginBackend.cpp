@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <vector>
 
 #include <dxgi1_6.h>
@@ -31,6 +32,7 @@ namespace
 		const vp_source_plugin_api* api = nullptr;
 		std::wstring path;
 		std::wstring name;
+		std::wstring inputName;
 		std::string dirUtf8;
 	};
 
@@ -98,6 +100,17 @@ namespace
 		return std::wstring();
 	}
 
+	// A plugin's cfg section as VP's cfg reader stores section names.
+	bool IsSectionName(const char* section)
+	{
+		if (!section || !section[0])
+			return false;
+		for (const char* c = section; *c; ++c)
+			if (!((*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') || *c == '_'))
+				return false;
+		return true;
+	}
+
 	const char* RefusalReason(const vp_source_plugin_api* api, uint32_t version)
 	{
 		if (!api)
@@ -108,6 +121,10 @@ namespace
 			return "function table too small";
 		if (!api->name || !api->name[0])
 			return "no name";
+		if (!IsSectionName(api->section))
+			return "no cfg section, or not lower-case letters, digits and _";
+		if (!api->input_name || !api->input_name[0])
+			return "no input name";
 		if (!api->create || !api->destroy || !api->start || !api->stop ||
 			!api->get_state || !api->wait_frame || !api->release_frame ||
 			!api->clock_now || !api->clock_ticks_per_second ||
@@ -176,9 +193,12 @@ namespace
 			if (!refusal)
 			{
 				plugin.name = Utf8ToWide(plugin.api->name);
+				plugin.inputName = Utf8ToWide(plugin.api->input_name);
 				for (const LoadedPlugin& other : plugins)
 					if (_wcsicmp(other.name.c_str(), plugin.name.c_str()) == 0)
 						refusal = "name already used by another plugin";
+					else if (strcmp(other.api->section, plugin.api->section) == 0)
+						refusal = "cfg section already used by another plugin";
 			}
 
 			if (refusal)
@@ -376,10 +396,10 @@ namespace SourcePluginBackend
 		return dynamic_cast<SourcePluginCaptureDevice*>(device) != nullptr;
 	}
 
-	bool IsSourcePluginNamed(ACaptureDevice* device, const char* nameUtf8)
+	bool IsSourcePluginSection(ACaptureDevice* device, const char* sectionUtf8)
 	{
 		SourcePluginCaptureDevice* plugin = dynamic_cast<SourcePluginCaptureDevice*>(device);
-		return plugin && plugin->NameUtf8() == nameUtf8;
+		return plugin && plugin->SectionUtf8() == sectionUtf8;
 	}
 
 	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8, int32_t* result)
@@ -457,9 +477,12 @@ namespace SourcePluginBackend
 
 	std::vector<std::wstring> ConnectionNames(const std::wstring& deviceName)
 	{
-		if (!IsDeviceName(deviceName))
-			return {};
-
-		return { SOURCE_PLUGIN_INPUT_NAME };
+		std::vector<LoadedPlugin> plugins = LoadPlugins();
+		std::vector<std::wstring> inputs;
+		for (const LoadedPlugin& plugin : plugins)
+			if (_wcsicmp(plugin.name.c_str(), deviceName.c_str()) == 0)
+				inputs.push_back(plugin.inputName);
+		FreePlugins(plugins);
+		return inputs;
 	}
 }
