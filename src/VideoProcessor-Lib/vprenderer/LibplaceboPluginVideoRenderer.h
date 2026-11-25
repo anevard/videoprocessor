@@ -4,6 +4,7 @@
 #include <StartupPresentationReadiness.h>
 #include <ITimingClock.h>
 #include <VideoConversionOverride.h>
+#include <source_plugin/vp_source_plugin.h>
 
 
 // Core-side proxy for the optional VideoProcessorLibplacebo.dll plugin. The
@@ -12,6 +13,15 @@ class LibplaceboPluginVideoRenderer final : public IVideoRenderer
 {
 public:
 	static bool IsAvailable(bool beta = false);
+
+	// A source plugin's readback and present waits (vp_source_plugin.h
+	// version 6), served by the DLL whose renderer was created last; any
+	// thread, blocking. VP_SOURCE_ERROR_UNSUPPORTED before any renderer, or
+	// when that DLL has no such export.
+	static int32_t SourceReadback(uint64_t sourceFrame, const vp_source_rect& rect,
+		uint32_t flags, uint32_t timeoutMs, vp_source_readback& out);
+	static int32_t SourceWaitPresented(uint64_t sourceFrame, uint32_t timeoutMs,
+		vp_source_presented& out);
 
 	LibplaceboPluginVideoRenderer(
 		IRendererCallback& callback,

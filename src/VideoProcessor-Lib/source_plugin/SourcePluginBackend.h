@@ -29,6 +29,10 @@ namespace SourcePluginBackend
 	// plugin by its section, never by its name.
 	bool IsSourcePluginSection(ACaptureDevice* device, const char* sectionUtf8);
 
+	// True if the device is a source plugin's input asking for its frames
+	// 1:1 (VP_SOURCE_STATE_NATIVE_RASTER, version 6).
+	bool SourcePluginNativeRaster(ACaptureDevice* device);
+
 	// GUI thread. Sends one command line (e.g. "pause") to the device's
 	// plugin. False if the device is not a source plugin; a command the
 	// plugin rejects is logged and still returns true. result, if given,

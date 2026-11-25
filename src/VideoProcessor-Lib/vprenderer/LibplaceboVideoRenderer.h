@@ -135,6 +135,9 @@ public:
 	bool GetRenderLoad(RendererRenderLoad& load) const override;
 	// Reached through the plugin's HDR status export, not IRenderer.
 	bool GetHdrStatus(RendererHdrStatus& status) const;
+	// A source plugin's readback and present waits, shared by every renderer
+	// of this DLL; reached through the plugin's source exports, not IRenderer.
+	static class SourceReadbackBroker& SourceBroker();
 	void SetRenderLoadDisplayRefreshRate(double refreshRateHz) override;
 	bool SupportsNativeStatsOverlay() const override { return true; }
 	bool SetNativeStatsOverlay(const uint8_t* pixels, size_t byteCount,
