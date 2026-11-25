@@ -3249,7 +3249,10 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 				if (PatgenChartShowing::ColourSpaceHasTheScreen(result))
 				{
 					// ColourSpace's patches are never measured through a
-					// chart's crop (A200) or set-aside (A201).
+					// chart's crop (A200) or a chart's set-aside (A201); they
+					// are shown 1:1 only by the generator's own request
+					// (VP_SOURCE_STATE_NATIVE_RASTER, its Patterns-page
+					// switch, A261), which this leaves alone.
 					if (!m_patgenCropRatio.empty() || m_patgenOneToOneChart)
 					{
 						m_patgenCropRatio.clear();
@@ -3262,15 +3265,16 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;
 			}
-			// The Patterns page's raw box reads the generator's live state
-			// (PatgenRawOutput.h): OK for on, refused with Off for off.
-			if (command == PatgenRawOutput::StateCommand)
+			// The Patterns page's live boxes (raw, ColourSpace 1:1, harness
+			// armed) read the generator's state (PatgenRawOutput.h): OK for
+			// on, refused with that box's off text for off.
+			if (const char* offText = PatgenRawOutput::OffTextFor(command))
 			{
 				if (PatgenRawOutput::IsOff(result))
-					return ConfigurationRpcError(operation, PatgenRawOutput::Off);
+					return ConfigurationRpcError(operation, offText);
 				if (!PatgenRawOutput::IsOn(result))
 					return ConfigurationRpcError(operation,
-						"The pattern generator did not answer raw_state (" + std::to_string(result) + ").");
+						"The pattern generator did not answer " + command + " (" + std::to_string(result) + ").");
 				Frame response;
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;
