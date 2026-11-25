@@ -1002,6 +1002,9 @@ namespace
 		ToneMappingTuning::Overrides toneTuning{};
 		bool dynamicTarget = true;
 		bool customToneMapping = false;
+		// Local build only. false: libplacebo's own peak detection, the 2.0.9
+		// path. true: VP's compact HDR peak and authored L1 replace it.
+		bool bypassLibplaceboPeakDetection = false;
 		bool hasContrastRecovery = false;
 		float contrastRecovery = 0.0f;
 		std::string upscaler = "auto";
@@ -1150,6 +1153,7 @@ namespace
 			<< settings.toneMapping << '|' << settings.gamutMapping << '|'
 			<< static_cast<int>(settings.peakDetection) << '|'
 			<< settings.customToneMapping << '|'
+			<< settings.bypassLibplaceboPeakDetection << '|'
 			<< settings.dynamicTarget << '|'
             << ToneMappingTuning::Fingerprint(settings.toneTuning)
             << settings.hasContrastRecovery << '|' << settings.contrastRecovery << '|'
@@ -2125,6 +2129,7 @@ namespace
         }, settings.toneTuning);
         config.TryGetBool(rule.section, "dynamic_target", settings.dynamicTarget);
         config.TryGetBool(rule.section, "custom_tone_mapping", settings.customToneMapping);
+        config.TryGetBool(rule.section, "bypass_libplacebo_peak_detection", settings.bypassLibplaceboPeakDetection);
 		if (config.TryGetString(rule.section, "contrast_recovery", raw))
 		{
 			settings.hasContrastRecovery = false;
@@ -2821,6 +2826,8 @@ namespace
             RendererProfileConfig::ParseBoolean(rawValue, settings.dynamicTarget);
         if (TryGetDisplayString(config, "custom_tone_mapping", rawValue))
             RendererProfileConfig::ParseBoolean(rawValue, settings.customToneMapping);
+        if (TryGetDisplayString(config, "bypass_libplacebo_peak_detection", rawValue))
+            RendererProfileConfig::ParseBoolean(rawValue, settings.bypassLibplaceboPeakDetection);
 		if (TryGetDisplayString(config, "contrast_recovery", rawValue) &&
 			ConfigFile::NormalizeName(rawValue) != "auto")
 		{
@@ -9179,6 +9186,7 @@ struct LibplaceboVideoRenderer::Impl
 		currentTransport.toneTuning = next.toneTuning;
         currentTransport.dynamicTarget = next.dynamicTarget;
         currentTransport.customToneMapping = next.customToneMapping;
+        currentTransport.bypassLibplaceboPeakDetection = next.bypassLibplaceboPeakDetection;
 		currentTransport.hasContrastRecovery = next.hasContrastRecovery;
 		currentTransport.contrastRecovery = next.contrastRecovery;
 		currentTransport.upscaler = next.upscaler;
@@ -9239,6 +9247,8 @@ struct LibplaceboVideoRenderer::Impl
 		changed(current.toneTuning != next.toneTuning, "tone_mapping_tuning");
         changed(current.dynamicTarget != next.dynamicTarget, "dynamic_target");
         changed(current.customToneMapping != next.customToneMapping, "custom_tone_mapping");
+        changed(current.bypassLibplaceboPeakDetection != next.bypassLibplaceboPeakDetection,
+            "bypass_libplacebo_peak_detection");
 		changed(current.hasContrastRecovery != next.hasContrastRecovery ||
 			current.contrastRecovery != next.contrastRecovery, "contrast_recovery");
 		changed(current.upscaler != next.upscaler, "upscaler");
@@ -15820,7 +15830,10 @@ struct LibplaceboVideoRenderer::Impl
                 subtitleCompositionSucceeded,frameGeneration,sourceSequence,relocatedSubtitle};
         CompactHdrPeak::Decision sourcePeak;
         {
-            const bool alternate = !peakDetectionSweep && renderParams.peak_detect_params;
+            // Local build only: with the profile's bypass off, authored and
+            // measure stay false and libplacebo detects the peak, as in 2.0.9.
+            const bool alternate = !peakDetectionSweep && renderParams.peak_detect_params &&
+                activeSettings.bypassLibplaceboPeakDetection;
             const bool authored = alternate && image.color.transfer==PL_COLOR_TRC_PQ &&
                 CompactHdrPeak::HasSourceLuminance(image.color.hdr);
             auto measurementColor=image.color;

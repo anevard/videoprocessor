@@ -130,6 +130,7 @@ QString RenderingBuiltInDefault(const QString& key)
 {
     if (key == QStringLiteral("dynamic_target")) return QStringLiteral("true");
     if (key == QStringLiteral("custom_tone_mapping")) return QStringLiteral("false");
+    if (key == QStringLiteral("bypass_libplacebo_peak_detection")) return QStringLiteral("false");
     if (key == QStringLiteral("output_path_profile")) return QStringLiteral("legacy");
     if (key == QStringLiteral("target_primaries")) return QStringLiteral("REC709");
     if (key == QStringLiteral("sdr_target_nits")) return QStringLiteral("203");
@@ -7105,6 +7106,10 @@ QWidget* ConfigEditorWindow::createProfilePage(const QString& title, const QStri
                 peakDetection->setItemText(peakDetection->findData(QStringLiteral("on")),
                     QStringLiteral("Standard"));
                 addRendererAutoStatus(QStringLiteral("peak_detection"), peakDetection);
+                // Local build only.
+                auto* bypassPeak = addBoolean(QStringLiteral("Bypass libplacebo peak detection"),
+                    QStringLiteral("bypass_libplacebo_peak_detection"));
+                bypassPeak->setToolTip(QStringLiteral("Off: libplacebo's own peak detection, as in VP 2.0.9. On: VP's compact HDR peak measurement replaces it, and Dolby Vision L1 values are used as authored. Default: Off."));
             }
             for (int i = starts[section]; i < ends[section]; ++i) {
                 const auto& spec = ToneMappingTuning::Specs()[i];

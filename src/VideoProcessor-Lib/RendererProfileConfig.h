@@ -657,6 +657,7 @@ namespace RendererProfileConfig
 			if (key == "gamut_mapping") return IsChoice(value, { "auto", "perceptual", "softclip", "relative", "desaturate" });
 			if (key == "peak_detection") return IsChoice(value, { "auto", "off", "default", "high_quality", "on" });
 			if (key == "dynamic_target" || key == "custom_tone_mapping") return IsBoolean(value);
+			if (key == "bypass_libplacebo_peak_detection") return IsBoolean(value); // local build only
 			if (key == "contrast_recovery") return IsChoice(value, { "auto" }) || IsNumberInRange(value, 0.0, 2.0);
 			if (key == "sdr_input_transfer") return IsChoice(value, { "auto", "bt1886", "srgb", "1.8", "2.0", "2.2", "2.4", "2.6", "2.8" });
 			if (key == "sdr_adjust_gamma") return IsChoice(value, { "auto", "on", "off", "passthrough" });
