@@ -2297,6 +2297,7 @@ CVideoProcessorDlg::CVideoProcessorDlg():
 	m_blackMagicDeviceDiscoverer = new BlackMagicDeckLinkCaptureDeviceDiscoverer(
 		*this, deckLinkFormatPreferences);
 	m_magewellDeviceDiscoverer = MagewellBackend::CreateDiscoverer(*this);
+	m_sourcePluginDeviceDiscoverer = SourcePluginBackend::CreateDiscoverer(*this);
 	
 	// Initialize stats overlay
 	m_statsOverlay = new StatsOverlayWindow();
@@ -3106,6 +3107,26 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 		if (!ReadString(request.payload, cursor, name) || name.empty() ||
 			name.size() > 64 || cursor != request.payload.size())
 			return ConfigurationRpcError(operation, "Invalid action request.");
+		// Config's Apply of [player] or [pattern] settings: is that plugin's
+		// input active, and restart it through the capture Restart, which
+		// re-sends its section.
+		if (name == "player.active" || name == "player.restart" ||
+			name == "pattern.active" || name == "pattern.restart")
+		{
+			const bool player = name.rfind("player.", 0) == 0;
+			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, player ?
+				SourcePluginBackend::PLAYER_PLUGIN_NAME : SourcePluginBackend::PATTERN_PLUGIN_NAME))
+				return ConfigurationRpcError(operation, player ? "The Player is not the active input." :
+					"The pattern generator is not the active input.");
+			if (name == "player.restart" || name == "pattern.restart")
+			{
+				DebugLog::Log("%s restart requested by Config", player ? "Player" : "Pattern generator");
+				OnBnClickedCaptureRestart();
+			}
+			Frame response;
+			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+			return response;
+		}
 		UnifiedProfileRuntime::ActionInvocation invocation;
 		if (!m_profileRuntime.PrepareManualAction(name, invocation, error))
 			return ConfigurationRpcError(operation, error);
@@ -8901,6 +8922,27 @@ void CVideoProcessorDlg::OnSelectCaptureDevice(UINT nID)
 	SelectCaptureDevice(deviceIndex);
 }
 
+// Selects a source plugin's input by its plugin's name, never by device type
+// (several plugins may be listed, in file-name order) nor by
+// SelectCaptureDevice's regex, which selects entry 0 when nothing matches.
+bool CVideoProcessorDlg::SelectSourcePluginInput(const char* nameUtf8)
+{
+	const int itemCount = m_captureDeviceCombo.GetCount();
+	for (int i = 0; i < itemCount; ++i)
+	{
+		if (!SourcePluginBackend::IsSourcePluginNamed(
+			static_cast<ACaptureDevice*>(m_captureDeviceCombo.GetItemDataPtr(i)), nameUtf8))
+			continue;
+		if (i != m_captureDeviceCombo.GetCurSel())
+		{
+			m_captureDeviceCombo.SetCurSel(i);
+			OnCaptureDeviceSelected();
+		}
+		return true;
+	}
+	return false;
+}
+
 void CVideoProcessorDlg::SelectCaptureDevice(int n)
 {
 	std::vector<std::wstring> deviceNames;
@@ -9173,6 +9215,11 @@ void CVideoProcessorDlg::CaptureStart()
         captureRenderer->backend == RendererBackend::LIBPLACEBO &&
         (m_profileDolbyVisionTunnelOverride >= 0 ?
             m_profileDolbyVisionTunnelOverride != 0 : m_enableDolbyVisionTunnel));
+
+	// The Player's idle picture takes this display's desktop mode, read as it starts.
+	if (SourcePluginBackend::IsSourcePluginDevice(m_captureDevice))
+		SourcePluginBackend::SetFullscreenMonitor(SelectFullscreenMonitor());
+
 	m_captureDevice->StartCapture(captureRunToken);
 
 	// Update GUI
@@ -9531,6 +9578,12 @@ void CVideoProcessorDlg::RenderStart()
 	assert(i >= 0);
 	VideoConversionOverride videoConversionOverride =
 		(VideoConversionOverride)m_rendererVideoConversionCombo.GetItemData(i);
+	// The override converts v210/UYVY card input. A source plugin delivers
+	// 4:2:0 already and cannot renegotiate to v210 the way a card does, so the
+	// override would only refuse its frames (no picture). The saved setting
+	// still applies when a card is selected again.
+	if (SourcePluginBackend::IsSourcePluginDevice(m_captureDevice))
+		videoConversionOverride = VideoConversionOverride::VIDEOCONVERSION_NONE;
 
 	i = m_rendererNominalRangeCombo.GetCurSel();
 	assert(i >= 0);
@@ -11969,7 +12022,8 @@ bool CVideoProcessorDlg::BuildPushVideoState()
         rendererId && rendererId->backend == RendererBackend::LIBPLACEBO);
     const bool nativeP210Allowed = rendererId &&
         rendererId->backend == RendererBackend::LIBPLACEBO &&
-        m_vpRendererVideoConversionOverride == VideoConversionOverride::VIDEOCONVERSION_NONE;
+        (m_vpRendererVideoConversionOverride == VideoConversionOverride::VIDEOCONVERSION_NONE ||
+            SourcePluginBackend::IsSourcePluginDevice(m_captureDevice)); // see RenderStart()
     if (m_captureDevice) m_captureDevice->SetNativeP210Capture(nativeP210Allowed);
     if ((videoState->videoFrameEncoding == VideoFrameEncoding::P210 ||
         videoState->videoFrameEncoding == VideoFrameEncoding::P010) && !nativeP210Allowed)
@@ -13769,6 +13823,15 @@ BOOL CVideoProcessorDlg::OnInitDialog()
 		DebugLog::Log("Magewell discovery unavailable: %s", exception.what());
 	}
 
+	try
+	{
+		m_sourcePluginDeviceDiscoverer->Start();
+	}
+	catch (const std::exception& exception)
+	{
+		DebugLog::Log("Source plugin discovery unavailable: %s", exception.what());
+	}
+
 	const CString magewellUnavailable = MagewellBackend::UnavailableMessage(m_initialCaptureDevice);
 	if (!magewellUnavailable.IsEmpty())
     {
@@ -14904,6 +14967,19 @@ void CVideoProcessorDlg::OnClose()
 			// Never started because the runtime is absent. Nothing to unwind.
 		}
 		m_magewellDeviceDiscoverer.Release();
+	}
+
+	if (m_sourcePluginDeviceDiscoverer)
+	{
+		try
+		{
+			m_sourcePluginDeviceDiscoverer->Stop();
+		}
+		catch (const std::exception&)
+		{
+			// Never started. Nothing to unwind.
+		}
+		m_sourcePluginDeviceDiscoverer.Release();
 	}
 
 	UpdateState();
