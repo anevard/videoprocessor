@@ -63,6 +63,12 @@
  *   nothing else is converted (no chroma resampling, no range change).
  *
  * Reserved fields must be zero.
+ *
+ * Cues: a frame may carry a subtitle image and a message image, never drawn
+ * into its picture; VP draws them over its output. Each is premultiplied
+ * BGRA (bytes B, G, R, A), sRGB with white at 1.0; VP chooses the level
+ * white is shown at. A cue's id changes only when its image does, so VP
+ * copies a cue only when the id is new.
  */
 
 #ifndef VP_SOURCE_PLUGIN_H
@@ -164,6 +170,23 @@ typedef struct vp_source_state {
     vp_source_hdr10    hdr10;
 } vp_source_state;
 
+/* One cue image on a frame (see Cues at the top). id == 0: none; ignore
+ * the rest. x and width lie inside the frame. y may run up to a frame's
+ * height above or below it (a subtitle in a film's bars): -H <= y and
+ * y + height <= 2H, where H is the frame height. VP draws such rows in
+ * the bars around the picture. */
+typedef struct vp_source_cue {
+    uint64_t    id;             /* unique to one image; repeats while it is
+                                   unchanged */
+    int32_t     x;              /* bounds in the frame's pixels */
+    int32_t     y;
+    uint32_t    width;
+    uint32_t    height;
+    uint32_t    stride;         /* bytes per row, at least width * 4 */
+    uint32_t    reserved0;
+    const void* pixels;         /* valid while the frame is */
+} vp_source_cue;
+
 /* One frame lent to VP. VP reads data until it calls release_frame with
  * the same handle; the plugin keeps the memory valid until then. */
 typedef struct vp_source_frame {
@@ -176,6 +199,8 @@ typedef struct vp_source_frame {
     int64_t     timestamp;      /* plugin clock ticks: when this frame is
                                    due on screen */
     void*       handle;         /* opaque, for release_frame */
+    vp_source_cue subtitle;     /* the subtitle track's image */
+    vp_source_cue message;      /* a short on-screen message */
 } vp_source_frame;
 
 /* Services VP offers the plugin. Valid from create until destroy returns. */
