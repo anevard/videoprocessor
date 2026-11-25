@@ -582,6 +582,17 @@ const ShortcutDefinition SHORTCUT_DEFINITIONS[] =
 	{ "capture_2",             ID_COMMAND_CAPTURE_2,              '2',       FCONTROL },
 	{ "capture_3",             ID_COMMAND_CAPTURE_3,              '3',       FCONTROL },
 	{ "capture_4",             ID_COMMAND_CAPTURE_4,              '4',       FCONTROL },
+	{ "capture_player",        ID_COMMAND_CAPTURE_PLAYER,         '0',       FCONTROL | FALT },
+	{ "player_play_pause",     ID_COMMAND_PLAYER_PLAY_PAUSE,      'K',       FCONTROL | FALT },
+	{ "player_stop",           ID_COMMAND_PLAYER_STOP,            'X',       FCONTROL | FALT },
+	{ "player_previous",       ID_COMMAND_PLAYER_PREVIOUS,        'B',       FCONTROL | FALT },
+	{ "player_next",           ID_COMMAND_PLAYER_NEXT,            'N',       FCONTROL | FALT },
+	{ "player_back_10",        ID_COMMAND_PLAYER_BACK_10,         'J',       FCONTROL | FALT },
+	{ "player_forward_10",     ID_COMMAND_PLAYER_FORWARD_10,      'L',       FCONTROL | FALT },
+	{ "player_back_30",        ID_COMMAND_PLAYER_BACK_30,         'J',       FCONTROL | FALT | FSHIFT },
+	{ "player_forward_30",     ID_COMMAND_PLAYER_FORWARD_30,      'L',       FCONTROL | FALT | FSHIFT },
+	{ "player_audio_next",     ID_COMMAND_PLAYER_AUDIO_NEXT,      'A',       FCONTROL | FALT },
+	{ "player_subtitles_next", ID_COMMAND_PLAYER_SUBTITLES_NEXT,  'U',       FCONTROL | FALT },
 	{ "video_conversion_off",  ID_COMMAND_VC_NONE,                'V',       0 },
 	{ "video_conversion_p010", ID_COMMAND_VC_P010,                'V',       FSHIFT },
 	{ "config_editor",         ID_COMMAND_CONFIG_EDITOR,          'S',       FCONTROL | FSHIFT },
@@ -2106,6 +2117,8 @@ BEGIN_MESSAGE_MAP(CVideoProcessorDlg, CDialog)
 	ON_COMMAND_RANGE(ID_COMMAND_UNIFIED_PROFILE_FIRST, ID_COMMAND_UNIFIED_PROFILE_LAST, &CVideoProcessorDlg::OnCommandDisplayRule)
 	ON_COMMAND_RANGE(ID_COMMAND_RENDERER_SELECT_FIRST, ID_COMMAND_RENDERER_SELECT_LAST, &CVideoProcessorDlg::OnCommandRendererSelect)
 	ON_COMMAND_RANGE(ID_COMMAND_CAPTURE_1, ID_COMMAND_CAPTURE_4, &CVideoProcessorDlg::OnSelectCaptureDevice)
+	ON_COMMAND(ID_COMMAND_CAPTURE_PLAYER, &CVideoProcessorDlg::OnCommandCapturePlayer)
+	ON_COMMAND_RANGE(ID_COMMAND_PLAYER_PLAY_PAUSE, ID_COMMAND_PLAYER_LAST, &CVideoProcessorDlg::OnCommandPlayerTransport)
 
 
 
@@ -2394,6 +2407,7 @@ void CVideoProcessorDlg::ReloadConfiguredAccelerators()
 		DestroyAcceleratorTable(previous);
 	DebugLog::Log("Configuration shortcuts applied live");
 	StartGlobalShortcutObserver();
+	UpdateSourcePluginPlayerKeys();
 }
 
 void CVideoProcessorDlg::StartGlobalShortcutObserver()
@@ -4874,6 +4888,7 @@ bool CVideoProcessorDlg::ReplaceStagedAccelerators()
 	StartGlobalShortcutObserver();
 	DebugLog::Log("Shortcut focus policy applied live: foreground_only=%d",
 		m_shortcutsForegroundOnly ? 1 : 0);
+	UpdateSourcePluginPlayerKeys();
 	return true;
 }
 
@@ -8943,6 +8958,48 @@ bool CVideoProcessorDlg::SelectSourcePluginInput(const char* sectionUtf8)
 		return true;
 	}
 	return false;
+}
+
+void CVideoProcessorDlg::OnCommandCapturePlayer()
+{
+	if (!SelectSourcePluginInput(SourcePluginBackend::PLAYER_PLUGIN_NAME))
+		DebugLog::Log("Player input key: no Player input listed");
+}
+
+// Player transport and track keys: the same commands as the DJ page's buttons, sent
+// to the active input only when it is the Player.
+void CVideoProcessorDlg::OnCommandPlayerTransport(UINT nID)
+{
+	static const char* const commands[] =
+	{
+		"pause", "stop", "previous", "next", "seek -10", "seek +10", "seek -30", "seek +30",
+		"audio_next", "subtitles_next"
+	};
+	static_assert(std::size(commands) == ID_COMMAND_PLAYER_LAST - ID_COMMAND_PLAYER_PLAY_PAUSE + 1,
+		"one command per Player transport key");
+	const char* command = commands[nID - ID_COMMAND_PLAYER_PLAY_PAUSE];
+
+	if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, SourcePluginBackend::PLAYER_PLUGIN_NAME) ||
+		!SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command))
+		DebugLog::Log("Player key ignored: %s: the Player is not the active input", command);
+}
+
+// Gives the Player its transport keys as configured, for its remote page.
+void CVideoProcessorDlg::UpdateSourcePluginPlayerKeys()
+{
+	std::vector<SourcePluginBackend::PlayerKey> keys;
+	for (const auto& definition : SHORTCUT_DEFINITIONS)
+	{
+		if (definition.command < ID_COMMAND_PLAYER_PLAY_PAUSE ||
+			definition.command > ID_COMMAND_PLAYER_LAST)
+			continue;
+		SourcePluginBackend::PlayerKey key = { definition.configKey, {} };
+		for (const ACCEL& accelerator : m_configuredAccelerators)
+			if (accelerator.cmd == definition.command)
+				key.accelerator = accelerator;
+		keys.push_back(key);
+	}
+	SourcePluginBackend::SetPlayerKeys(keys, m_captureDevice);
 }
 
 void CVideoProcessorDlg::SelectCaptureDevice(int n)
@@ -13850,6 +13907,7 @@ BOOL CVideoProcessorDlg::OnInitDialog()
 	if (!m_accelerator)
 		FatalError(TEXT("Failed to create accelerator table"));
 	StartGlobalShortcutObserver();
+	UpdateSourcePluginPlayerKeys();
 	if (!m_hideUI && m_interfaceMode == ApplicationInterface::Mode::Modern)
 		StartConfigurationEditorInTray();
 

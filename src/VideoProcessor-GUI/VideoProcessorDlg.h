@@ -982,8 +982,11 @@ protected:
 	void RefreshCaptureDeviceList();
 
 	afx_msg void OnSelectCaptureDevice(UINT nID); // Handler for ON_COMMAND_RANGE
+	afx_msg void OnCommandCapturePlayer();
 	// Selects the input of the source plugin declaring that cfg section; false if none is listed.
 	bool SelectSourcePluginInput(const char* sectionUtf8);
+	afx_msg void OnCommandPlayerTransport(UINT nID);
+	void UpdateSourcePluginPlayerKeys();
 
 	void SelectCaptureDevice(int n); // Function to process capture selection
 	void SelectCaptureDevice(CString& captureDeviceName);

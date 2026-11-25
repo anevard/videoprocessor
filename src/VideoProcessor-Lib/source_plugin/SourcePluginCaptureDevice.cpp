@@ -195,6 +195,23 @@ namespace
 			}
 		}
 
+		char logDir[MAX_PATH] = "";
+		const std::string logPath = DebugLog::GetLogFilePath();
+		char* fileName = nullptr;
+		if (GetFullPathNameA(logPath.c_str(), MAX_PATH, logDir, &fileName) > 0 && fileName)
+			*fileName = 0;
+		std::string dir(logDir);
+		while (dir.size() > 3 && (dir.back() == '\\' || dir.back() == '/'))
+			dir.pop_back();
+		if (!dir.empty())
+			AppendSetting(line, "log_dir", dir);
+
+		// VP's own log retention, so the plugin keeps its logs as deep.
+		std::string retention;
+		const bool hasRetention = config.TryGetString("logging", "debug_log_retention", retention);
+		AppendSetting(line, "log_retention", std::to_string(DebugLogRetention::ResolveSetting(
+			hasRetention ? &retention : nullptr, false, false).count));
+
 		// idle_format: the display VP is fullscreen on, its desktop mode.
 		std::string why;
 		const std::string format = SourcePluginBackend::DesktopModeFormat(why);
@@ -406,6 +423,11 @@ void SourcePluginCaptureDevice::StartCapture(CaptureRunToken captureRunToken)
 			m_callback->OnCaptureDeviceState(CaptureDeviceState::CAPTUREDEVICESTATE_READY);
 		return;
 	}
+
+	// VP's Player shortcuts for the plugin's remote page.
+	const std::string& keys = SourcePluginBackend::PlayerKeysCommand();
+	if (!keys.empty())
+		SendCommand(keys.c_str());
 
 	m_readerThread = std::thread(&SourcePluginCaptureDevice::ReaderLoop, this);
 
