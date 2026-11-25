@@ -3136,15 +3136,47 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 		// pattern generator as "<command>" (e.g. "pattern.chart grey_steps").
 		if (name.rfind("pattern.", 0) == 0)
 		{
+			const std::string command = name.substr(8);
+			// The "Crop exactly to the chart" switch is VP's own
+			// (PatgenNoCrop.h), kept with or without the generator's input.
+			bool exactCrop = false;
+			if (PatgenNoCrop::ParseCommand(command, exactCrop))
+			{
+				m_patgenExactCropWanted = exactCrop;
+				UpdatePatgenNoCrop(exactCrop ? "switch on" : "switch off");
+				Frame response;
+				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+				return response;
+			}
 			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
 				SourcePluginBackend::PATTERN_PLUGIN_NAME))
 				return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
-			const std::string command = name.substr(8);
 			int32_t result = 0;
 			SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command.c_str(), &result);
 			if (result != 0)
 				return ConfigurationRpcError(operation, "The pattern generator refused \"" + command +
 					"\" (" + std::to_string(result) + "); vp.log says why.");
+			std::string chartId;
+			if (PatgenNoCrop::ParseChart(command, chartId))
+			{
+				// An aspect chart's ratio comes from the generator itself
+				// (A200, operator: "PATGEN tells VP"); a chart it cannot
+				// answer for gets no crop.
+				m_patgenCropRatio.clear();
+				if (PatgenNoCrop::IsAspectChart(chartId))
+				{
+					int32_t answer = 0;
+					SourcePluginBackend::SendSourcePluginCommand(m_captureDevice,
+						PatgenNoCrop::RatioQuery(chartId).c_str(), &answer);
+					if (!PatgenNoCrop::RatioText(answer, m_patgenCropRatio))
+						DebugLog::Log("PATGEN crop exactly to the chart: no ratio for %s (%d); not cropped",
+							chartId.c_str(), static_cast<int>(answer));
+				}
+				// A native-raster chart is shown 1:1, no switch (A201).
+				m_patgenOneToOneChart = PatgenNoCrop::IsOneToOneChart(chartId);
+				UpdatePatgenNoCrop(m_patgenOneToOneChart ? "native-raster chart" :
+					m_patgenCropRatio.empty() ? "other chart" : "aspect chart");
+			}
 			Frame response;
 			response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 			return response;
