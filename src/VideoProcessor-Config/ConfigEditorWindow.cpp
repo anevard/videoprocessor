@@ -20,6 +20,14 @@
 #include "ToneProfileFile.h"
 #include "../VideoProcessor-ChartCore/ToneProfileRequest.h"
 #include "ToneGuiRules.h"
+#include "PatternDisplayPeak.h"
+#include "PatternLiveKeys.h"
+#include "PatternChartSignal.h"
+#include <source_plugin/PatgenChartShowing.h>
+#include <source_plugin/PatgenRawOutput.h>
+#include <source_plugin/PatgenLowLatency.h>
+#include <source_plugin/PatgenLiveSave.h>
+#include <source_plugin/SourcePluginStartTiming.h>
 #include <ConfigurationApplyPolicy.h>
 #include <ConfigurationIdentity.h>
 #include <ConfigurationLiveApply.h>
@@ -2742,6 +2750,22 @@ void ConfigEditorWindow::applyActiveProfileIndicators(bool available,
         if (refreshSubtitleHdrFallback_) refreshSubtitleHdrFallback_();
     }
 
+    // The Patterns page's display peak: the Rendering profile VP is using.
+    // Refreshed on every snapshot, so a save shows at the next poll.
+    std::vector<std::string> activeSections;
+    if (available)
+        for (const auto& section : profiles)
+            activeSections.push_back(section.toLocal8Bit().toStdString());
+    patternRenderingProfile_ = QString::fromLocal8Bit(
+        PatternDisplayPeak::ActiveRenderingSection(activeSections).c_str());
+    if (refreshPatternDisplayPeak_) refreshPatternDisplayPeak_();
+    // The Patterns page's chart, replaced by ColourSpace? (A202)
+    if (checkPatternChartShowing_) checkPatternChartShowing_();
+    // A newly built Patterns page reads "Pick a chart"; so does the screen (A219 (2)).
+    if (available && clearPatternChartOnOpen_) clearPatternChartOnOpen_();
+    // The Patterns page's raw box follows the generator (A255).
+    if (available && readPatternRawOutput_) readPatternRawOutput_();
+
     refreshRendererAutoStatus();
 }
 
@@ -3995,6 +4019,14 @@ bool ConfigEditorWindow::saveChanges()
         savedSnapshot_, currentSnapshot);
     const auto action = ConfigurationApplyPolicy::ClassifyChanges(changed,
         snapshotUsesDirectShowRenderer(savedSnapshot_));
+    // Only a start-up [pattern] key offers the generator's restart; a live
+    // chart setting is already saved and sent (PatternLiveKeys.h).
+    const bool patternChanged = std::any_of(changed.begin(), changed.end(),
+        [](const ConfigurationApplyPolicy::Change& change) { return PatternLiveKeys::NeedsRestart(change.section, change.key); });
+    const auto offerPatternRestart = [this]
+    {
+        offerSourcePluginRestart(QStringLiteral("pattern"), QStringLiteral("pattern generator"), QString());
+    };
     // Persist shortcut spelling in the same canonical form used by the
     // accelerator parser. Case is not a modifier: L and l are both L, while
     // Shift+L is the distinct shifted chord.
@@ -4084,6 +4116,7 @@ bool ConfigEditorWindow::saveChanges()
 			QStringLiteral("Saved on target; reset or restart requested");
 		setStatus(QStringLiteral("%1: %2.").arg(outcome,
 			QString::fromUtf8(applied.action)));
+		if (patternChanged) offerPatternRestart();
 		return true;
 	}
     // Config is the interactive authority for this file. Save the user's
@@ -4144,6 +4177,7 @@ bool ConfigEditorWindow::saveChanges()
             QStringLiteral("Changes saved safely. %1 was requested.").arg(effect) :
             QStringLiteral("Changes saved safely. Takes effect when VideoProcessor next starts."), false);
     }
+    if (patternChanged) offerPatternRestart();
     return true;
 }
 
@@ -4292,6 +4326,7 @@ QWidget* ConfigEditorWindow::createShell()
         QStringLiteral("Configure smooth motion and field-aware deinterlacing. Changes apply after renderer restart."),
         QStringLiteral("vprenderer.motion")));
     const int displayPageIndex = pages_->addWidget(createDisplayPage());
+    const int patternPageIndex = pages_->addWidget(createPatternPage());
     auto* navGroup = new QButtonGroup(root);
     navGroup->setExclusive(true);
     const auto addLeaf = [this, navLayout, navGroup](const QString& title, int page)
@@ -4306,6 +4341,7 @@ QWidget* ConfigEditorWindow::createShell()
     addLeaf(QStringLiteral("Display"), displayPageIndex);
     addLeaf(QStringLiteral("Queue"), 1);
     addLeaf(QStringLiteral("DV"), 5);
+    addLeaf(QStringLiteral("Patterns"), patternPageIndex);
     QPushButton* shadersNavigation = addLeaf(QStringLiteral("Shaders"), 14);
     addLeaf(QStringLiteral("Actions"), 7);
     QPushButton* shortcutsNavigation = addLeaf(QStringLiteral("Shortcuts"), 15);
@@ -10762,6 +10798,1432 @@ void ConfigEditorWindow::offerSourcePluginRestart(const QString& section, const 
     });
 }
 
+bool ConfigEditorWindow::saveLiveSetting(const QString& section, const QString& key)
+{
+    if (!configurationLoaded_ || !document_ || !document_->existedAtLoad) return false;
+    const std::string sectionText = section.toStdString();
+    const std::string keyText = key.toStdString();
+
+    // The file as last saved, with only this key as it now is in the editor.
+    size_t line = 0, start = 0, end = 0;
+    const bool present = document_->Find(sectionText, keyText, line, start, end);
+    ConfigEditorCore::ConfigDocument saved;
+    saved.LoadBytes(document_->path, document_->loadedBytes);
+    saved.remoteSource = document_->remoteSource;
+    if (!present)
+        saved.RemoveKnown(sectionText, keyText.c_str());
+    else
+    {
+        const std::string wanted = document_->Get(sectionText.c_str(), keyText.c_str());
+        if (!saved.SetKnown(sectionText, keyText.c_str(), wanted))
+        {
+            saved.AddSection(sectionText);
+            saved.SetKnown(sectionText, keyText.c_str(), wanted);
+        }
+    }
+
+    const std::string candidate = saved.Serialize();
+    if (candidate != document_->loadedBytes)
+    {
+        if (remoteClient_)
+        {
+            ConfigurationRpcClient::ApplyResult applied;
+            std::string rpcError;
+            if (!remoteClient_->ApplyConfig(document_->loadedBytes, candidate, applied, rpcError))
+            {
+                setStatus(QStringLiteral("%1 not saved: %2 Apply saves it.").arg(key, QString::fromUtf8(rpcError)), true);
+                return false;
+            }
+            document_->loadedBytes = candidate;
+        }
+        else
+        {
+            // Never over a file changed outside this editor: then Apply saves it.
+            ConfigEditorCore::SaveResult result;
+            std::wstring error;
+            if (!ConfigEditorCore::SaveSafely(saved, result, error))
+            {
+                setStatus(QStringLiteral("%1 not saved: %2 Apply saves it.").arg(key, QString::fromStdWString(error)), true);
+                return false;
+            }
+            document_->loadedBytes = saved.loadedBytes;
+        }
+        // VP reads [pattern] from the file when the input starts; nothing to notify.
+    }
+
+    // This section is now saved as the file has it; any other unsaved edit stays.
+    const DocumentSnapshot savedNow = captureDocumentSnapshot(saved);
+    for (auto entry = savedSnapshot_.begin(); entry != savedSnapshot_.end();)
+        entry = _stricmp(entry->first.c_str(), sectionText.c_str()) == 0 ? savedSnapshot_.erase(entry) : std::next(entry);
+    for (const auto& entry : savedNow)
+        if (_stricmp(entry.first.c_str(), sectionText.c_str()) == 0)
+            savedSnapshot_[entry.first] = entry.second;
+    markDirty();
+    return true;
+}
+
+namespace
+{
+    // When a Patterns-page setting acts (A394 (6), operator): the tag beside
+    // it. At the next start: a [pattern] key the input reads when it starts
+    // (Apply offers a restart while VP TPG is the active input). Live, resets
+    // on restart: a switch VP holds, never saved. Live, saved on restart:
+    // sent at once, then saved (PatgenLiveSave.h).
+    enum class PatternActs { NextStart, LiveResets, LiveSaved };
+
+    QLabel* patternTag(PatternActs acts)
+    {
+        struct Look { const char* text; const char* colours; };
+        static const Look looks[] =
+        {
+            { "At the next start", "color: #e0b867; background: #19160f; border: 1px solid #5e4c28;" },
+            { "Live, resets on restart", "color: #a9bccd; background: #0e1823; border: 1px solid #3a5269;" },
+            { "Live, saved on restart", "color: #6cbcf7; background: #0d1d2b; border: 1px solid #2a5677;" },
+        };
+        const Look& look = looks[static_cast<int>(acts)];
+        auto* tag = new QLabel(QString::fromLatin1(look.text));
+        tag->setStyleSheet(QString::fromLatin1(look.colours) +
+            QStringLiteral(" border-radius: 3px; padding: 0px 6px; font-size: 11px;"));
+        tag->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        return tag;
+    }
+
+    // A label or tick box with its tag, if any, beside it on one line.
+    QWidget* withTag(QWidget* lead, QLabel* tag)
+    {
+        if (!tag) return lead;
+        auto* line = new QWidget;
+        auto* lineLayout = new QHBoxLayout(line);
+        lineLayout->setContentsMargins(0, 0, 0, 0);
+        lineLayout->setSpacing(8);
+        lineLayout->addWidget(lead);
+        lineLayout->addWidget(tag);
+        lineLayout->addStretch();
+        return line;
+    }
+
+    // The red line under a live setting (A394 (6), operator): a change VP
+    // refuses, or one never sent, sets the setting back and says why there;
+    // the setting's next change clears it. what names the setting in it.
+    const char* const kRefusalLine = "patternRefusalLine";
+    const char* const kRefusalWhat = "patternRefusalWhat";
+
+    QLabel* refusalLine(QWidget* setting, const QString& what)
+    {
+        auto* line = new QLabel;
+        line->setWordWrap(true);
+        line->setStyleSheet(QStringLiteral("color: #ff8d86; font-size: 12px;"));
+        line->hide();
+        setting->setProperty(kRefusalLine, QVariant::fromValue(static_cast<QObject*>(line)));
+        setting->setProperty(kRefusalWhat, what);
+        return line;
+    }
+
+    QString refusalWhat(const QWidget* setting)
+    {
+        return setting->property(kRefusalWhat).toString();
+    }
+
+    // Empty text clears the line.
+    void showRefusal(const QWidget* setting, const QString& text)
+    {
+        if (auto* line = qobject_cast<QLabel*>(setting->property(kRefusalLine).value<QObject*>()))
+        {
+            line->setText(text);
+            line->setVisible(!text.isEmpty());
+        }
+    }
+
+    // Config's own answer while it has found no VideoProcessor to send to
+    // (noTarget_: none on this PC or the LAN).
+    const char* const kNoVpFound = "Config has not found a running VideoProcessor.";
+
+    // A click that did not take, in plain words (A394 (6), operator).
+    QString notTaken(const QString& what, const QString& error)
+    {
+        return error == QLatin1String(kNoVpFound) ?
+            QStringLiteral("%1 was not sent: %2").arg(what, error) :
+            QStringLiteral("%1 was refused: %2").arg(what, error);
+    }
+
+    // A Patterns-page field: its label with its tag beside it (none: its
+    // group's title carries it), the field, its red line if it has one, then
+    // the help.
+    QWidget* patternField(const QString& labelText, QLabel* tag, QWidget* field, QLabel* refusal,
+        const QString& help)
+    {
+        auto* widget = new QWidget;
+        auto* layout = new QVBoxLayout(widget);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(5);
+        auto* label = new QLabel(labelText);
+        label->setBuddy(field);
+        if (field->accessibleName().isEmpty()) field->setAccessibleName(labelText);
+        if (!help.isEmpty()) field->setAccessibleDescription(help);
+        layout->addWidget(withTag(label, tag));
+        layout->addWidget(field);
+        if (refusal) layout->addWidget(refusal);
+        if (!help.isEmpty()) layout->addWidget(helpLabel(help));
+        return widget;
+    }
+
+    // A tick box with its tag beside it and its red line, if any, under it.
+    QWidget* patternCheck(QCheckBox* box, QLabel* tag, QLabel* refusal)
+    {
+        if (!refusal) return withTag(box, tag);
+        auto* widget = new QWidget;
+        auto* layout = new QVBoxLayout(widget);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(5);
+        layout->addWidget(withTag(box, tag));
+        layout->addWidget(refusal);
+        return widget;
+    }
+
+    // A small group inside a section: its title, with the tag when one covers
+    // the whole group, and a rule above it when it follows another group.
+    QVBoxLayout* addPatternGroup(QVBoxLayout* section, const QString& title, QLabel* tag, bool ruled,
+        QWidget** groupOut = nullptr)
+    {
+        auto* group = new QWidget;
+        auto* groupLayout = new QVBoxLayout(group);
+        groupLayout->setContentsMargins(0, 0, 0, 0);
+        groupLayout->setSpacing(10);
+        if (ruled)
+        {
+            auto* rule = new QFrame;
+            rule->setFixedHeight(1);
+            rule->setStyleSheet(QStringLiteral("background: #1c2e40; border: none;"));
+            groupLayout->addWidget(rule);
+            groupLayout->addSpacing(2);
+        }
+        auto* heading = new QLabel(title);
+        heading->setStyleSheet(QStringLiteral("color: #f0f6fb; font-weight: 650;"));
+        groupLayout->addWidget(withTag(heading, tag));
+        section->addWidget(group);
+        if (groupOut) *groupOut = group;
+        return groupLayout;
+    }
+
+    // A closed section's header names its live switches that are on (A394
+    // (6)), each by the name its red line uses: "on: 1:1" once VP has
+    // answered the first read, 1:1 being on whenever VP starts.
+    void listSwitchesOn(QToolButton* toggle, const std::vector<QCheckBox*>& switches)
+    {
+        auto* on = new QLabel(toggle);
+        on->setAttribute(Qt::WA_TransparentForMouseEvents);
+        on->setStyleSheet(QStringLiteral("color: #41a8f5; font-size: 12px; font-weight: 400; background: transparent;"));
+        auto* line = new QHBoxLayout(toggle);
+        line->setContentsMargins(0, 0, 10, 0);
+        line->addStretch();
+        line->addWidget(on);
+        const auto refresh = [toggle, on, switches]
+        {
+            QStringList names;
+            for (QCheckBox* box : switches)
+                if (box->isChecked()) names.push_back(refusalWhat(box));
+            on->setText(QStringLiteral("on: %1").arg(names.join(QStringLiteral(", "))));
+            on->setVisible(!toggle->isChecked() && !names.isEmpty());
+        };
+        QObject::connect(toggle, &QToolButton::toggled, on, refresh);
+        for (QCheckBox* box : switches)
+            QObject::connect(box, &QCheckBox::toggled, on, refresh);
+        refresh();
+    }
+}
+
+// The pattern generator source plugin, VP TPG. Its settings are [pattern];
+// the plugin receives them when its input starts. Charts are shown at once on
+// the target VP, through its RunAction "pattern.<command>", while VP TPG is
+// the active input. The chart list mirrors the plugin's (vp-patgen
+// src/charts.cpp): picked by group, never one long list.
+QWidget* ConfigEditorWindow::createPatternPage()
+{
+    const QString section = QStringLiteral("pattern");
+    auto* content = new QWidget;
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(12);
+
+    // The answer line: it answers every click on the page and sits at the top
+    // of Charts (A394 (6), operator).
+    auto* status = helpLabel(QStringLiteral("To show a chart, switch VP's input to VP TPG, then pick a chart below."));
+    status->setObjectName(QStringLiteral("config.pattern.status"));
+    // Chart commands sent, and those not answered yet: the "is my chart still
+    // showing?" question waits for them and ignores an answer they overtook
+    // (A202, below).
+    const auto chartCommands = std::make_shared<uint64_t>(0);
+    const auto chartPending = std::make_shared<int>(0);
+    // Sends one command to the pattern generator now; the answer shows in the
+    // answer line, then goes to done when given (no VP found: not sent, and
+    // the line names what, the click in plain words).
+    const auto send = [this, status, chartCommands, chartPending](const QString& command,
+        const QString& what, std::function<void(bool, const QString&)> done = {})
+    {
+        if (noTarget_ || testMode_)
+        {
+            const QString error = QString::fromLatin1(kNoVpFound);
+            status->setText(notTaken(what, error));
+            if (done) done(false, error);
+            return;
+        }
+        const bool chartCommand = command.startsWith(QStringLiteral("chart "));
+        if (chartCommand)
+        {
+            ++*chartCommands;
+            ++*chartPending;
+        }
+        status->setText(QStringLiteral("Sending %1...").arg(command));
+        runTargetAction(QStringLiteral("pattern.") + command,
+            [status, command, chartCommand, chartPending, done](bool sent, const QString& error)
+        {
+            if (chartCommand) --*chartPending;
+            status->setText(sent ? QStringLiteral("Sent: %1").arg(command) : error);
+            if (done) done(sent, error);
+        });
+    };
+
+    // Three sections, Signal, Patches and Charts, all closed at every open
+    // (A394 (6), operator); each setting carries the tag saying when it acts.
+    // Signal: the depth and range of every chart and every ColourSpace patch,
+    // so the page's first item (A195, Decision coord-48), the timing, the two
+    // live switches and, last, the HDR10 block (below).
+    const auto sectionBody = []
+    {
+        auto* body = new QWidget;
+        auto* bodyLayout = new QVBoxLayout(body);
+        bodyLayout->setContentsMargins(0, 0, 0, 0);
+        bodyLayout->setSpacing(10);
+        return body;
+    };
+    QWidget* signalBody = sectionBody();
+    auto* signalBodyLayout = static_cast<QVBoxLayout*>(signalBody->layout());
+    QToolButton* signalToggle = nullptr;
+    layout->addWidget(collapsibleCard(QStringLiteral("Signal"), QString(), signalBody, false, &signalToggle));
+    // Patches: ColourSpace's patches, in three small groups.
+    QWidget* patchesBody = sectionBody();
+    auto* patchesBodyLayout = static_cast<QVBoxLayout*>(patchesBody->layout());
+    QToolButton* patchesToggle = nullptr;
+    layout->addWidget(collapsibleCard(QStringLiteral("Patches"), QString(), patchesBody, false, &patchesToggle));
+    QComboBox* patchGamut = nullptr;
+    {
+        QComboBox* mode = bindChoiceField(section, QStringLiteral("mode"),
+            { QStringLiteral("r10l_legal_10"), QStringLiteral("r10l_legal_8"), QStringLiteral("bgra8_full_8") },
+            { QStringLiteral("RGB 10-bit, limited range"), QStringLiteral("RGB 8-bit, limited range"),
+              QStringLiteral("RGB 8-bit, full range") });
+        signalBodyLayout->addWidget(patternField(QStringLiteral("Depth and range"),
+            patternTag(PatternActs::NextStart), mode, nullptr,
+            QStringLiteral("Every chart and every ColourSpace patch. Set ColourSpace to the same depth and range; "
+                "a patch at another depth is refused. The charts need a limited-range signal.")));
+        // Timing (A356 (B)(b); operator, 2026-11-17: written for any rig):
+        // "Same as the display", then the allowed display modes of the
+        // Output display profiles on the advanced policy, the modes VP
+        // switches to; VP checks the pick again at the input's start
+        // (SourcePluginStartTiming.h). A saved pick no longer listed stays
+        // shown (bindChoiceField) and VP starts at the display's mode.
+        QStringList timingValues{ QString::fromLatin1(SourcePluginStartTiming::Display) };
+        QStringList timingLabels{ QStringLiteral("Same as the display") };
+        for (const QString& outputSection : profileSections(QStringLiteral("output_display")))
+        {
+            if (value(outputSection, QStringLiteral("mode_policy")).compare(
+                    QStringLiteral("advanced"), Qt::CaseInsensitive) != 0)
+                continue;
+            std::vector<DisplayOutputMode> modes;
+            std::string error;
+            if (!ParseDisplayOutputModeList(value(outputSection, QStringLiteral("allowed_modes")).toStdString(),
+                    modes, error))
+                continue;
+            for (const DisplayOutputMode& outputMode : modes)
+            {
+                const QString text = QString::fromStdString(FormatDisplayOutputMode(outputMode));
+                if (timingValues.contains(text, Qt::CaseInsensitive)) continue;
+                timingValues.push_back(text);
+                timingLabels.push_back(QString::fromStdString(FormatDisplayOutputModeLabel(outputMode)));
+            }
+        }
+        QComboBox* timing = bindChoiceField(section, QString::fromLatin1(SourcePluginStartTiming::Key),
+            timingValues, timingLabels);
+        signalBodyLayout->addWidget(patternField(QStringLiteral("Timing"),
+            patternTag(PatternActs::NextStart), timing, nullptr,
+            QStringLiteral("The size and frame rate the VP TPG input draws at. Same as the display: the display's "
+                "own mode when the input starts. The other choices are the allowed display modes of your Output "
+                "display profiles: VP switches the display to the one you pick, and back to the desktop mode when "
+                "the input stops. To add a choice, add the mode on the Output display page.")));
+
+        // Raw output (A255): VP writes the generator's codes to the screen
+        // unprocessed. Never saved and off at every start, so the box shows
+        // the generator's live state (PatgenRawOutput.h), read when the page
+        // is built and on the status tick; only the user's click sends, so a
+        // page build, a refresh or a read never switches it off (operator).
+        auto* raw = new QCheckBox(QStringLiteral("Raw output: no VP processing"));
+        raw->setObjectName(QStringLiteral("config.pattern.raw"));
+        signalBodyLayout->addWidget(patternCheck(raw, patternTag(PatternActs::LiveResets),
+            refusalLine(raw, QStringLiteral("Raw output"))));
+        signalBodyLayout->addWidget(helpLabel(QStringLiteral(
+            "The generator's codes reach the screen exactly as made: no tone or gamut mapping, no calibration "
+            "LUT, no scaling, no overlays. 10-bit and 8-bit limited range only; the frame size must match the "
+            "output, otherwise the screen goes black and vp.log says why. Off whenever VP or the VP TPG input "
+            "starts.")));
+        auto* rawLock = helpLabel(QString());
+        rawLock->setObjectName(QStringLiteral("config.pattern.raw.lock"));
+        rawLock->hide();
+        signalBodyLayout->addWidget(rawLock);
+
+        // Full range cannot go raw: each greys the other (operator, A255). A
+        // box already on stays clickable, so it can always be switched off.
+        const int fullIndex = mode->findData(QStringLiteral("bgra8_full_8"));
+        const auto interlock = [mode, raw, rawLock, fullIndex]
+        {
+            const bool fullSelected = fullIndex >= 0 && mode->currentIndex() == fullIndex;
+            raw->setEnabled(!fullSelected || raw->isChecked());
+            if (auto* model = qobject_cast<QStandardItemModel*>(mode->model()))
+                if (QStandardItem* full = fullIndex >= 0 ? model->item(fullIndex) : nullptr)
+                    full->setEnabled(!raw->isChecked());
+            const QString why = raw->isChecked() ?
+                QStringLiteral("RGB 8-bit, full range cannot be chosen while raw output is on.") :
+                fullSelected ? QStringLiteral("Raw output needs a limited-range signal; RGB 8-bit, full range is chosen.") :
+                QString();
+            rawLock->setText(why);
+            rawLock->setVisible(!why.isEmpty());
+        };
+        interlock();
+        connect(mode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [interlock](int) { interlock(); });
+
+        // The user's click: the only thing that sends. Refused or unsent, the
+        // box goes back and its red line says why; the next read shows the
+        // generator's state anyway.
+        const auto rawClicks = std::make_shared<uint64_t>(0);
+        connect(raw, &QCheckBox::clicked, this, [this, raw, status, interlock, rawClicks](bool on)
+        {
+            ++*rawClicks;
+            const QString command = on ? QStringLiteral("raw on") : QStringLiteral("raw off");
+            const QString what = refusalWhat(raw) + (on ? QStringLiteral(" on") : QStringLiteral(" off"));
+            showRefusal(raw, QString());
+            if (noTarget_ || testMode_)
+            {
+                raw->setChecked(!on);
+                interlock();
+                const QString unsent = notTaken(what, QString::fromLatin1(kNoVpFound));
+                status->setText(unsent);
+                showRefusal(raw, unsent);
+                return;
+            }
+            interlock();
+            status->setText(QStringLiteral("Sending %1...").arg(command));
+            runTargetAction(QStringLiteral("pattern.") + command,
+                [raw, status, interlock, command, what, on](bool sent, const QString& error)
+            {
+                status->setText(sent ? QStringLiteral("Sent: %1").arg(command) : error);
+                if (!sent && raw->isChecked() == on)
+                {
+                    raw->setChecked(!on);
+                    interlock();
+                    showRefusal(raw, notTaken(what, error));
+                }
+            });
+        });
+
+        // The read: moves the box, never sends. An answer overtaken by a click
+        // is dropped; another input or an older generator leaves the box alone.
+        const auto rawAsking = std::make_shared<bool>(false);
+        readPatternRawOutput_ = [this, raw, interlock, rawAsking, rawClicks]
+        {
+            if (*rawAsking || noTarget_ || testMode_) return;
+            *rawAsking = true;
+            const uint64_t askedAfter = *rawClicks;
+            runTargetAction(QStringLiteral("pattern.") + QString::fromUtf8(PatgenRawOutput::StateCommand),
+                [raw, interlock, rawAsking, rawClicks, askedAfter](bool sent, const QString& error)
+            {
+                *rawAsking = false;
+                if (*rawClicks != askedAfter) return;
+                if (sent) raw->setChecked(true);
+                else if (error == QString::fromUtf8(PatgenRawOutput::Off)) raw->setChecked(false);
+                else return;
+                interlock();
+            });
+        };
+
+        // The other live boxes (A261), the raw box's rules without its
+        // interlock: never saved, so each shows its live state (the
+        // generator's, or VP's own for Low latency), read on the status tick;
+        // only the user's click sends. what names the box in its red line and
+        // in its section's closed header.
+        const auto liveSwitch = [this, status](QVBoxLayout* bodyLayout, QCheckBox* box,
+            const QString& what, const QString& help, const QString& verb,
+            const char* stateCommand, const char* offText) -> std::function<void()>
+        {
+            bodyLayout->addWidget(patternCheck(box, patternTag(PatternActs::LiveResets), refusalLine(box, what)));
+            bodyLayout->addWidget(helpLabel(help));
+            const auto clicks = std::make_shared<uint64_t>(0);
+            connect(box, &QCheckBox::clicked, this, [this, box, status, verb, what, clicks](bool on)
+            {
+                ++*clicks;
+                const QString command = verb + (on ? QStringLiteral(" on") : QStringLiteral(" off"));
+                const QString clicked = what + (on ? QStringLiteral(" on") : QStringLiteral(" off"));
+                showRefusal(box, QString());
+                if (noTarget_ || testMode_)
+                {
+                    box->setChecked(!on);
+                    const QString unsent = notTaken(clicked, QString::fromLatin1(kNoVpFound));
+                    status->setText(unsent);
+                    showRefusal(box, unsent);
+                    return;
+                }
+                status->setText(QStringLiteral("Sending %1...").arg(command));
+                runTargetAction(QStringLiteral("pattern.") + command,
+                    [box, status, command, clicked, on](bool sent, const QString& error)
+                {
+                    status->setText(sent ? QStringLiteral("Sent: %1").arg(command) : error);
+                    if (!sent && box->isChecked() == on)
+                    {
+                        box->setChecked(!on);
+                        showRefusal(box, notTaken(clicked, error));
+                    }
+                });
+            });
+            const auto asking = std::make_shared<bool>(false);
+            return [this, box, asking, clicks, stateCommand, offText]
+            {
+                if (*asking || noTarget_ || testMode_) return;
+                *asking = true;
+                const uint64_t askedAfter = *clicks;
+                runTargetAction(QStringLiteral("pattern.") + QString::fromUtf8(stateCommand),
+                    [box, asking, clicks, askedAfter, offText](bool sent, const QString& error)
+                {
+                    *asking = false;
+                    if (*clicks != askedAfter) return;
+                    if (sent) box->setChecked(true);
+                    else if (error == QString::fromUtf8(offText)) box->setChecked(false);
+                });
+            };
+        };
+        // Low latency (A356 (5); operator, 2026-11-17: kept through a restart
+        // of the VP TPG input, off when VP starts or another input is chosen).
+        auto* lowLatency = new QCheckBox(QStringLiteral("Low latency"));
+        lowLatency->setObjectName(QStringLiteral("config.pattern.low_latency"));
+        const auto readLowLatency = liveSwitch(signalBodyLayout, lowLatency, QStringLiteral("Low latency"),
+            QStringLiteral("On: VP holds no frames back for the VP TPG input: one frame queued, one present waiting "
+                "for the screen, no frame blending and no HDR peak smoothing, so each patch reaches the screen "
+                "sooner. Switching it on or off restarts the renderer, a pause of up to a few seconds. It stays on "
+                "while the VP TPG input stays the input, through a restart of that input too, and goes off by "
+                "itself whenever VP starts or another input is chosen. "
+                "Your own queue and renderer settings are never changed and come back as they were."),
+            QStringLiteral("low_latency"),
+            PatgenLowLatency::StateCommand, PatgenLowLatency::Off);
+        listSwitchesOn(signalToggle, { raw, lowLatency });
+
+        // Patches, all of them: what VP is told they are. A230 (1): two PQ
+        // entries; their HDR10 block is Signal's.
+        QVBoxLayout* allPatches = addPatternGroup(patchesBodyLayout, QStringLiteral("All patches"), nullptr, false);
+        patchGamut = bindChoiceField(section, QStringLiteral("gamut"),
+            { QStringLiteral("bt709"), QStringLiteral("bt2020"), QStringLiteral("p3_bt2020"),
+                QStringLiteral("bt2020_pq"), QStringLiteral("p3_bt2020_pq") },
+            { QStringLiteral("BT.709"), QStringLiteral("BT.2020"), QStringLiteral("BT.2020, P3 mastering"),
+                QStringLiteral("BT.2020, PQ"), QStringLiteral("BT.2020 PQ, P3 mastering") });
+        allPatches->addWidget(patternField(QStringLiteral("Gamut"), patternTag(PatternActs::NextStart), patchGamut,
+            nullptr,
+            QStringLiteral("What VP is told ColourSpace's patches are; never the charts, which follow the Chart signal. "
+                "ColourSpace's numbers are always sent unchanged. P3 mastering: declared as P3 inside BT.2020. "
+                "PQ: the HDR10 block decides the block.")));
+
+        // ColourSpace: where it is, its log, and its patches 1:1 (A261 L1b,
+        // question 1d; operator: back on at every VP start).
+        QVBoxLayout* colourSpace = addPatternGroup(patchesBodyLayout, QStringLiteral("ColourSpace"), nullptr, true);
+        QLineEdit* host = bindTextField(section, QStringLiteral("cs_host"));
+        host->setPlaceholderText(QStringLiteral("found on the network"));
+        host->setMaximumWidth(220);
+        colourSpace->addWidget(patternField(QStringLiteral("ColourSpace address"), patternTag(PatternActs::NextStart),
+            host, nullptr,
+            QStringLiteral("Empty: the pattern generator connects to the ColourSpace that announces itself on the network.")));
+        QLineEdit* port = bindTextField(section, QStringLiteral("cs_port"));
+        port->setPlaceholderText(QStringLiteral("20002"));
+        port->setMaximumWidth(108);
+        colourSpace->addWidget(patternField(QStringLiteral("Port"), patternTag(PatternActs::NextStart), port, nullptr,
+            QStringLiteral("Default: 20002.")));
+        colourSpace->addWidget(patternCheck(bindCheckField(QStringLiteral("Log every ColourSpace message"), section,
+            QStringLiteral("log_messages")), patternTag(PatternActs::NextStart), nullptr));
+        auto* oneToOne = new QCheckBox(QStringLiteral("Show ColourSpace's patches 1:1: no resize, no crop"));
+        oneToOne->setObjectName(QStringLiteral("config.pattern.one_to_one"));
+        const auto readOneToOne = liveSwitch(colourSpace, oneToOne, QStringLiteral("1:1"),
+            QStringLiteral("On: each patch reaches the output pixel for pixel, the Screen and Zoom profiles set aside, "
+                "so no resampling touches its codes. Off: the patches go through the Screen and Zoom profiles as "
+                "configured, the path a film takes. On whenever VP starts."),
+            QStringLiteral("one_to_one"),
+            PatgenRawOutput::OneToOneStateCommand, PatgenRawOutput::OneToOneOff);
+
+        // Loopback: the harness's arm switch (A261 L5): armed, a "loop run"
+        // request may start a run; off at every VP start. Nothing on the page
+        // is greyed or hidden for a run (A394 (6)).
+        QVBoxLayout* loopback = addPatternGroup(patchesBodyLayout, QStringLiteral("Loopback"), nullptr, true);
+        auto* armed = new QCheckBox(QStringLiteral("Armed: a run request may start a measurement run"));
+        armed->setObjectName(QStringLiteral("config.pattern.loop_arm"));
+        const auto readLoopArm = liveSwitch(loopback, armed, QStringLiteral("Armed"),
+            QStringLiteral("While armed, a request sent to VP starts a run of the named request file from the build's "
+                "loopback\\requests folder; the generator steps its patches and records what VP put on its output. "
+                "Off: every run request is refused. Off whenever VP starts."),
+            QStringLiteral("loop_arm"),
+            PatgenRawOutput::LoopArmStateCommand, PatgenRawOutput::LoopArmOff);
+        loopback->addWidget(helpLabel(QStringLiteral(
+            "A run uses this page's Gamut and Depth and range, and sets 1:1 and raw output itself.")));
+        listSwitchesOn(patchesToggle, { oneToOne, armed });
+        const std::function<void()> readRaw = readPatternRawOutput_;
+        readPatternRawOutput_ = [readRaw, readOneToOne, readLowLatency, readLoopArm]
+        {
+            readRaw();
+            readOneToOne();
+            readLowLatency();
+            readLoopArm();
+        };
+    }
+
+    // Chart settings. Each is sent at once (PATGEN redraws the chart on screen
+    // if it uses it) and saved in [pattern] after VP's answer, without Apply
+    // (A183 (1), PatternLiveKeys.h, PatgenLiveSave.h), and shows only while a
+    // chart that uses it is picked (PLAN.md Phase 3; ledger Decision
+    // 2026-11-04 patgen-11). A typed field sends its placeholder, the
+    // default, when empty, and saves nothing then.
+    const auto entered = [](const QLineEdit* field)
+    {
+        const QString text = field->text().trimmed();
+        return text.isEmpty() ? field->placeholderText() : text;
+    };
+    // A live typed field: stored and saved when its edit is finished, never
+    // per keystroke, so it never lights Apply.
+    const auto liveTextField = [this, section](const QString& key, const QString& fallback)
+    {
+        auto* field = new QLineEdit(value(section, key));
+        field->setObjectName(controlName(section, key));
+        field->setAccessibleName(accessibleSettingName(key));
+        field->setPlaceholderText(fallback);
+        field->setMaximumWidth(108);
+        return field;
+    };
+    // A typed field's text, as sent, into the editor and saved; true when saved.
+    const auto storeLive = [this, section](const QString& key, const QString& text)
+    {
+        if (!document_) return false;
+        const std::string sectionText = section.toStdString();
+        const std::string keyText = key.toStdString();
+        if (text.isEmpty()) document_->RemoveKnown(sectionText, keyText.c_str());
+        else if (!document_->SetKnown(sectionText, keyText.c_str(), text.toLocal8Bit().constData()))
+        {
+            document_->AddSection(sectionText);
+            document_->SetKnown(sectionText, keyText.c_str(), text.toLocal8Bit().constData());
+        }
+        if (saveLiveSetting(section, key)) return true;
+        markDirty();
+        return false;
+    };
+    // A bound control set back: its key goes back to what the file holds, so
+    // a key the file never had lights no Apply.
+    const auto restoreSaved = [this, section](const QString& key)
+    {
+        if (!document_) return;
+        const std::string sectionText = section.toStdString();
+        const std::string keyText = key.toStdString();
+        ConfigEditorCore::ConfigDocument saved;
+        saved.LoadBytes(document_->path, document_->loadedBytes);
+        size_t line = 0, start = 0, end = 0;
+        if (!saved.Find(sectionText, keyText, line, start, end))
+            document_->RemoveKnown(sectionText, keyText.c_str());
+        else
+        {
+            const std::string kept = saved.Get(sectionText.c_str(), keyText.c_str());
+            if (!document_->SetKnown(sectionText, keyText.c_str(), kept))
+            {
+                document_->AddSection(sectionText);
+                document_->SetKnown(sectionText, keyText.c_str(), kept);
+            }
+        }
+        markDirty();
+    };
+    // A live setting is sent first and saved after VP's answer
+    // (PatgenLiveSave.h; A366 (3), operator: "1"): taken, or refused only
+    // because VP TPG is not the active input, save runs; any other refusal
+    // saves nothing and goBack sets the control back. While a control goes
+    // back its binder rewrites the editor and nothing is sent. Only a
+    // control's newest change acts on its answer (changes counts them), so
+    // one overtaken, by a wheel over a drop-down say, neither saves the
+    // newer value early nor sets it back; nor does an answer that comes
+    // after the page was rebuilt. A setting set back says why in its red line
+    // (A394 (6), operator), what naming it; its next change clears the line.
+    const auto reverting = std::make_shared<bool>(false);
+    const auto sendLive = [send, status, reverting, page = QPointer<QWidget>(content)](
+        const std::shared_ptr<uint64_t>& changes, QWidget* setting, const QString& command, const QString& what,
+        std::function<bool()> save, std::function<void()> goBack)
+    {
+        const uint64_t change = ++*changes;
+        showRefusal(setting, QString());
+        send(command, what, [status, setting, what, save, goBack, reverting, page, changes, change](bool sent,
+            const QString& error)
+        {
+            if (!page || *changes != change) return;
+            if (PatgenLiveSave::Saved(sent, error.toStdString()))
+            {
+                if (save() && !sent) status->setText(QStringLiteral("Saved; used when VP TPG starts."));
+                return;
+            }
+            *reverting = true;
+            goBack();
+            *reverting = false;
+            showRefusal(setting, notTaken(what, error));
+        });
+    };
+    const auto newPanel = [content]
+    {
+        auto* panel = new QWidget(content);
+        auto* panelLayout = new QVBoxLayout(panel);
+        panelLayout->setContentsMargins(0, 0, 0, 0);
+        panelLayout->setSpacing(10);
+        panel->hide();
+        return panel;
+    };
+    // Set back, a typed field shows the editor's value again: it is written
+    // there only once saved.
+    const auto typedField = [this, sendLive, section, entered, liveTextField, storeLive](const QString& key, const QString& fallback)
+    {
+        QLineEdit* field = liveTextField(key, fallback);
+        const auto changes = std::make_shared<uint64_t>(0);
+        connect(field, &QLineEdit::editingFinished, this, [this, sendLive, section, field, key, entered, storeLive, changes]
+        {
+            const QString text = field->text().trimmed();
+            sendLive(changes, field, QStringLiteral("%1 %2").arg(key, entered(field)), refusalWhat(field),
+                [storeLive, key, text] { return storeLive(key, text); },
+                [this, section, field, key, text]
+                {
+                    if (field->text().trimmed() == text) field->setText(value(section, key));
+                });
+        });
+        return field;
+    };
+    // A bound drop-down or tick box: bound as any other, then saved once VP
+    // has answered; set back, it shows the value last kept.
+    const auto saveLive = [this, section](const QString& key)
+    {
+        return saveLiveSetting(section, key);
+    };
+    const auto choiceField = [this, sendLive, section, saveLive, reverting, restoreSaved](const QString& key,
+        const QStringList& values, const QStringList& labels)
+    {
+        QComboBox* combo = bindChoiceField(section, key, values, labels);
+        const auto kept = std::make_shared<QString>(combo->currentData().toString());
+        const auto changes = std::make_shared<uint64_t>(0);
+        connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [sendLive, combo, key, saveLive, reverting, restoreSaved, kept, changes](int)
+        {
+            if (*reverting) return;
+            const QString chosen = combo->currentData().toString();
+            sendLive(changes, combo, QStringLiteral("%1 %2").arg(key, chosen), refusalWhat(combo),
+                [saveLive, key, kept, chosen]
+                {
+                    *kept = chosen;
+                    return saveLive(key);
+                },
+                [combo, key, kept, restoreSaved]
+                {
+                    combo->setCurrentIndex(combo->findData(*kept));
+                    restoreSaved(key);
+                });
+        });
+        return combo;
+    };
+    // A bound tick box, sent as "<key> on" or "<key> off".
+    const auto checkField = [this, sendLive, saveLive, reverting, restoreSaved](QCheckBox* box, const QString& key)
+    {
+        const auto kept = std::make_shared<bool>(box->isChecked());
+        const auto changes = std::make_shared<uint64_t>(0);
+        connect(box, &QCheckBox::toggled, this, [sendLive, box, key, saveLive, reverting, restoreSaved, kept, changes](bool on)
+        {
+            if (*reverting) return;
+            sendLive(changes, box, key + (on ? QStringLiteral(" on") : QStringLiteral(" off")),
+                refusalWhat(box) + (on ? QStringLiteral(" on") : QStringLiteral(" off")),
+                [saveLive, key, kept, on]
+                {
+                    *kept = on;
+                    return saveLive(key);
+                },
+                [box, key, kept, restoreSaved]
+                {
+                    box->setChecked(*kept);
+                    restoreSaved(key);
+                });
+        });
+    };
+    // Side by side from the left at their own widths, labels on one line,
+    // whatever the window's width (A197 (b), A219 (6)): a cell never grows,
+    // even when it holds a line edit, which expands by default.
+    const auto row = [](std::initializer_list<QWidget*> widgets)
+    {
+        auto* line = new QWidget;
+        auto* lineLayout = new QHBoxLayout(line);
+        lineLayout->setContentsMargins(0, 0, 0, 0);
+        lineLayout->setSpacing(16);
+        for (QWidget* widget : widgets)
+        {
+            widget->setSizePolicy(QSizePolicy::Maximum, widget->sizePolicy().verticalPolicy());
+            lineLayout->addWidget(widget, 0, Qt::AlignTop);
+        }
+        lineLayout->addStretch();
+        return line;
+    };
+
+    // No SDR gamma field: the P3 SDR ramp and the SDR nits chart follow the
+    // gamma VP decodes SDR with, which VP sends the generator itself
+    // (PatgenSdrGamma.h; [pattern] sdr_gamma_route and sdr_gamma_check_ms).
+
+    // The HDR10 block: every PQ chart and every PQ ColourSpace patch, on or
+    // off; its primaries are the Chart signal's (A183 (3) (g)). Its
+    // luminances hide while it is off. Last in Signal (A394 (6)), shown only
+    // while the Chart signal or the patches' Gamut is PQ (A219 (5), A230
+    // (1)); one tag at its title covers all of it; low values left of high
+    // ones.
+    QWidget* hdr10Group = nullptr;
+    QVBoxLayout* hdr10Layout = addPatternGroup(signalBodyLayout, QStringLiteral("HDR10 block"),
+        patternTag(PatternActs::LiveSaved), false, &hdr10Group);
+    hdr10Layout->addWidget(helpLabel(QStringLiteral("Every PQ chart and every PQ ColourSpace patch.")));
+    QLineEdit* masteringPeak = nullptr;
+    {
+        QCheckBox* block = bindCheckField(QStringLiteral("Send the HDR10 block"), section, QStringLiteral("hdr10"), true);
+        // An older page saved p3, bt2020 or none; the generator reads none as off.
+        if (value(section, QStringLiteral("hdr10")).trimmed().compare(QStringLiteral("none"), Qt::CaseInsensitive) == 0)
+        {
+            const QSignalBlocker quiet(block);
+            block->setChecked(false);
+        }
+        checkField(block, QStringLiteral("hdr10"));
+        hdr10Layout->addWidget(patternCheck(block, nullptr, refusalLine(block, QStringLiteral("Send the HDR10 block"))));
+        hdr10Layout->addWidget(helpLabel(QStringLiteral(
+            "Carried by the PQ charts, in the Chart signal's primaries: P3 for P3 in BT.2020 PQ, else BT.2020. "
+            "Also by ColourSpace's PQ patches, in their Gamut's primaries.")));
+        auto* luminances = new QWidget;
+        auto* luminancesLayout = new QVBoxLayout(luminances);
+        luminancesLayout->setContentsMargins(0, 0, 0, 0);
+        luminancesLayout->setSpacing(10);
+        masteringPeak = typedField(QStringLiteral("hdr10_peak"), QStringLiteral("1000"));
+        QLineEdit* masteringMin = typedField(QStringLiteral("hdr10_min"), QStringLiteral("0.0001"));
+        luminancesLayout->addWidget(row({
+            patternField(QStringLiteral("Minimum mastering luminance, cd/m2"), nullptr, masteringMin,
+                refusalLine(masteringMin, QStringLiteral("Minimum mastering luminance")), QStringLiteral("Default: 0.0001.")),
+            patternField(QStringLiteral("Peak mastering luminance, cd/m2"), nullptr, masteringPeak,
+                refusalLine(masteringPeak, QStringLiteral("Peak mastering luminance")), QStringLiteral("Default: 1000.")) }));
+        QLineEdit* maxCll = typedField(QStringLiteral("hdr10_maxcll"), QStringLiteral("none"));
+        QLineEdit* maxFall = typedField(QStringLiteral("hdr10_maxfall"), QStringLiteral("none"));
+        luminancesLayout->addWidget(row({
+            patternField(QStringLiteral("MaxFALL, cd/m2"), nullptr, maxFall, refusalLine(maxFall, QStringLiteral("MaxFALL")),
+                QStringLiteral("Default: none, not sent.")),
+            patternField(QStringLiteral("MaxCLL, cd/m2"), nullptr, maxCll, refusalLine(maxCll, QStringLiteral("MaxCLL")),
+                QStringLiteral("Default: none, not sent.")) }));
+        hdr10Layout->addWidget(luminances);
+        luminances->setVisible(block->isChecked());
+        connect(block, &QCheckBox::toggled, luminances, &QWidget::setVisible);
+    }
+
+    // The nits range: the PQ nits chart and the DTM chart's strip. One Range
+    // drop-down sets From and To (A197); each entry shows the numbers it sets,
+    // and it always names the entry whose numbers From and To hold, else
+    // Custom, so typed numbers read Custom.
+    QWidget* nitsPanel = newPanel();
+    {
+        QLineEdit* from = liveTextField(QStringLiteral("nits_from"), QStringLiteral("0"));
+        QLineEdit* to = liveTextField(QStringLiteral("nits_to"), QStringLiteral("75"));
+
+        // The display peak is VP's target nits, as saved (PatternDisplayPeak.h);
+        // empty, and its two entries greyed, while VP names no active
+        // Rendering profile.
+        const auto displayPeak = [this]
+        {
+            return QString::fromLocal8Bit(PatternDisplayPeak::TargetNits(savedSnapshot_,
+                patternRenderingProfile_.toLocal8Bit().toStdString(),
+                RenderingBuiltInDefault(QStringLiteral("sdr_target_nits")).toStdString()).c_str());
+        };
+        enum RangeEntry { kUpToPeak, kAbovePeak, kNearBlackHalf, kNearBlackOne, kNearBlackTwo, kCustom, kRangeEntries };
+        // The From and To an entry sets; both empty while it is not known.
+        const auto entryRange = [displayPeak, masteringPeak, entered](int entry)
+        {
+            const QString peak = (entry == kUpToPeak || entry == kAbovePeak) ? displayPeak() : QString();
+            switch (entry)
+            {
+            case kUpToPeak: return peak.isEmpty() ? QStringList() : QStringList{ QStringLiteral("0"), peak };
+            case kAbovePeak: return peak.isEmpty() ? QStringList() : QStringList{ peak, entered(masteringPeak) };
+            case kNearBlackHalf: return QStringList{ QStringLiteral("0"), QStringLiteral("0.5") };
+            case kNearBlackOne: return QStringList{ QStringLiteral("0"), QStringLiteral("1") };
+            case kNearBlackTwo: return QStringList{ QStringLiteral("0"), QStringLiteral("2") };
+            default: return QStringList();
+            }
+        };
+        auto* range = new QComboBox;
+        range->setObjectName(QStringLiteral("config.pattern.nits.range"));
+        range->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+        range->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        for (int entry = 0; entry < kRangeEntries; ++entry)
+            range->addItem(QString());
+        // Names the entry whose numbers From and To hold, else Custom.
+        const auto matchRange = [range, from, to, entered, entryRange]
+        {
+            bool lowOk = false, highOk = false;
+            const double low = entered(from).toDouble(&lowOk);
+            const double high = entered(to).toDouble(&highOk);
+            int match = kCustom;
+            for (int entry = 0; lowOk && highOk && entry < kCustom && match == kCustom; ++entry)
+            {
+                const QStringList numbers = entryRange(entry);
+                if (numbers.size() == 2 && std::abs(numbers[0].toDouble() - low) < 1e-6 &&
+                    std::abs(numbers[1].toDouble() - high) < 1e-6)
+                    match = entry;
+            }
+            if (range->currentIndex() != match) range->setCurrentIndex(match);
+        };
+        // From and To go as one command; set back, both show the editor's
+        // values again and Range names their entry.
+        const auto sendRange = [this, section, sendLive, from, to, entered, storeLive, matchRange,
+            changes = std::make_shared<uint64_t>(0)]
+        {
+            const QString low = from->text().trimmed();
+            const QString high = to->text().trimmed();
+            sendLive(changes, from, QStringLiteral("nits_range %1 %2").arg(entered(from), entered(to)), refusalWhat(from),
+                [storeLive, low, high]
+                {
+                    const bool lowSaved = storeLive(QStringLiteral("nits_from"), low);
+                    return storeLive(QStringLiteral("nits_to"), high) && lowSaved;
+                },
+                [this, section, from, to, low, high, matchRange]
+                {
+                    if (from->text().trimmed() != low || to->text().trimmed() != high) return;
+                    from->setText(value(section, QStringLiteral("nits_from")));
+                    to->setText(value(section, QStringLiteral("nits_to")));
+                    matchRange();
+                });
+        };
+        connect(from, &QLineEdit::editingFinished, this, sendRange);
+        connect(to, &QLineEdit::editingFinished, this, sendRange);
+        // Entry labels carry their numbers, so they follow the display peak and
+        // the peak mastering luminance.
+        const auto labelRange = [range, entryRange]
+        {
+            auto* model = qobject_cast<QStandardItemModel*>(range->model());
+            for (int entry = 0; entry < kRangeEntries; ++entry)
+            {
+                const QStringList numbers = entryRange(entry);
+                const QString shown = numbers.size() == 2 ?
+                    QStringLiteral(" (%1 - %2)").arg(numbers[0], numbers[1]) : QStringLiteral(" (not known)");
+                QString text;
+                switch (entry)
+                {
+                case kUpToPeak: text = QStringLiteral("Up to display peak") + shown; break;
+                case kAbovePeak: text = QStringLiteral("Above display peak") + shown; break;
+                case kCustom: text = QStringLiteral("Custom"); break;
+                default: text = QStringLiteral("Near black") + shown; break;
+                }
+                if (range->itemText(entry) != text) range->setItemText(entry, text);
+                if (model && model->item(entry) && entry != kCustom)
+                    model->item(entry)->setEnabled(numbers.size() == 2);
+            }
+        };
+        connect(range, qOverload<int>(&QComboBox::activated), this, [from, to, sendRange, entryRange](int entry)
+        {
+            const QStringList numbers = entryRange(entry);
+            if (numbers.size() != 2) return;
+            from->setText(numbers[0]);
+            to->setText(numbers[1]);
+            sendRange();
+        });
+        const auto typedCustom = [range] { range->setCurrentIndex(kCustom); };
+        connect(from, &QLineEdit::textEdited, this, typedCustom);
+        connect(to, &QLineEdit::textEdited, this, typedCustom);
+        connect(from, &QLineEdit::editingFinished, this, matchRange);
+        connect(to, &QLineEdit::editingFinished, this, matchRange);
+        connect(masteringPeak, &QLineEdit::editingFinished, this, [labelRange, matchRange]
+        {
+            labelRange();
+            matchRange();
+        });
+
+        // From and To go to VP as one command, so one red line, under From.
+        nitsPanel->layout()->addWidget(row({ patternField(QStringLiteral("Range"),
+            patternTag(PatternActs::LiveSaved), range, nullptr, QString()) }));
+        nitsPanel->layout()->addWidget(row({
+            patternField(QStringLiteral("From, cd/m2"), patternTag(PatternActs::LiveSaved), from,
+                refusalLine(from, QStringLiteral("From and To")), QStringLiteral("Default: 0.")),
+            patternField(QStringLiteral("To, cd/m2"), patternTag(PatternActs::LiveSaved), to, nullptr,
+                QStringLiteral("Default: 75.")) }));
+        auto* peakStatus = helpLabel(QString());
+        peakStatus->setObjectName(QStringLiteral("config.pattern.nits.display_peak"));
+        // Every status poll: the labels follow the display peak; the match is
+        // left alone while From or To is being typed in.
+        refreshPatternDisplayPeak_ = [this, displayPeak, labelRange, matchRange,
+            guardedRange = QPointer<QComboBox>(range), guardedFrom = QPointer<QLineEdit>(from),
+            guardedTo = QPointer<QLineEdit>(to), guardedStatus = QPointer<QLabel>(peakStatus)]
+        {
+            if (!guardedRange || !guardedFrom || !guardedTo || !guardedStatus) return;
+            labelRange();
+            if (!guardedFrom->hasFocus() && !guardedTo->hasFocus()) matchRange();
+            const QString peak = displayPeak();
+            const QString text = peak.isEmpty() ?
+                QStringLiteral("Display peak: not known until VP reports its active Rendering profile.") :
+                QStringLiteral("Display peak: %1 cd/m2, the target nits of VP's active Rendering profile [%2], as saved.")
+                    .arg(peak, patternRenderingProfile_);
+            if (guardedStatus->text() != text) guardedStatus->setText(text);
+        };
+        nitsPanel->layout()->addWidget(peakStatus);
+        nitsPanel->layout()->addWidget(helpLabel(QStringLiteral(
+            "24 bars an equal number of PQ codes apart, each labelled with its cd/m2 and code. "
+            "Up to display peak runs from 0 to VP's target nits; above display peak, from them "
+            "to the peak mastering luminance.")));
+        refreshPatternDisplayPeak_();
+    }
+
+    // The SDR nits chart's range, in % of the video range.
+    QWidget* sdrRangePanel = newPanel();
+    {
+        QLineEdit* from = liveTextField(QStringLiteral("sdr_from"), QStringLiteral("0"));
+        QLineEdit* to = liveTextField(QStringLiteral("sdr_to"), QStringLiteral("100"));
+        const auto sendRange = [this, section, sendLive, from, to, entered, storeLive,
+            changes = std::make_shared<uint64_t>(0)]
+        {
+            // Above 109.5 is set to 109.5, never refused (A219 (3)(d)); the
+            // generator does the same.
+            for (QLineEdit* field : { from, to })
+            {
+                bool number = false;
+                if (field->text().trimmed().toDouble(&number) > 109.5 && number)
+                    field->setText(QStringLiteral("109.5"));
+            }
+            const QString low = from->text().trimmed();
+            const QString high = to->text().trimmed();
+            sendLive(changes, from, QStringLiteral("sdr_range %1 %2").arg(entered(from), entered(to)), refusalWhat(from),
+                [storeLive, low, high]
+                {
+                    const bool lowSaved = storeLive(QStringLiteral("sdr_from"), low);
+                    return storeLive(QStringLiteral("sdr_to"), high) && lowSaved;
+                },
+                [this, section, from, to, low, high]
+                {
+                    if (from->text().trimmed() != low || to->text().trimmed() != high) return;
+                    from->setText(value(section, QStringLiteral("sdr_from")));
+                    to->setText(value(section, QStringLiteral("sdr_to")));
+                });
+        };
+        connect(from, &QLineEdit::editingFinished, this, sendRange);
+        connect(to, &QLineEdit::editingFinished, this, sendRange);
+        sdrRangePanel->layout()->addWidget(row({
+            patternField(QStringLiteral("From, %"), patternTag(PatternActs::LiveSaved), from,
+                refusalLine(from, QStringLiteral("From and To")), QStringLiteral("Default: 0. At most 109.5.")),
+            patternField(QStringLiteral("To, %"), patternTag(PatternActs::LiveSaved), to, nullptr,
+                QStringLiteral("Default: 100. At most 109.5.")) }));
+        sdrRangePanel->layout()->addWidget(helpLabel(QStringLiteral(
+            "A number above 109.5 is set to 109.5. A tick marks where 100 % falls.")));
+    }
+
+    // The nits charts' colour rows; their primaries are the Chart signal's.
+    QWidget* coloursPanel = newPanel();
+    {
+        QComboBox* saturation = choiceField(QStringLiteral("saturation"),
+            { QStringLiteral("100"), QStringLiteral("75"), QStringLiteral("50"), QStringLiteral("25") },
+            { QStringLiteral("100 %"), QStringLiteral("75 %"), QStringLiteral("50 %"), QStringLiteral("25 %") });
+        coloursPanel->layout()->addWidget(patternField(QStringLiteral("Saturation"), patternTag(PatternActs::LiveSaved),
+            saturation, refusalLine(saturation, QStringLiteral("Saturation")),
+            QStringLiteral("Every colour row; the other channels carry the rest of the bar's light. "
+                "The rows are in the Chart signal's primaries.")));
+    }
+
+    // The PQ grey ramp's top.
+    QWidget* rampPanel = newPanel();
+    {
+        QLineEdit* rampPeak = typedField(QStringLiteral("ramp_peak"), QStringLiteral("1000"));
+        rampPanel->layout()->addWidget(patternField(QStringLiteral("Ramp peak, cd/m2"),
+            patternTag(PatternActs::LiveSaved), rampPeak, refusalLine(rampPeak, QStringLiteral("Ramp peak")),
+            QStringLiteral("Default: 1000.")));
+    }
+
+    // The DTM chart's bright patch.
+    // Hold and Patch size side by side at their own widths (A197): the patch
+    // size drop-down is as wide as its longest entry, and the sentence that
+    // would stretch its column sits under the row.
+    QWidget* dtmPanel = newPanel();
+    {
+        QComboBox* patchSize = choiceField(QStringLiteral("dtm_size"),
+            { QStringLiteral("cycle"), QStringLiteral("1"), QStringLiteral("10"), QStringLiteral("25"), QStringLiteral("50") },
+            { QStringLiteral("Cycle 1, 10, 25, 50 %"), QStringLiteral("1 %"), QStringLiteral("10 %"),
+              QStringLiteral("25 %"), QStringLiteral("50 %") });
+        patchSize->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+        patchSize->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        QLineEdit* hold = typedField(QStringLiteral("dtm_hold"), QStringLiteral("5"));
+        dtmPanel->layout()->addWidget(row({
+            patternField(QStringLiteral("Hold each size, s"), patternTag(PatternActs::LiveSaved), hold,
+                refusalLine(hold, QStringLiteral("Hold each size")), QStringLiteral("1 to 60. Default: 5.")),
+            patternField(QStringLiteral("Patch size"), patternTag(PatternActs::LiveSaved), patchSize,
+                refusalLine(patchSize, QStringLiteral("Patch size")), QString()) }));
+        dtmPanel->layout()->addWidget(helpLabel(
+            QStringLiteral("The patch is drawn at MaxCLL, or the peak mastering luminance without one.")));
+    }
+
+    // The focus chart's lines (A219 (12)): width and colour, live.
+    QWidget* focusPanel = newPanel();
+    {
+        QComboBox* width = choiceField(QStringLiteral("focus_width"),
+            { QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("3"), QStringLiteral("4") },
+            { QStringLiteral("1 px"), QStringLiteral("2 px"), QStringLiteral("3 px"), QStringLiteral("4 px") });
+        // Unset: the generator's default, 2 px.
+        if (value(section, QStringLiteral("focus_width")).trimmed().isEmpty())
+        {
+            const QSignalBlocker quiet(width);
+            width->setCurrentIndex(width->findData(QStringLiteral("2")));
+        }
+        QComboBox* colour = choiceField(QStringLiteral("focus_colour"),
+            { QStringLiteral("white"), QStringLiteral("red"), QStringLiteral("green"), QStringLiteral("blue") },
+            { QStringLiteral("White"), QStringLiteral("Red"), QStringLiteral("Green"), QStringLiteral("Blue") });
+        for (QComboBox* combo : { width, colour })
+        {
+            combo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+            combo->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        }
+        focusPanel->layout()->addWidget(row({
+            patternField(QStringLiteral("Line width"), patternTag(PatternActs::LiveSaved), width,
+                refusalLine(width, QStringLiteral("Line width")), QStringLiteral("Default: 2 px.")),
+            patternField(QStringLiteral("Colour"), patternTag(PatternActs::LiveSaved), colour,
+                refusalLine(colour, QStringLiteral("Colour")), QStringLiteral("Default: White.")) }));
+    }
+
+    // The saturation chart (A246): its full colour's level, % of white's
+    // light, and its PQ white, VP's target white unless one is typed.
+    QWidget* saturationPanel = newPanel();
+    {
+        QComboBox* level = choiceField(QStringLiteral("sat_level"),
+            { QStringLiteral("100"), QStringLiteral("75"), QStringLiteral("50"), QStringLiteral("25") },
+            { QStringLiteral("100 %"), QStringLiteral("75 %"), QStringLiteral("50 %"), QStringLiteral("25 %") });
+        level->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+        level->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        QLineEdit* white = typedField(QStringLiteral("sat_peak"), QStringLiteral("none"));
+        saturationPanel->layout()->addWidget(row({
+            patternField(QStringLiteral("Full colour at"), patternTag(PatternActs::LiveSaved), level,
+                refusalLine(level, QStringLiteral("Full colour at")), QStringLiteral("Of white's light. Default: 100 %.")),
+            patternField(QStringLiteral("PQ white, cd/m2"), patternTag(PatternActs::LiveSaved), white,
+                refusalLine(white, QStringLiteral("PQ white")), QStringLiteral("Default: none, VP's target white.")) }));
+        saturationPanel->layout()->addWidget(helpLabel(QStringLiteral(
+            "Each row steps from grey to the Chart signal's full colour at one brightness. "
+            "The % labels follow \"Code and % under each bar\" in Clipping.")));
+    }
+
+    // Which chart uses which settings, in the order they show.
+    struct PanelUse { QWidget* panel; QStringList charts; };
+    const std::vector<PanelUse> panels =
+    {
+        { nitsPanel, { QStringLiteral("nits_pq"), QStringLiteral("dtm_response") } },
+        { sdrRangePanel, { QStringLiteral("nits_sdr") } },
+        { coloursPanel, { QStringLiteral("nits_pq"), QStringLiteral("nits_sdr") } },
+        { rampPanel, { QStringLiteral("grey_ramp_pq") } },
+        { dtmPanel, { QStringLiteral("dtm_response") } },
+        { focusPanel, { QStringLiteral("focus") } },
+        { saturationPanel, { QStringLiteral("sat_sweep") } },
+    };
+    // Moves the picked chart's settings into its card; hides the rest.
+    const auto showSettings = [panels](const QString& chart, QVBoxLayout* settings)
+    {
+        for (const PanelUse& use : panels)
+        {
+            if (use.charts.contains(chart))
+            {
+                if (settings) settings->addWidget(use.panel);
+                use.panel->show();
+            }
+            else
+                use.panel->hide();
+        }
+    };
+
+    // The Chart signal (A183 (3), PatternChartSignal.h): the one signal every
+    // chart declares, live; the groups below list only the charts drawn for it.
+    std::vector<QString> signalValues, signalLabels;
+    {
+        size_t count = 0;
+        const PatternChartSignal::Signal* table = PatternChartSignal::Signals(count);
+        for (size_t index = 0; index < count; ++index)
+        {
+            signalValues.push_back(QString::fromUtf8(table[index].value));
+            signalLabels.push_back(QString::fromUtf8(table[index].label));
+        }
+    }
+    QComboBox* chartSignal = choiceField(QStringLiteral("chart_signal"),
+        QStringList(signalValues.begin(), signalValues.end()), QStringList(signalLabels.begin(), signalLabels.end()));
+    // Shown while the page's chart is not drawn for the Chart signal (A219 (11)).
+    QLabel* refusedNote = helpLabel(QString());
+    refusedNote->setObjectName(QStringLiteral("config.pattern.chart.refused"));
+    refusedNote->hide();
+    // Charts: the answer line and the charts' note first, above the Chart
+    // signal (A394 (6), operator), then the chart groups and Charts off.
+    QWidget* chartsBody = sectionBody();
+    auto* chartsLayout = static_cast<QVBoxLayout*>(chartsBody->layout());
+    chartsLayout->addWidget(status);
+    chartsLayout->addWidget(helpLabel(QStringLiteral(
+        "Charts are drawn at VP's output resolution. A ColourSpace patch replaces the chart on screen.")));
+    chartsLayout->addWidget(patternField(QStringLiteral("Chart signal"), patternTag(PatternActs::LiveSaved),
+        chartSignal, refusalLine(chartSignal, QStringLiteral("Chart signal")),
+        QStringLiteral("What every chart is drawn in and declares to VP; ColourSpace's patches keep their own Gamut. "
+            "Only the charts drawn for this signal are listed.")));
+    chartsLayout->addWidget(refusedNote);
+    // Shown while the Chart signal or the patches' Gamut is PQ (A230 (1)).
+    const auto showHdr10 = [hdr10Group, patchGamut](const QString& signal)
+    {
+        hdr10Group->setVisible(PatternChartSignal::Hdr10CardShown(signal.toStdString(),
+            patchGamut->currentData().toString().toStdString()));
+    };
+    showHdr10(chartSignal->currentData().toString());
+    connect(patchGamut, qOverload<int>(&QComboBox::currentIndexChanged), this, [chartSignal, showHdr10](int)
+    {
+        showHdr10(chartSignal->currentData().toString());
+    });
+
+    // The charts, by group, each group one drop-down (PLAN.md Phase 3). One
+    // chart is on screen at a time, so picking one clears the other groups.
+    struct ChartItem { const char* label; const char* id; };
+    struct ChartGroup { const char* title; std::vector<ChartItem> charts; };
+    const ChartGroup groups[] =
+    {
+        { "Clipping", { { "Black, grey", "clip_black_grey" }, { "Black, colour", "clip_black" },
+            { "White, grey", "clip_white_grey" }, { "White, colour", "clip_white" },
+            { "Nits range, PQ", "nits_pq" }, { "Range, SDR", "nits_sdr" } } },
+        { "Greyscale", { { "Steps", "grey_steps" }, { "Ramp", "grey_ramp" },
+            { "PQ ramp to a peak", "grey_ramp_pq" }, { "10-bit gradient", "gradient_10bit" } } },
+        { "Colour ramps", { { "BT.709", "ramp_709" }, { "BT.2020 SDR", "ramp_2020_sdr" },
+            { "BT.2020 PQ", "ramp_2020_pq" }, { "P3 in BT.2020 SDR", "ramp_p3_sdr" },
+            { "P3 in BT.2020 PQ", "ramp_p3_pq" }, { "DTM response", "dtm_response" },
+            { "Saturation", "sat_sweep" } } },
+        { "Sharpness", { { "Resolution", "resolution" }, { "Focus", "focus" } } },
+        { "Aspect", { { "1.33", "aspect_1.33" }, { "1.78", "aspect_1.78" }, { "1.85", "aspect_1.85" },
+            { "1.896 (4096x2160)", "aspect_1.896" }, { "2.00", "aspect_2.00" }, { "2.39", "aspect_2.39" } } },
+    };
+    std::vector<QComboBox*> pickers;
+    std::vector<QVBoxLayout*> settingsAreas;
+    // Each group's drop-down, group and charts, refilled for each Chart signal.
+    struct GroupView { QComboBox* picker; QWidget* group; QVBoxLayout* settings; std::vector<ChartItem> charts; };
+    const auto views = std::make_shared<std::vector<GroupView>>();
+    QCheckBox* exactCrop = nullptr;
+    for (const ChartGroup& group : groups)
+    {
+        const QString title = QString::fromUtf8(group.title);
+        QWidget* groupWidget = nullptr;
+        QVBoxLayout* bodyLayout = addPatternGroup(chartsLayout, title, nullptr,
+            title != QStringLiteral("Clipping"), &groupWidget);
+
+        if (title == QStringLiteral("Clipping"))
+        {
+            QCheckBox* flash = bindCheckField(QStringLiteral("Flash the bars (0.75 s on, 0.75 s off)"),
+                section, QStringLiteral("flash"));
+            checkField(flash, QStringLiteral("flash"));
+            QCheckBox* labels = bindCheckField(QStringLiteral("Code and % under each bar"),
+                section, QStringLiteral("text"), true);
+            checkField(labels, QStringLiteral("text"));
+            bodyLayout->addWidget(row({
+                patternCheck(flash, patternTag(PatternActs::LiveSaved), refusalLine(flash, QStringLiteral("Flash the bars"))),
+                patternCheck(labels, patternTag(PatternActs::LiveSaved),
+                    refusalLine(labels, QStringLiteral("Code and % under each bar"))) }));
+        }
+        if (title == QStringLiteral("Aspect"))
+        {
+            // VP's own switch, never saved (PatgenNoCrop.h, A200): while it is
+            // on, an aspect chart is cropped exactly to its ratio through the
+            // active Screen profile. Refused or unsent, it goes back and its
+            // red line says why (A394 (6)).
+            exactCrop = new QCheckBox(QStringLiteral("Crop exactly to the chart"));
+            exactCrop->setObjectName(QStringLiteral("config.pattern.aspect.exact_crop"));
+            bodyLayout->addWidget(patternCheck(exactCrop, patternTag(PatternActs::LiveResets),
+                refusalLine(exactCrop, QStringLiteral("Crop exactly to the chart"))));
+            connect(exactCrop, &QCheckBox::clicked, this, [send, box = exactCrop](bool on)
+            {
+                const QString what = refusalWhat(box) + (on ? QStringLiteral(" on") : QStringLiteral(" off"));
+                showRefusal(box, QString());
+                send(on ? QStringLiteral("exact_crop on") : QStringLiteral("exact_crop off"), what,
+                    [box, what, on](bool sent, const QString& error)
+                {
+                    if (sent || box->isChecked() != on) return;
+                    box->setChecked(!on);
+                    showRefusal(box, notTaken(what, error));
+                });
+            });
+            const QString help = QStringLiteral("On: each aspect chart is cropped exactly to its ratio and shown "
+                "through your Screen profile, as a perfectly cropped film of that ratio would be; automatic crop "
+                "and Zoom are set aside while it is on screen, and come back as they were. Off: the chart goes "
+                "through Screen, Zoom and automatic crop as set. Not saved.");
+            exactCrop->setAccessibleDescription(help);
+            bodyLayout->addWidget(helpLabel(help));
+        }
+
+        auto* picker = new QComboBox;
+        picker->setObjectName(QStringLiteral("config.pattern.group.%1").arg(title.toLower().replace(QLatin1Char(' '), QLatin1Char('_'))));
+        picker->setAccessibleName(title);
+        picker->setMinimumWidth(240);
+        bodyLayout->addWidget(row({ picker }));
+        auto* settings = new QVBoxLayout;
+        settings->setContentsMargins(0, 0, 0, 0);
+        settings->setSpacing(10);
+        bodyLayout->addLayout(settings);
+        pickers.push_back(picker);
+        settingsAreas.push_back(settings);
+
+        views->push_back({ picker, groupWidget, settings, group.charts });
+    }
+    // The drop-downs list the charts drawn for this signal; a group with none
+    // hides. A chart still listed stays picked; a colour ramp or a twin moves
+    // to the chart that follows it to this signal (A198), in the same group.
+    // False if the chart this page showed is not listed for this signal: the
+    // generator then shows its refusal screen, and the chart comes back with
+    // a signal it is drawn for (A219 (11)).
+    // showing: the group whose chart this page put on screen, nullptr for
+    // none; showingChart: that chart, as the generator follows it.
+    const auto showing = std::make_shared<QPointer<QComboBox>>();
+    const auto showingChart = std::make_shared<QString>();
+    const auto fillPickers = [views, showing, showingChart](const QString& signal)
+    {
+        bool kept = true;
+        for (GroupView& view : *views)
+        {
+            const QString was = showing->data() == view.picker ? *showingChart : view.picker->currentData().toString();
+            const QString current = QString::fromStdString(PatternChartSignal::Follow(
+                was.toStdString(), signal.toStdString()));
+            if (showing->data() == view.picker) *showingChart = current;
+            view.picker->clear();
+            view.picker->addItem(QStringLiteral("Pick a chart"), QString());
+            for (const ChartItem& chart : view.charts)
+                if (PatternChartSignal::Drawn(chart.id, signal.toStdString()))
+                    view.picker->addItem(QString::fromUtf8(chart.label), QString::fromUtf8(chart.id));
+            view.group->setVisible(view.picker->count() > 1);
+            const int index = current.isEmpty() ? -1 : view.picker->findData(current);
+            view.picker->setCurrentIndex(index < 0 ? 0 : index);
+            if (!current.isEmpty() && index < 0 && showing->data() == view.picker) kept = false;
+        }
+        return kept;
+    };
+    fillPickers(chartSignal->currentData().toString());
+    // A new Chart signal (choiceField has sent it; a refused one set back
+    // comes here again): the lists and
+    // the HDR10 card follow it. A colour ramp or twin on screen has followed
+    // it in the generator too, so its settings follow here. Any other chart
+    // on screen that is not drawn for it stays the page's chart: the
+    // generator shows its refusal screen with the reason, never black
+    // (A219 (11), operator: "I would show a refusal screen"), and redraws it
+    // when the signal comes back to one it is drawn for.
+    connect(chartSignal, qOverload<int>(&QComboBox::currentIndexChanged), this,
+        [chartSignal, fillPickers, showing, showingChart, showSettings, showHdr10, views, refusedNote, groups](int)
+    {
+        const QString signal = chartSignal->currentData().toString();
+        showHdr10(signal);
+        refusedNote->hide();
+        const bool kept = fillPickers(signal);
+        for (const GroupView& view : *views)
+            if (showing->data() == view.picker)
+                showSettings(kept ? view.picker->currentData().toString() : QString(), kept ? view.settings : nullptr);
+        if (kept || !showing->data()) return;
+        QString label = *showingChart;
+        for (const ChartGroup& group : groups)
+            for (const ChartItem& chart : group.charts)
+                if (*showingChart == QString::fromUtf8(chart.id))
+                    label = QStringLiteral("%1, %2").arg(QString::fromUtf8(group.title), QString::fromUtf8(chart.label));
+        refusedNote->setText(QStringLiteral("%1 is not drawn for %2: the screen says so until you pick a chart, "
+            "or a signal it is drawn for.").arg(label, chartSignal->currentText()));
+        refusedNote->show();
+    });
+
+    for (size_t index = 0; index < pickers.size(); ++index)
+    {
+        QComboBox* picker = pickers[index];
+        QVBoxLayout* settings = settingsAreas[index];
+        connect(picker, qOverload<int>(&QComboBox::activated), this,
+            [send, pickers, picker, settings, showSettings, showing, showingChart, refusedNote](int item)
+        {
+            const QString chart = picker->itemData(item).toString();
+            if (chart.isEmpty())
+            {
+                // "Pick a chart" in the showing chart's group takes it off, as
+                // "Charts off" does (A183 (2)); in any other group it is already
+                // there and does nothing.
+                if (showing->data() != picker) return;
+                showing->clear();
+                showingChart->clear();
+                refusedNote->hide();
+                showSettings(QString(), nullptr);
+                send(QStringLiteral("chart off"), QStringLiteral("Charts off"));
+                return;
+            }
+            for (QComboBox* other : pickers)
+                if (other != picker) other->setCurrentIndex(0);
+            *showing = picker;
+            *showingChart = chart;
+            refusedNote->hide();
+            showSettings(chart, settings);
+            send(QStringLiteral("chart %1").arg(chart),
+                QStringLiteral("%1, %2").arg(picker->accessibleName(), picker->itemText(item)));
+        });
+    }
+
+    auto* off = new QPushButton(QStringLiteral("Charts off"));
+    off->setObjectName(QStringLiteral("config.pattern.chart.off"));
+    connect(off, &QPushButton::clicked, this, [send, pickers, showSettings, showing, showingChart, refusedNote]
+    {
+        for (QComboBox* picker : pickers)
+            picker->setCurrentIndex(0);
+        showing->clear();
+        showingChart->clear();
+        refusedNote->hide();
+        showSettings(QString(), nullptr);
+        send(QStringLiteral("chart off"), QStringLiteral("Charts off"));
+    });
+    // A ColourSpace patch, blank or lost link replaces the page's chart in the
+    // generator (A202). On Config's status tick, only while this page has a
+    // chart up and no chart command is unanswered, ask whether it is still
+    // showing (PatgenChartShowing.h); on ColourSpace's no, every drop-down
+    // reads "Pick a chart" and the settings close. Nothing is sent: the
+    // screen is ColourSpace's. No more asking until a chart is picked.
+    const auto asking = std::make_shared<bool>(false);
+    checkPatternChartShowing_ = [this, pickers, showing, showingChart, refusedNote, showSettings, asking, chartCommands, chartPending]
+    {
+        if (*asking || *chartPending > 0 || !showing->data() || noTarget_ || testMode_) return;
+        *asking = true;
+        const uint64_t askedAfter = *chartCommands;
+        runTargetAction(QStringLiteral("pattern.") + QString::fromUtf8(PatgenChartShowing::Command),
+            [pickers, showing, showingChart, refusedNote, showSettings, asking, chartCommands, askedAfter](bool sent, const QString& error)
+        {
+            *asking = false;
+            if (sent || error != QString::fromUtf8(PatgenChartShowing::ColourSpaceHasScreen) ||
+                *chartCommands != askedAfter || !showing->data())
+                return;
+            for (QComboBox* picker : pickers)
+                picker->setCurrentIndex(0);
+            showing->clear();
+            showingChart->clear();
+            refusedNote->hide();
+            showSettings(QString(), nullptr);
+        });
+    };
+    // This page is built reading "Pick a chart" (Config's start, a target
+    // switch, Cancel), so the screen must not keep a chart an earlier page put
+    // up (A219 (2), operator: a Config restart clears the screen). Once, on the
+    // first status tick that reaches VP, unless a chart was picked already;
+    // the generator's "chart_clear" leaves a ColourSpace patch alone. Quiet:
+    // an input other than VP TPG has no chart to clear.
+    const auto cleared = std::make_shared<bool>(false);
+    clearPatternChartOnOpen_ = [this, cleared, chartCommands]
+    {
+        if (*cleared || noTarget_ || testMode_) return;
+        *cleared = true;
+        if (*chartCommands > 0) return;
+        runTargetAction(QStringLiteral("pattern.chart_clear"), [](bool, const QString&) {});
+    };
+
+    auto* offRow = new QHBoxLayout;
+    offRow->addWidget(off);
+    offRow->addStretch();
+    chartsLayout->addLayout(offRow);
+    QToolButton* chartsToggle = nullptr;
+    layout->addWidget(collapsibleCard(QStringLiteral("Charts"), QString(), chartsBody, false, &chartsToggle));
+    listSwitchesOn(chartsToggle, { exactCrop });
+    layout->addStretch();
+
+    return createPage(QStringLiteral("Pattern generator"),
+        QStringLiteral("The VP TPG input: ColourSpace's patches and built-in charts; its switch key is on the "
+            "Shortcuts page. Each setting's tag says when it acts. Applying one tagged At the next start offers to "
+            "restart the input, which uses it from then on."), content);
+}
+
 QWidget* ConfigEditorWindow::createShortcutsPage()
 {
     struct ShortcutField
@@ -10789,6 +12251,7 @@ QWidget* ConfigEditorWindow::createShortcutsPage()
         { "DeckLink input 2", "capture_2", "Ctrl+2" },
         { "DeckLink input 3", "capture_3", "Ctrl+3" },
         { "DeckLink input 4", "capture_4", "Ctrl+4" },
+        { "Pattern generator input", "capture_pattern", "Ctrl+Alt+T" },
         { "Video conversion off", "video_conversion_off", "V" },
         { "V210 to P010 conversion", "video_conversion_p010", "Shift+V" }
     };

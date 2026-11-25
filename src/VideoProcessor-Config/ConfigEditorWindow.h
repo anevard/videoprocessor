@@ -123,6 +123,13 @@ private:
     // One RunAction on the target VP, off the UI thread; done(success,
     // error) back on it.
     void runTargetAction(const QString& action, std::function<void(bool, const QString&)> done);
+    QWidget* createPatternPage();
+    // A live Patterns page chart setting (PatternLiveKeys.h), already set in
+    // the edited document: written to the configuration file now, alone, as
+    // it was last saved plus this one key, so it never lights Apply. Other
+    // unsaved edits stay unsaved. False (the edit then lights Apply as any
+    // other) if the file could not be written.
+    bool saveLiveSetting(const QString& section, const QString& key);
     QWidget* createProfilePage(const QString& title, const QString& description,
         const QString& sectionPrefix);
     QWidget* createCard(const QString& title, const QString& description, QWidget* content);
@@ -333,6 +340,18 @@ private:
     bool activeProfileSnapshotAvailable_ = false;
     QString subtitleHdrFallbackSelection_;
     std::function<void()> refreshSubtitleHdrFallback_;
+    // Patterns page: the Rendering profile VP reports active, empty while its
+    // live status is unavailable; the nits buttons' display peak follows it.
+    QString patternRenderingProfile_;
+    std::function<void()> refreshPatternDisplayPeak_;
+    // On the status tick: has ColourSpace replaced the Patterns page's chart? (A202)
+    std::function<void()> checkPatternChartShowing_;
+    // On the first status tick that reaches VP after the Patterns page is
+    // built: a chart an earlier page left up is taken off (A219 (2)).
+    std::function<void()> clearPatternChartOnOpen_;
+    // On the status tick: the Patterns page's raw box shows the generator's
+    // live raw state (A255, PatgenRawOutput.h); it never sends.
+    std::function<void()> readPatternRawOutput_;
     // Rendering / DTM: before Save or Apply, writes every rendering profile's
     // settings explicitly so none inherits from the default profile.
     std::function<void()> freezeRenderingProfiles_;
