@@ -3238,6 +3238,25 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;
 			}
+			// The "Low latency" box is VP's own too (PatgenLowLatency.h, A356
+			// (5)): its state, and on or off, on only while the generator is
+			// the input.
+			bool lowLatency = false;
+			if (command == PatgenLowLatency::StateCommand || PatgenLowLatency::ParseCommand(command, lowLatency))
+			{
+				if (command == PatgenLowLatency::StateCommand && !m_patgenLowLatency)
+					return ConfigurationRpcError(operation, PatgenLowLatency::Off);
+				if (lowLatency && !SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
+					SourcePluginBackend::PATTERN_PLUGIN_NAME))
+					return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
+				if (command != PatgenLowLatency::StateCommand)
+					UpdatePatgenLowLatency(lowLatency, lowLatency ? "switch on" : "switch off");
+				if (lowLatency && !m_patgenLowLatency)
+					return ConfigurationRpcError(operation, PatgenLowLatency::KeptBack);
+				Frame response;
+				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
+				return response;
+			}
 			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
 				SourcePluginBackend::PATTERN_PLUGIN_NAME))
 				return ConfigurationRpcError(operation, "The pattern generator is not the active input.");
