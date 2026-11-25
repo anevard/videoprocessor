@@ -14,6 +14,7 @@
 #include <ApplicationShutdownPolicy.h>
 #include <AnalysisDiagnosticTrace.h>
 #include <BuildIdentityPolicy.h>
+#include "LocalBuildLabel.h"
 #include <UpdateLauncher.h>
 static UINT vpUpdateExitMessage = RegisterWindowMessageW(L"VideoProcessor.UpdateExit.v1");
 #include <ModernOperatorLayout.h>
@@ -13615,8 +13616,7 @@ BOOL CVideoProcessorDlg::OnInitDialog()
 	EnableDynamicLayout(FALSE);
 
 	CString title;
-	const std::wstring buildIdentity = BuildIdentityPolicy::Format(
-		VERSION_BRANCH, VERSION_COMMIT_SHORT, VERSION_DESCRIBE, VERSION_DIRTY);
+	const std::wstring buildIdentity = LocalBuildLabel::Text();
 	title.Format(_T("VideoProcessor (%s)"), buildIdentity.c_str());
 	SetWindowText(title.GetBuffer());
 
@@ -16677,6 +16677,7 @@ void CVideoProcessorDlg::UpdateStatsOverlay()
 		return;
 
 	StatsData stats;
+	stats.buildLabel = LocalBuildLabel::Text().c_str();
 	stats.cadenceIntervalEstimate = m_cadenceIntervalEstimate.Text().c_str();
 	stats.outputSweep = m_activeOutputSweepStatus;
 	stats.surfaceMode = m_fullScreenVideoWindow &&

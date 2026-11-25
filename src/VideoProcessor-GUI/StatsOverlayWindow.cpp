@@ -517,6 +517,7 @@ std::vector<StatsOverlayLayout::Row> StatsOverlayWindow::BuildStatsRows(const St
         const int end = value.Find(L" | ");
         return end >= 0 ? value.Left(end) : value;
     };
+    if (!stats.buildLabel.IsEmpty()) add(L"Build:", stats.buildLabel);
     add(L"Renderer:", present(stats.rendererName));
     if (!stats.outputSweep.IsEmpty()) add(L"OUTPUT SWEEP:", stats.outputSweep, false);
     const auto resolution = DisplayRasterInfo::ResolutionLines(

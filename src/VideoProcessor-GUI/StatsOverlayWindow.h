@@ -37,6 +37,7 @@ struct StatsData
 	CString pixelFormat;       // e.g., "P010"
 	CString viewport;          // e.g., "cinema (2.35:1)"
 	CString rendererName;      // selected presentation backend
+	CString buildLabel;        // local build only: "<branch> @ <8-character commit>"; empty = no row
 	CString surfaceMode;       // actual presentation host: fullscreen or windowed
 
 	// Frame rate measurement and PPM tracking (NEW)
