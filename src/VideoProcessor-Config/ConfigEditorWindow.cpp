@@ -4017,8 +4017,6 @@ bool ConfigEditorWindow::saveChanges()
     const DocumentSnapshot currentSnapshot = captureDocumentSnapshot(*document_);
     const std::vector<ConfigurationApplyPolicy::Change> changed = changedDocumentValues(
         savedSnapshot_, currentSnapshot);
-    const auto action = ConfigurationApplyPolicy::ClassifyChanges(changed,
-        snapshotUsesDirectShowRenderer(savedSnapshot_));
     // Only a start-up [pattern] key offers the generator's restart; a live
     // chart setting is already saved and sent (PatternLiveKeys.h).
     const bool patternChanged = std::any_of(changed.begin(), changed.end(),
@@ -4027,6 +4025,8 @@ bool ConfigEditorWindow::saveChanges()
     {
         offerSourcePluginRestart(QStringLiteral("pattern"), QStringLiteral("pattern generator"), QString());
     };
+    const auto action = ConfigurationApplyPolicy::ClassifyChanges(changed,
+        snapshotUsesDirectShowRenderer(savedSnapshot_));
     // Persist shortcut spelling in the same canonical form used by the
     // accelerator parser. Case is not a modifier: L and l are both L, while
     // Shift+L is the distinct shifted chord.
@@ -4110,13 +4110,13 @@ bool ConfigEditorWindow::saveChanges()
 		    notice->hide();
 		}
 		updateEffectSummary();
+		if (patternChanged) offerPatternRestart();
 		const QString outcome = applied.status == 0 ?
 			QStringLiteral("Saved on target for next start") :
 			applied.status == 1 ? QStringLiteral("Applied on target") :
 			QStringLiteral("Saved on target; reset or restart requested");
 		setStatus(QStringLiteral("%1: %2.").arg(outcome,
 			QString::fromUtf8(applied.action)));
-		if (patternChanged) offerPatternRestart();
 		return true;
 	}
     // Config is the interactive authority for this file. Save the user's
@@ -4142,6 +4142,7 @@ bool ConfigEditorWindow::saveChanges()
     // after the atomic safe-save has committed the complete validated file.
     // An auto-reset event also makes saves harmless when VP is not running.
     const bool notified = notifyVideoProcessor();
+    if (patternChanged) offerPatternRestart();
     if (!draftedActions.isEmpty())
     {
         if (auto* actions = findChild<QListWidget*>(QStringLiteral("config.actions.items"));
@@ -4177,7 +4178,6 @@ bool ConfigEditorWindow::saveChanges()
             QStringLiteral("Changes saved safely. %1 was requested.").arg(effect) :
             QStringLiteral("Changes saved safely. Takes effect when VideoProcessor next starts."), false);
     }
-    if (patternChanged) offerPatternRestart();
     return true;
 }
 
@@ -12249,11 +12249,11 @@ QWidget* ConfigEditorWindow::createShortcutsPage()
     const ShortcutField captureFields[] = {
         { "Restart renderer", "renderer_restart", "Shift+R" },
         { "Reset renderer", "renderer_reset", "R" },
+        { "Pattern generator input", "capture_pattern", "Ctrl+Alt+T" },
         { "DeckLink input 1", "capture_1", "Ctrl+1" },
         { "DeckLink input 2", "capture_2", "Ctrl+2" },
         { "DeckLink input 3", "capture_3", "Ctrl+3" },
         { "DeckLink input 4", "capture_4", "Ctrl+4" },
-        { "Pattern generator input", "capture_pattern", "Ctrl+Alt+T" },
         { "Video conversion off", "video_conversion_off", "V" },
         { "V210 to P010 conversion", "video_conversion_p010", "Shift+V" }
     };

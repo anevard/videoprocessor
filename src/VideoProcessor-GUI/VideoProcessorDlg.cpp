@@ -586,11 +586,11 @@ const ShortcutDefinition SHORTCUT_DEFINITIONS[] =
 	{ "pq_set",                ID_COMMAND_PQ_SET,                 'P',       FCONTROL | FSHIFT },
 	{ "renderer_restart",      ID_COMMAND_RENDERER_RESTART,       'R',       FSHIFT },
 	{ "renderer_reset",        ID_COMMAND_RENDERER_RESET,         'R',       0 },
+	{ "capture_pattern",       ID_COMMAND_CAPTURE_PATTERN,        'T',       FCONTROL | FALT },
 	{ "capture_1",             ID_COMMAND_CAPTURE_1,              '1',       FCONTROL },
 	{ "capture_2",             ID_COMMAND_CAPTURE_2,              '2',       FCONTROL },
 	{ "capture_3",             ID_COMMAND_CAPTURE_3,              '3',       FCONTROL },
 	{ "capture_4",             ID_COMMAND_CAPTURE_4,              '4',       FCONTROL },
-	{ "capture_pattern",       ID_COMMAND_CAPTURE_PATTERN,        'T',       FCONTROL | FALT },
 	{ "video_conversion_off",  ID_COMMAND_VC_NONE,                'V',       0 },
 	{ "video_conversion_p010", ID_COMMAND_VC_P010,                'V',       FSHIFT },
 	{ "config_editor",         ID_COMMAND_CONFIG_EDITOR,          'S',       FCONTROL | FSHIFT },
@@ -2116,8 +2116,8 @@ BEGIN_MESSAGE_MAP(CVideoProcessorDlg, CDialog)
 	ON_COMMAND_RANGE(ID_COMMAND_DISPLAY_RULE_FIRST, ID_COMMAND_DISPLAY_RULE_LAST, &CVideoProcessorDlg::OnCommandDisplayRule)
 	ON_COMMAND_RANGE(ID_COMMAND_UNIFIED_PROFILE_FIRST, ID_COMMAND_UNIFIED_PROFILE_LAST, &CVideoProcessorDlg::OnCommandDisplayRule)
 	ON_COMMAND_RANGE(ID_COMMAND_RENDERER_SELECT_FIRST, ID_COMMAND_RENDERER_SELECT_LAST, &CVideoProcessorDlg::OnCommandRendererSelect)
-	ON_COMMAND_RANGE(ID_COMMAND_CAPTURE_1, ID_COMMAND_CAPTURE_4, &CVideoProcessorDlg::OnSelectCaptureDevice)
 	ON_COMMAND(ID_COMMAND_CAPTURE_PATTERN, &CVideoProcessorDlg::OnCommandCapturePattern)
+	ON_COMMAND_RANGE(ID_COMMAND_CAPTURE_1, ID_COMMAND_CAPTURE_4, &CVideoProcessorDlg::OnSelectCaptureDevice)
 
 
 
@@ -9188,6 +9188,13 @@ void CVideoProcessorDlg::OnSelectCaptureDevice(UINT nID)
 	SelectCaptureDevice(deviceIndex);
 }
 
+void CVideoProcessorDlg::OnCommandCapturePattern()
+{
+	if (!SelectSourcePluginInput(SourcePluginBackend::PATTERN_SECTION))
+		DebugLog::Log("Pattern generator input key: no source plugin of section [%s] listed",
+			SourcePluginBackend::PATTERN_SECTION);
+}
+
 // Selects a source plugin's input by the cfg section its plugin declares,
 // never by device type (several plugins may be listed, in file-name order)
 // nor by SelectCaptureDevice's regex, which selects entry 0 when nothing
@@ -9208,13 +9215,6 @@ bool CVideoProcessorDlg::SelectSourcePluginInput(const char* sectionUtf8)
 		return true;
 	}
 	return false;
-}
-
-void CVideoProcessorDlg::OnCommandCapturePattern()
-{
-	if (!SelectSourcePluginInput(SourcePluginBackend::PATTERN_SECTION))
-		DebugLog::Log("Pattern generator input key: no source plugin of section [%s] listed",
-			SourcePluginBackend::PATTERN_SECTION);
 }
 
 void CVideoProcessorDlg::SelectCaptureDevice(int n)

@@ -39,8 +39,8 @@ namespace MainConfigSchema
 			section.rfind("lldv.", 0) == 0 ||
 			section == "logging" ||
 			section == "decklink" ||
-			section == "shortcuts" ||
 			section == "pattern" ||
+			section == "shortcuts" ||
 			section == "p010_conversion" ||
 			section == "ppm_correction" ||
 			section == "display_refresh_rate_override" ||

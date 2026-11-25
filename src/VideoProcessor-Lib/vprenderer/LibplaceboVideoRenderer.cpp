@@ -5773,8 +5773,8 @@ struct LibplaceboVideoRenderer::Impl
                 pl_tex_destroy(d3d11->gpu, &subtitleTemporalTexture);
 				pl_tex_destroy(d3d11->gpu, &statsOverlayTexture);
 				pl_tex_destroy(d3d11->gpu, &sweepOverlayTexture);
-				pl_tex_destroy(d3d11->gpu, &profileOverlayTexture);
 				pl_tex_destroy(d3d11->gpu, &rawOutputTexture);
+				pl_tex_destroy(d3d11->gpu, &profileOverlayTexture);
 				for (pl_tex& texture : textures)
 					pl_tex_destroy(d3d11->gpu, &texture);
 			}
