@@ -124,6 +124,18 @@ extern "C" {
                                                        seek, file change or
                                                        format change */
 
+/* vp_source_state.flags (version 4) */
+#define VP_SOURCE_STATE_EXACT_SIGNAL    (1u << 0)   /* the plugin generates
+                                                       this signal and states
+                                                       it exactly (a pattern
+                                                       generator): VP takes
+                                                       it as declared, with
+                                                       no LLDV inference and
+                                                       no Dolby Vision
+                                                       tunnel. A player of
+                                                       decoded files leaves
+                                                       it clear */
+
 /* Log levels for host->log. */
 #define VP_SOURCE_LOG_ERROR   0u
 #define VP_SOURCE_LOG_WARNING 1u
@@ -162,6 +174,7 @@ typedef struct vp_source_state {
                                    and R10L only); 0 = the encoding's own
                                    depth */
     vp_source_hdr10    hdr10;
+    uint32_t flags;             /* VP_SOURCE_STATE_* (version 4) */
 } vp_source_state;
 
 /* One frame lent to VP. VP reads data until it calls release_frame with
