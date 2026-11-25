@@ -20,6 +20,7 @@
 #include "SourcePluginBackend.h"
 #include "SourcePluginCaptureDevice.h"
 #include "SourcePluginHostServices.h"
+#include "SourcePluginStartTiming.h"
 
 #include <cstring>
 
@@ -119,6 +120,7 @@ namespace
 	// or keeps it to itself.
 	const char* const KEYS_NOT_FROM_SECTION[] = {
 		"idle_format",
+		SourcePluginStartTiming::Key,   // the start timing pick, VP's to read (SourcePluginStartTiming.h)
 	};
 
 	bool KeyFromSection(const std::string& key)
@@ -199,11 +201,25 @@ namespace
 		}
 
 		// idle_format: the display VP is fullscreen on, its desktop mode.
-		std::string why;
-		const std::string format = SourcePluginBackend::DesktopModeFormat(why);
+		// The section's "timing" pick, when an Output display profile lists
+		// it, in place of the desktop mode (SourcePluginStartTiming.h).
+		std::string why, pick, note;
+		const std::string desktop = SourcePluginBackend::DesktopModeFormat(why);
+		if (values)
+		{
+			const auto timing = values->find(SourcePluginStartTiming::Key);
+			if (timing != values->end())
+				pick = timing->second;
+		}
+		const std::string format = SourcePluginStartTiming::Choose(pick,
+			SourcePluginStartTiming::AllowedModes(config), desktop, note);
 		if (!format.empty())
 			AppendSetting(line, "idle_format", format);
 		idle = format.empty() ? "none (" + why + ")" : format;
+		if (format != desktop)
+			idle += " (timing " + pick + ", the display's mode " + (desktop.empty() ? "unknown" : desktop) + ")";
+		if (!note.empty())
+			idle += "; " + note + "; the display's mode is used";
 
 		if (line.back() == SETTINGS_SEPARATOR)
 			line.pop_back();
