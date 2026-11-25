@@ -18,6 +18,9 @@ class Engine final : public QIconEngine
 {
 public:
     explicit Engine(int page) : page_(page) {}
+    // The Patterns button sets this icon itself: not a page index, since its
+    // page's place moves with the pages built in beside it.
+    static constexpr int PatternsIcon = 1002;
     QIconEngine* clone() const override { return new Engine(page_); }
     QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override
     {
@@ -108,25 +111,6 @@ public:
             stroke(highlight, .7); painter->drawPath(upper);
             break;
         }
-        case 24: // Patterns: four test bars over a dark band with a white patch.
-        {
-            QPainterPath tile;
-            tile.addRoundedRect(QRectF(2, 2, 16, 16), 1.6, 1.6);
-            // Each part is cut to the tile. A bar runs on to the right edge, so
-            // the next bar overlaps it and no seam shows between them.
-            auto part = [&](const QColor& color, const QRectF& area) {
-                QPainterPath piece;
-                piece.addRect(area);
-                fill(color); painter->drawPath(tile.intersected(piece));
-            };
-            part(light, QRectF(2, 2, 16, 11.5));
-            part(gray, QRectF(6, 2, 12, 11.5));
-            part(cyan, QRectF(10, 2, 8, 11.5));
-            part(shade, QRectF(14, 2, 4, 11.5));
-            part(inset, QRectF(2, 13.5, 16, 4.5));
-            fill(light); painter->drawRect(QRectF(3.6, 14.6, 3.2, 2.3));
-            break;
-        }
         case 14: // Shaders: three shaded diamond layers and a cyan ray.
             fill(shade); polygon({{2.2, 14.5}, {10, 10}, {17.8, 14.5}, {10, 19}});
             fill(gray); polygon({{2.2, 11}, {10, 6.5}, {17.8, 11}, {10, 15.5}});
@@ -179,6 +163,25 @@ public:
             fill(gray); painter->drawEllipse(QPointF(10, 6), 3.7, 3.7);
             fill(cyan); painter->drawEllipse(QPointF(10, 6), 2.5, 2.5);
             break;
+        case PatternsIcon: // Patterns: four test bars over a dark band with a white patch.
+        {
+            QPainterPath tile;
+            tile.addRoundedRect(QRectF(2, 2, 16, 16), 1.6, 1.6);
+            // Each part is cut to the tile. A bar runs on to the right edge, so
+            // the next bar overlaps it and no seam shows between them.
+            auto part = [&](const QColor& color, const QRectF& area) {
+                QPainterPath piece;
+                piece.addRect(area);
+                fill(color); painter->drawPath(tile.intersected(piece));
+            };
+            part(light, QRectF(2, 2, 16, 11.5));
+            part(gray, QRectF(6, 2, 12, 11.5));
+            part(cyan, QRectF(10, 2, 8, 11.5));
+            part(shade, QRectF(14, 2, 4, 11.5));
+            part(inset, QRectF(2, 13.5, 16, 4.5));
+            fill(light); painter->drawRect(QRectF(3.6, 14.6, 3.2, 2.3));
+            break;
+        }
         case 20: // Updates: filled tray and cyan down arrow.
         {
             QPainterPath tray;

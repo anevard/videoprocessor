@@ -29,8 +29,12 @@ namespace SourcePluginBackend
 	// plugin by its section, never by its name.
 	bool IsSourcePluginSection(ACaptureDevice* device, const char* sectionUtf8);
 
+	// The cfg section the pattern generator's plugin declares: VP's pattern
+	// key and Config's Patterns page find it by this.
+	constexpr const char* PATTERN_SECTION = "pattern";
+
 	// True if the device is a source plugin's input asking for its frames
-	// 1:1 (VP_SOURCE_STATE_NATIVE_RASTER, version 6).
+	// 1:1 (VP_SOURCE_STATE_NATIVE_RASTER).
 	bool SourcePluginNativeRaster(ACaptureDevice* device);
 
 	// GUI thread. Sends one command line (e.g. "pause") to the device's

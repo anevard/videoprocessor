@@ -305,7 +305,8 @@ SourcePluginCaptureDevice::SourcePluginCaptureDevice(
 	m_host.context = this;
 	m_host.plugin_dir = m_pluginDirUtf8.c_str();
 	m_host.log = &SourcePluginCaptureDevice::HostLog;
-	// Version 6: always filled; a plugin reads them only when it answered 6.
+	// The pattern generator's host calls: always filled; a plugin calls them
+	// only when struct_size covers them.
 	m_host.readback = &SourcePluginCaptureDevice::HostReadback;
 	m_host.wait_presented = &SourcePluginCaptureDevice::HostWaitPresented;
 	m_host.select_profile = &SourcePluginCaptureDevice::HostSelectProfile;
@@ -665,16 +666,15 @@ void SourcePluginCaptureDevice::SendVideoState()
 		videoState->videoFrameEncoding = encoding;
 		videoState->eotf = eotf;
 		videoState->colorspace = colorspace;
-		// A plugin older than version 4 has no flags; VP zeroed the field.
-		videoState->exactSignal = m_api->abi_version >= 4 &&
-			(state.flags & VP_SOURCE_STATE_EXACT_SIGNAL) != 0;
+		// A plugin that does not fill the flags leaves them as VP zeroed them.
+		videoState->exactSignal = (state.flags & VP_SOURCE_STATE_EXACT_SIGNAL) != 0;
 		// Raw output only with the exact-signal flag, carrying the source's
 		// own depth; the renderer refuses (black) what it cannot copy.
-		videoState->rawOutputBits = m_api->abi_version >= 5 && videoState->exactSignal &&
+		videoState->rawOutputBits = videoState->exactSignal &&
 			(state.flags & VP_SOURCE_STATE_RAW_OUTPUT) != 0 ? bitDepth : 0;
-		// Shown 1:1 (version 6): the main window reads it with this state.
-		m_nativeRaster.store(m_api->abi_version >= 6 &&
-			(state.flags & VP_SOURCE_STATE_NATIVE_RASTER) != 0, std::memory_order_release);
+		// Shown 1:1: the main window reads it with this state.
+		m_nativeRaster.store((state.flags & VP_SOURCE_STATE_NATIVE_RASTER) != 0,
+			std::memory_order_release);
 
 		if (state.hdr10.has_mastering)
 		{
@@ -833,7 +833,7 @@ void SourcePluginCaptureDevice::HostLog(void* context, uint32_t level, const cha
 }
 
 
-// Version 6 host calls: forwarded to VP's main window
+// The pattern generator's host calls: forwarded to VP's main window
 // (SourcePluginHostServices.h); unsupported before it registers.
 int32_t SourcePluginCaptureDevice::HostReadback(void*, uint64_t sourceFrame,
 	const vp_source_rect* rect, uint32_t flags, uint32_t timeoutMs, vp_source_readback* out)

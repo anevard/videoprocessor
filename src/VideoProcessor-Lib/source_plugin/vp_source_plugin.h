@@ -37,10 +37,10 @@
  *     create and destroy. VP may hold several frames at once and release
  *     them in any order, after stop has returned.
  *   - host->log: the plugin may call it from any thread.
- *   - host->readback, wait_presented, select_profile, get_profile (version
- *     6): the plugin's own threads only, never VP's GUI thread or its
- *     reader (never from send_command or wait_frame): each blocks until VP
- *     has done it, and VP's GUI thread or reader is what does it.
+ *   - host->readback, wait_presented, select_profile, get_profile: the
+ *     plugin's own threads only, never VP's GUI thread or its reader (never
+ *     from send_command or wait_frame): each blocks until VP has done it,
+ *     and VP's GUI thread or reader is what does it.
  *
  * Timing: the plugin is the input's clock, as a capture card is. Every
  * frame timestamp is on that clock, in clock_ticks_per_second ticks.
@@ -93,8 +93,8 @@ extern "C" {
 #define VP_SOURCE_ERROR_ARGUMENT   -2
 #define VP_SOURCE_ERROR_STATE      -3   /* e.g. wait_frame before start */
 #define VP_SOURCE_ERROR_UNSUPPORTED -4
-#define VP_SOURCE_ERROR_TIMEOUT     -5  /* version 6: a host call's wait ran
-                                           out; nothing was done */
+#define VP_SOURCE_ERROR_TIMEOUT     -5  /* a host call's wait ran out;
+                                           nothing was done */
 
 /* wait_frame outcomes (non-negative). */
 #define VP_SOURCE_WAIT_FRAME          0   /* *frame filled; release it later */
@@ -130,7 +130,7 @@ extern "C" {
                                                        seek, file change or
                                                        format change */
 
-/* vp_source_state.flags (version 4) */
+/* vp_source_state.flags */
 #define VP_SOURCE_STATE_EXACT_SIGNAL    (1u << 0)   /* the plugin generates
                                                        this signal and states
                                                        it exactly (a pattern
@@ -141,9 +141,9 @@ extern "C" {
                                                        tunnel. A player of
                                                        decoded files leaves
                                                        it clear */
-#define VP_SOURCE_STATE_RAW_OUTPUT      (1u << 1)   /* version 5, with
-                                                       EXACT_SIGNAL only: VP
-                                                       writes the frame's
+#define VP_SOURCE_STATE_RAW_OUTPUT      (1u << 1)   /* with EXACT_SIGNAL
+                                                       only: VP writes the
+                                                       frame's
                                                        codes to its output
                                                        unprocessed (no
                                                        libplacebo pass, no
@@ -151,8 +151,8 @@ extern "C" {
                                                        when it cannot (R10L
                                                        at the output's size,
                                                        limited range) */
-#define VP_SOURCE_STATE_NATIVE_RASTER   (1u << 2)   /* version 6: show the
-                                                       frames 1:1, pixel for
+#define VP_SOURCE_STATE_NATIVE_RASTER   (1u << 2)   /* show the frames
+                                                       1:1, pixel for
                                                        pixel: VP sets its
                                                        Screen and Zoom
                                                        profiles aside (no
@@ -198,8 +198,8 @@ typedef struct vp_source_state {
                                    and R10L only); 0 = the encoding's own
                                    depth */
     vp_source_hdr10    hdr10;
-    uint32_t flags;             /* VP_SOURCE_STATE_* (version 4; RAW_OUTPUT
-                                   version 5; NATIVE_RASTER version 6) */
+    uint32_t flags;             /* VP_SOURCE_STATE_*; filled only when
+                                   struct_size covers it */
 } vp_source_state;
 
 /* One frame lent to VP. VP reads data until it calls release_frame with
@@ -216,13 +216,13 @@ typedef struct vp_source_frame {
     void*       handle;         /* opaque, for release_frame */
 } vp_source_frame;
 
-/* A rectangle of VP's output, in output pixels, top-left origin (version 6). */
+/* A rectangle of VP's output, in output pixels, top-left origin. */
 typedef struct vp_source_rect {
     uint32_t x, y;
     uint32_t width, height;
 } vp_source_rect;
 
-/* host->readback flags (version 6). */
+/* host->readback flags. */
 #define VP_SOURCE_READBACK_PNG  (1u << 0)   /* also write VP's whole-frame
                                                capture of the same frame (as
                                                Ctrl+Alt+S does); its path is
@@ -266,9 +266,9 @@ typedef struct vp_source_presented {
 } vp_source_presented;
 
 /* Services VP offers the plugin. Valid from create until destroy returns.
- * The version 6 functions are there only when abi_version >= 6 and
- * struct_size covers them; each answers VP_SOURCE_ERROR_UNSUPPORTED when
- * VP's renderer cannot do it. See Threads at the top. */
+ * The functions after log are there only when struct_size covers them;
+ * each answers VP_SOURCE_ERROR_UNSUPPORTED when VP's renderer cannot do
+ * it. See Threads at the top. */
 typedef struct vp_source_host {
     uint32_t abi_version;       /* the version this plugin answered */
     uint32_t struct_size;       /* sizeof(vp_source_host), set by VP */
@@ -276,7 +276,7 @@ typedef struct vp_source_host {
     const char* plugin_dir;     /* UTF-8; the folder holding the plugin DLL */
     void (*log)(void* context, uint32_t level, const char* message_utf8);
 
-    /* Version 6. Waits until VP has rendered a frame of this input whose
+    /* Waits until VP has rendered a frame of this input whose
      * counter is source_frame or later, reads rect of its output and
      * returns its statistics in *out. A rect outside the output:
      * VP_SOURCE_ERROR_ARGUMENT. One readback at a time per VP:
@@ -284,12 +284,12 @@ typedef struct vp_source_host {
     int32_t (*readback)(void* context, uint64_t source_frame,
                         const vp_source_rect* rect, uint32_t flags,
                         uint32_t timeout_ms, vp_source_readback* out);
-    /* Version 6. Waits until VP has presented a frame of this input whose
+    /* Waits until VP has presented a frame of this input whose
      * counter is source_frame or later, in a present made after this call
      * began, and returns that present in *out. */
     int32_t (*wait_presented)(void* context, uint64_t source_frame,
                               uint32_t timeout_ms, vp_source_presented* out);
-    /* Version 6. Selects profile in profile group group (as named in VP's
+    /* Selects profile in profile group group (as named in VP's
      * configuration), as a keypress would, but never saved; VP applies it
      * before returning. profile NULL releases every pick this plugin made:
      * each group goes back to exactly what it had before the first one.
@@ -297,7 +297,7 @@ typedef struct vp_source_host {
      * profile_update_mode never); a refused pick releases every pick made. */
     int32_t (*select_profile)(void* context, const char* group_utf8,
                               const char* profile_utf8);
-    /* Version 6. The profiles in force in group, comma separated, into
+    /* The profiles in force in group, comma separated, into
      * buffer (size bytes, NUL included); VP_SOURCE_ERROR_ARGUMENT when the
      * group is unknown or the buffer too small. */
     int32_t (*get_profile)(void* context, const char* group_utf8,

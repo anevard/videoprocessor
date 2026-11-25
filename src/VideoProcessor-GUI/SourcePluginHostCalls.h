@@ -1,6 +1,6 @@
 #pragma once
 
-// VP's main window's side of a source plugin's version 6 host calls
+// VP's main window's side of a source plugin's host calls
 // (vp_source_plugin.h, SourcePluginHostServices.h). Readback and present
 // waits go straight to the renderer DLL (LibplaceboPluginVideoRenderer); the
 // profile calls belong to the main window's profile runtime, so each is

@@ -79,7 +79,7 @@ using VideoProcessorLibplaceboGetHdrStatusFn = bool (__cdecl *)(
 	RendererHdrStatus* status);
 
 // Optional, outside the API version, as the HDR status: a source plugin's
-// readback and present waits (source plugin interface version 6). Plain C
+// readback and present waits (vp_source_plugin.h's host calls). Plain C
 // structs with their own struct_size; no renderer pointer, so they serve
 // whichever renderer the DLL runs. A plugin's thread blocks in them.
 struct vp_source_rect;

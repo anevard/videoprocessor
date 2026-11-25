@@ -633,10 +633,10 @@ protected:
 	bool m_patgenLowLatency = false;          // the box is on (only while the generator is the input)
 	bool m_patgenLowLatencyQueue = false;     // the queue VP last applied is PATGEN's
 	std::string m_patgenLowLatencyLogged;     // the copy vp.log last described
-	// A source plugin asks for its frames 1:1 (VP_SOURCE_STATE_NATIVE_RASTER,
-	// version 6): set aside the same way, any plugin, no switch of VP's.
+	// A source plugin asks for its frames 1:1 (VP_SOURCE_STATE_NATIVE_RASTER):
+	// set aside the same way, any plugin, no switch of VP's.
 	bool m_sourceNativeRaster = false;
-	// A source plugin's version 6 host calls (SourcePluginHostCalls.h).
+	// A source plugin's host calls (SourcePluginHostCalls.h).
 	SourcePluginHostCalls m_sourcePluginHostCalls;
 	void RunSourcePluginHostJob(SourcePluginHostCalls::Job& job);
 

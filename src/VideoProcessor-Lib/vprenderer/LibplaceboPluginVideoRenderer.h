@@ -14,8 +14,8 @@ class LibplaceboPluginVideoRenderer final : public IVideoRenderer
 public:
 	static bool IsAvailable(bool beta = false);
 
-	// A source plugin's readback and present waits (vp_source_plugin.h
-	// version 6), served by the DLL whose renderer was created last; any
+	// A source plugin's readback and present waits (vp_source_plugin.h),
+	// served by the DLL whose renderer was created last; any
 	// thread, blocking. VP_SOURCE_ERROR_UNSUPPORTED before any renderer, or
 	// when that DLL has no such export.
 	static int32_t SourceReadback(uint64_t sourceFrame, const vp_source_rect& rect,

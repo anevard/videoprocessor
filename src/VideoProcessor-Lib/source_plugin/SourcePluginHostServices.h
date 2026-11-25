@@ -1,6 +1,6 @@
 #pragma once
 
-// What a source plugin's version 6 host calls reach (vp_source_plugin.h:
+// What a source plugin's host calls reach (vp_source_plugin.h:
 // readback, wait_presented, select_profile, get_profile). VP's main window
 // owns the renderer and the profiles, so it implements them and registers
 // itself here for its life; the plugin adapter (SourcePluginCaptureDevice)

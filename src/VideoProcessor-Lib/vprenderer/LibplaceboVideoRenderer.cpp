@@ -6395,7 +6395,7 @@ struct LibplaceboVideoRenderer::Impl
 		return true;
 	}
 
-	// A source plugin's readback (vp_source_plugin.h version 6,
+	// A source plugin's readback (vp_source_plugin.h's host calls,
 	// SourceReadbackBroker.h): only rect of the backbuffer is copied, into a
 	// rect-sized staging texture, and only its statistics leave.
 	int32_t ReadSourceRect(ID3D11Texture2D* authoritativeBackbuffer,

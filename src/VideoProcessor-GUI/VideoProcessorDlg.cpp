@@ -3058,7 +3058,7 @@ LRESULT CVideoProcessorDlg::OnConfigurationRpcRequest(WPARAM id, LPARAM)
 	return 0;
 }
 
-// A source plugin's profile call (vp_source_plugin.h version 6), posted from
+// A source plugin's profile call (vp_source_plugin.h's host calls), posted from
 // its thread by SourcePluginHostCalls.
 LRESULT CVideoProcessorDlg::OnSourcePluginHostCall(WPARAM id, LPARAM)
 {
@@ -3286,8 +3286,8 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 			{
 				if (command == PatgenLowLatency::StateCommand && !m_patgenLowLatency)
 					return ConfigurationRpcError(operation, PatgenLowLatency::Off);
-				if (lowLatency && !SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
-					SourcePluginBackend::PATTERN_PLUGIN_NAME))
+				if (lowLatency && !SourcePluginBackend::IsSourcePluginSection(m_captureDevice,
+					SourcePluginBackend::PATTERN_SECTION))
 					return ConfigurationRpcError(operation, PatgenLiveSave::NotActiveInput);
 				if (command != PatgenLowLatency::StateCommand)
 					UpdatePatgenLowLatency(lowLatency, lowLatency ? "switch on" : "switch off");
@@ -3297,8 +3297,8 @@ ConfigurationRpcProtocol::Frame CVideoProcessorDlg::HandleConfigurationRpc(
 				response.operation = static_cast<uint16_t>(operation | ResponseFlag);
 				return response;
 			}
-			if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice,
-				SourcePluginBackend::PATTERN_PLUGIN_NAME))
+			if (!SourcePluginBackend::IsSourcePluginSection(m_captureDevice,
+				SourcePluginBackend::PATTERN_SECTION))
 				return ConfigurationRpcError(operation, PatgenLiveSave::NotActiveInput);
 			int32_t result = 0;
 			SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command.c_str(), &result);
@@ -6431,7 +6431,7 @@ LRESULT CVideoProcessorDlg::OnMessageCaptureDeviceVideoStateChange(WPARAM wParam
 		IsNewLldvModeSelected();
 
 	m_captureDeviceVideoState = videoState;
-	// A source plugin's 1:1 request (version 6) changed with this state:
+	// A source plugin's 1:1 request (VP_SOURCE_STATE_NATIVE_RASTER) changed with this state:
 	// applied after this state is (OnSourceNativeRaster).
 	if ((videoState->valid && SourcePluginBackend::SourcePluginNativeRaster(m_captureDevice)) !=
 		m_sourceNativeRaster)
@@ -8963,8 +8963,8 @@ void CVideoProcessorDlg::UpdateState()
 
 			// No other input inherits the "Low latency" box, whatever path
 			// led here (PatgenLowLatency.h).
-			if (m_patgenLowLatency && !SourcePluginBackend::IsSourcePluginNamed(
-				m_captureDevice, SourcePluginBackend::PATTERN_PLUGIN_NAME))
+			if (m_patgenLowLatency && !SourcePluginBackend::IsSourcePluginSection(
+				m_captureDevice, SourcePluginBackend::PATTERN_SECTION))
 			{
 				DebugLog::Log("PATGEN low latency: off, another input; the next renderer starts with the user's settings");
 				m_patgenLowLatency = PatgenLowLatency::After(m_patgenLowLatency,
@@ -9212,9 +9212,9 @@ bool CVideoProcessorDlg::SelectSourcePluginInput(const char* sectionUtf8)
 
 void CVideoProcessorDlg::OnCommandCapturePattern()
 {
-	if (!SelectSourcePluginInput(SourcePluginBackend::PATTERN_PLUGIN_NAME))
-		DebugLog::Log("Pattern generator input key: no %s input listed",
-			SourcePluginBackend::PATTERN_PLUGIN_NAME);
+	if (!SelectSourcePluginInput(SourcePluginBackend::PATTERN_SECTION))
+		DebugLog::Log("Pattern generator input key: no source plugin of section [%s] listed",
+			SourcePluginBackend::PATTERN_SECTION);
 }
 
 void CVideoProcessorDlg::SelectCaptureDevice(int n)
@@ -14292,7 +14292,7 @@ BOOL CVideoProcessorDlg::OnInitDialog()
 		const ConfigurationRpcServer::DiscoveryInfo info{
 			identity.str(), ConfigurationRpcUtf8(std::wstring(computerName,
 				computerNameLength)), ConfigurationRpcUtf8(VERSION_DESCRIBE) };
-		// A source plugin's version 6 host calls (SourcePluginHostCalls.h).
+		// A source plugin's host calls (SourcePluginHostCalls.h).
 		m_sourcePluginHostCalls.Start(GetSafeHwnd(), WM_MESSAGE_SOURCE_PLUGIN_HOST_CALL);
 		SourcePluginHostServices::Set(&m_sourcePluginHostCalls);
 		std::string rpcError;
@@ -16223,7 +16223,7 @@ void CVideoProcessorDlg::PollAspectRatioOsd()
 void CVideoProcessorDlg::UpdatePatgenNoCrop(const char* reason)
 {
 	const bool generator =
-		SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, SourcePluginBackend::PATTERN_PLUGIN_NAME);
+		SourcePluginBackend::IsSourcePluginSection(m_captureDevice, SourcePluginBackend::PATTERN_SECTION);
 	const bool on = generator && m_patgenExactCropWanted && !m_patgenCropRatio.empty();
 	const std::string ratio = on ? m_patgenCropRatio : std::string();
 	const bool oneToOne = (generator && m_patgenOneToOneChart) || m_sourceNativeRaster;
@@ -16328,7 +16328,7 @@ std::shared_ptr<const UnifiedProfileRuntime::Snapshot> CVideoProcessorDlg::Patge
 void CVideoProcessorDlg::UpdatePatgenSdrGamma()
 {
 	const bool active = m_captureDeviceState == CaptureDeviceState::CAPTUREDEVICESTATE_CAPTURING &&
-		SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, SourcePluginBackend::PATTERN_PLUGIN_NAME);
+		SourcePluginBackend::IsSourcePluginSection(m_captureDevice, SourcePluginBackend::PATTERN_SECTION);
 	if (!active)
 	{
 		m_patgenGammaRun = false;

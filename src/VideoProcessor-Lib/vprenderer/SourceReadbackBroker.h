@@ -1,7 +1,7 @@
 #pragma once
 
-// A source plugin's readback and present waits (source plugin interface
-// version 6, vp_source_plugin.h): the plugin's thread asks, the render
+// A source plugin's readback and present waits (vp_source_plugin.h's host
+// calls): the plugin's thread asks, the render
 // thread answers. One broker per renderer DLL, shared by every renderer it
 // creates, so a wait outlives a renderer restart and needs no renderer
 // pointer. The renderer DLL exports it (LibplaceboRendererPluginApi.h); the

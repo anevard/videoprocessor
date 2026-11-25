@@ -56,8 +56,8 @@ public:
 	const std::string& NameUtf8() const { return m_nameUtf8; }
 	const std::string& SectionUtf8() const { return m_sectionUtf8; }
 
-	// The plugin asks for its frames 1:1 (VP_SOURCE_STATE_NATIVE_RASTER,
-	// version 6), as of its last video state.
+	// The plugin asks for its frames 1:1 (VP_SOURCE_STATE_NATIVE_RASTER), as
+	// of its last video state.
 	bool NativeRaster() const { return m_nativeRaster.load(std::memory_order_acquire); }
 
 	// ACaptureDevice
