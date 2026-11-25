@@ -10666,6 +10666,102 @@ QWidget* ConfigEditorWindow::createLogsPage()
         QStringLiteral("Control VideoProcessor log files and diagnostic detail."), content);
 }
 
+namespace
+{
+    // A card whose title opens and closes it, styled as the renderer pages'
+    // sections. Starts as open says each time; nothing is remembered.
+    QWidget* collapsibleCard(const QString& title, const QString& description, QWidget* content,
+        bool open, QToolButton** toggleOut = nullptr)
+    {
+        auto* card = new QFrame;
+        card->setProperty("card", true);
+        auto* layout = new QVBoxLayout(card);
+        layout->setContentsMargins(kCardPadding, kCardPadding, kCardPadding, kCardPadding);
+        layout->setSpacing(6);
+        auto* toggle = new QToolButton;
+        toggle->setText(title);
+        toggle->setProperty("profileSection", true);
+        toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        toggle->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
+        toggle->setCheckable(true);
+        toggle->setChecked(open);
+        toggle->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        toggle->setAccessibleDescription(QStringLiteral("Expand or collapse %1.").arg(title));
+        layout->addWidget(toggle);
+        auto* body = new QWidget;
+        auto* bodyLayout = new QVBoxLayout(body);
+        bodyLayout->setContentsMargins(0, 4, 0, 0);
+        bodyLayout->setSpacing(6);
+        if (!description.isEmpty()) bodyLayout->addWidget(helpLabel(description));
+        bodyLayout->addWidget(content);
+        for (auto* form : content->findChildren<QFormLayout*>())
+            form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        layout->addWidget(body);
+        // body has its parent now, so showing it never makes a top-level window.
+        body->setVisible(open);
+        QObject::connect(toggle, &QToolButton::toggled, body, [toggle, body](bool opened)
+        {
+            body->setVisible(opened);
+            toggle->setArrowType(opened ? Qt::DownArrow : Qt::RightArrow);
+        });
+        if (toggleOut) *toggleOut = toggle;
+        return card;
+    }
+
+}
+void ConfigEditorWindow::runTargetAction(const QString& action, std::function<void(bool, const QString&)> done)
+{
+    const QString host = remoteClient_ ? remoteHost_ : QStringLiteral("127.0.0.1");
+    const quint16 port = remoteClient_ ? remotePort_ : 41686;
+    struct Result { bool success = false; std::string error; };
+    const auto result = std::make_shared<Result>();
+    const std::string name = action.toLocal8Bit().toStdString();
+    QThread* worker = QThread::create([result, host, port, name]
+    {
+        ConfigurationRpcClient client(host.toStdString(), port);
+        result->success = client.RunAction(name, result->error);
+    });
+    worker->setParent(this);
+    connect(worker, &QThread::finished, this, [worker, result, done]
+    {
+        worker->deleteLater();
+        done(result->success, QString::fromUtf8(result->error));
+    });
+    worker->start();
+}
+
+
+void ConfigEditorWindow::offerSourcePluginRestart(const QString& section, const QString& title,
+    const QString& warning)
+{
+    if (noTarget_ || testMode_) return;
+    const QString heading = title.left(1).toUpper() + title.mid(1);
+    runTargetAction(section + QStringLiteral(".active"), [this, section, title, heading, warning](bool active, const QString&)
+    {
+        // Not the active input: the saved settings are used at its next start.
+        if (!active) return;
+        QMessageBox box(QMessageBox::Question, QStringLiteral("%1 settings saved").arg(heading),
+            QStringLiteral("Restart the %1 now to use them?%2").arg(title,
+                warning.isEmpty() ? QString() : QStringLiteral(" ") + warning),
+            QMessageBox::NoButton, this);
+        QPushButton* restart = box.addButton(QStringLiteral("Restart now"), QMessageBox::AcceptRole);
+        box.addButton(QStringLiteral("Settings applied at next start"), QMessageBox::RejectRole);
+        box.setDefaultButton(restart);
+        box.exec();
+        if (box.clickedButton() != restart)
+        {
+            setStatus(QStringLiteral("%1 settings saved; applied at the %2's next start.").arg(heading, title));
+            return;
+        }
+        setStatus(QStringLiteral("Restarting the %1...").arg(title));
+        runTargetAction(section + QStringLiteral(".restart"), [this, title, heading](bool restarted, const QString& error)
+        {
+            setStatus(restarted ? QStringLiteral("The %1 is restarting with the new settings.").arg(title) :
+                QStringLiteral("The %1 could not be restarted: %2").arg(title, error), !restarted);
+        });
+    });
+}
+
 QWidget* ConfigEditorWindow::createShortcutsPage()
 {
     struct ShortcutField
