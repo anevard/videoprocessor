@@ -454,7 +454,8 @@ namespace SourcePluginBackend
 			line += keys[i].name + '=' + ChordText(keys[i].accelerator);
 		}
 		PlayerKeysLine() = line;
-		SendSourcePluginCommand(activeDevice, line.c_str());
+		if (IsSourcePluginSection(activeDevice, PLAYER_SECTION))
+			SendSourcePluginCommand(activeDevice, line.c_str());
 	}
 
 	const std::string& PlayerKeysCommand()

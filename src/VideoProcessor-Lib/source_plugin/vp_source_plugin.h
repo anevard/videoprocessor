@@ -206,6 +206,7 @@ typedef struct vp_source_frame {
     int64_t     timestamp;      /* plugin clock ticks: when this frame is
                                    due on screen */
     void*       handle;         /* opaque, for release_frame */
+    /* The cues, filled only when struct_size covers them (Cues at the top). */
     vp_source_cue subtitle;     /* the subtitle track's image */
     vp_source_cue message;      /* a short on-screen message */
 } vp_source_frame;

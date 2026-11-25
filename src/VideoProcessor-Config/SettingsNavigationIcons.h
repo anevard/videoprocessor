@@ -17,6 +17,9 @@ namespace SettingsNavigationIcons
 class Engine final : public QIconEngine
 {
 public:
+    // The Player's button sets this icon itself: not a page index, since its
+    // page's place moves with the pages built in beside it.
+    static constexpr int PlayerIcon = 1001;
     explicit Engine(int page) : page_(page) {}
     QIconEngine* clone() const override { return new Engine(page_); }
     QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override
@@ -79,6 +82,18 @@ public:
             fill(cyan); painter->drawEllipse(QPointF(10, 10), 2.1, 2.1);
             break;
         }
+        case PlayerIcon: // Player: filled remote, cyan ring around its OK key, four pale keys.
+            shaded(light, shade, 1.5, 18.5);
+            painter->drawRoundedRect(QRectF(5.5, 1.5, 9, 17), 2.2, 2.2);
+            fill(inset); painter->drawEllipse(QPointF(10, 6.6), 3.1, 3.1);
+            stroke(cyan, 1.4); painter->drawEllipse(QPointF(10, 6.6), 2.05, 2.05);
+            fill(light); painter->drawEllipse(QPointF(10, 6.6), .9, .9);
+            fill(inset); painter->drawRoundedRect(QRectF(7.1, 10.6, 5.8, 6.2), .5, .5);
+            fill(light);
+            for (qreal x : {7.9, 10.6})
+                for (qreal y : {11.4, 14.3})
+                    painter->drawRoundedRect(QRectF(x, y, 1.5, 1.7), .3, .3);
+            break;
         case 22: // Display: substantial monitor frame and cyan screen corner.
             shaded(light, shade, 3, 17);
             painter->drawRoundedRect(QRectF(2, 3, 16, 12), 1.3, 1.3);
@@ -108,18 +123,6 @@ public:
             stroke(highlight, .7); painter->drawPath(upper);
             break;
         }
-        case 23: // Player: filled remote, cyan ring around its OK key, four pale keys.
-            shaded(light, shade, 1.5, 18.5);
-            painter->drawRoundedRect(QRectF(5.5, 1.5, 9, 17), 2.2, 2.2);
-            fill(inset); painter->drawEllipse(QPointF(10, 6.6), 3.1, 3.1);
-            stroke(cyan, 1.4); painter->drawEllipse(QPointF(10, 6.6), 2.05, 2.05);
-            fill(light); painter->drawEllipse(QPointF(10, 6.6), .9, .9);
-            fill(inset); painter->drawRoundedRect(QRectF(7.1, 10.6, 5.8, 6.2), .5, .5);
-            fill(light);
-            for (qreal x : {7.9, 10.6})
-                for (qreal y : {11.4, 14.3})
-                    painter->drawRoundedRect(QRectF(x, y, 1.5, 1.7), .3, .3);
-            break;
         case 14: // Shaders: three shaded diamond layers and a cyan ray.
             fill(shade); polygon({{2.2, 14.5}, {10, 10}, {17.8, 14.5}, {10, 19}});
             fill(gray); polygon({{2.2, 11}, {10, 6.5}, {17.8, 11}, {10, 15.5}});

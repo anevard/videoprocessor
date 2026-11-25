@@ -8962,7 +8962,7 @@ bool CVideoProcessorDlg::SelectSourcePluginInput(const char* sectionUtf8)
 
 void CVideoProcessorDlg::OnCommandCapturePlayer()
 {
-	if (!SelectSourcePluginInput(SourcePluginBackend::PLAYER_PLUGIN_NAME))
+	if (!SelectSourcePluginInput(SourcePluginBackend::PLAYER_SECTION))
 		DebugLog::Log("Player input key: no Player input listed");
 }
 
@@ -8979,7 +8979,7 @@ void CVideoProcessorDlg::OnCommandPlayerTransport(UINT nID)
 		"one command per Player transport key");
 	const char* command = commands[nID - ID_COMMAND_PLAYER_PLAY_PAUSE];
 
-	if (!SourcePluginBackend::IsSourcePluginNamed(m_captureDevice, SourcePluginBackend::PLAYER_PLUGIN_NAME) ||
+	if (!SourcePluginBackend::IsSourcePluginSection(m_captureDevice, SourcePluginBackend::PLAYER_SECTION) ||
 		!SourcePluginBackend::SendSourcePluginCommand(m_captureDevice, command))
 		DebugLog::Log("Player key ignored: %s: the Player is not the active input", command);
 }

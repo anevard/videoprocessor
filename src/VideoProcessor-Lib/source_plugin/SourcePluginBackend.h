@@ -36,9 +36,13 @@ namespace SourcePluginBackend
 	bool SendSourcePluginCommand(ACaptureDevice* device, const char* commandUtf8,
 		int32_t* result = nullptr);
 
+	// The cfg section the Player's plugin declares: VP's Player keys and
+	// Config's Player page find it by this.
+	constexpr const char* PLAYER_SECTION = "player";
+
 	// GUI thread. VP's Player shortcuts as configured, for the plugin's own
 	// remote page (accelerator.key 0 = cleared). Kept, sent to the active
-	// device if it is a source plugin, and sent again at every capture start.
+	// device if it is the Player, and sent again at every Player start.
 	struct PlayerKey
 	{
 		std::string name;     // [shortcuts] key, e.g. "player_play_pause"

@@ -4303,7 +4303,6 @@ QWidget* ConfigEditorWindow::createShell()
         QStringLiteral("Configure smooth motion and field-aware deinterlacing. Changes apply after renderer restart."),
         QStringLiteral("vprenderer.motion")));
     const int displayPageIndex = pages_->addWidget(createDisplayPage());
-    const int playerPageIndex = pages_->addWidget(createPlayerPage());
     auto* navGroup = new QButtonGroup(root);
     navGroup->setExclusive(true);
     const auto addLeaf = [this, navLayout, navGroup](const QString& title, int page)
@@ -4315,10 +4314,13 @@ QWidget* ConfigEditorWindow::createShell()
         return button;
     };
     addLeaf(QStringLiteral("General"), 0);
+    // The Player's page, added where its row goes, so it needs no place among
+    // the other pages; its icon is its own, never its page's index.
+    addLeaf(QStringLiteral("Player"), pages_->addWidget(createPlayerPage()))
+        ->setIcon(SettingsNavigationIcons::create(SettingsNavigationIcons::Engine::PlayerIcon));
     addLeaf(QStringLiteral("Display"), displayPageIndex);
     addLeaf(QStringLiteral("Queue"), 1);
     addLeaf(QStringLiteral("DV"), 5);
-    addLeaf(QStringLiteral("Player"), playerPageIndex);
     QPushButton* shadersNavigation = addLeaf(QStringLiteral("Shaders"), 14);
     addLeaf(QStringLiteral("Actions"), 7);
     QPushButton* shortcutsNavigation = addLeaf(QStringLiteral("Shortcuts"), 15);

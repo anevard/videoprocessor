@@ -115,6 +115,7 @@ namespace
 	// Keys never sent from the plugin's section: VP writes each one itself,
 	// or keeps it to itself.
 	const char* const KEYS_NOT_FROM_SECTION[] = {
+		"log_dir", "log_retention",   // the Player's: VP's logs folder and its [logging] count
 		"idle_format",
 	};
 
@@ -231,7 +232,7 @@ namespace
 		constexpr float defaultNits = 50.0f;
 		ConfigFile config;
 		std::string value;
-		if (!config.Load() || !config.TryGetString(PLAYER_SECTION, "sub_nits", value))
+		if (!config.Load() || !config.TryGetString(SourcePluginBackend::PLAYER_SECTION, "sub_nits", value))
 			return defaultNits;
 		char* end = nullptr;
 		const double nits = strtod(value.c_str(), &end);
@@ -456,9 +457,9 @@ void SourcePluginCaptureDevice::StartCapture(CaptureRunToken captureRunToken)
 		return;
 	}
 
-	// VP's Player shortcuts for the plugin's remote page.
+	// VP's Player shortcuts for the Player's remote page.
 	const std::string& keys = SourcePluginBackend::PlayerKeysCommand();
-	if (!keys.empty())
+	if (!keys.empty() && m_sectionUtf8 == SourcePluginBackend::PLAYER_SECTION)
 		SendCommand(keys.c_str());
 
 	m_readerThread = std::thread(&SourcePluginCaptureDevice::ReaderLoop, this);
