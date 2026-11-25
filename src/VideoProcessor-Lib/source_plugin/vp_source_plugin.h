@@ -135,6 +135,16 @@ extern "C" {
                                                        tunnel. A player of
                                                        decoded files leaves
                                                        it clear */
+#define VP_SOURCE_STATE_RAW_OUTPUT      (1u << 1)   /* version 5, with
+                                                       EXACT_SIGNAL only: VP
+                                                       writes the frame's
+                                                       codes to its output
+                                                       unprocessed (no
+                                                       libplacebo pass, no
+                                                       overlays), or black
+                                                       when it cannot (R10L
+                                                       at the output's size,
+                                                       limited range) */
 
 /* Log levels for host->log. */
 #define VP_SOURCE_LOG_ERROR   0u
@@ -174,7 +184,8 @@ typedef struct vp_source_state {
                                    and R10L only); 0 = the encoding's own
                                    depth */
     vp_source_hdr10    hdr10;
-    uint32_t flags;             /* VP_SOURCE_STATE_* (version 4) */
+    uint32_t flags;             /* VP_SOURCE_STATE_* (version 4; RAW_OUTPUT
+                                   version 5) */
 } vp_source_state;
 
 /* One frame lent to VP. VP reads data until it calls release_frame with

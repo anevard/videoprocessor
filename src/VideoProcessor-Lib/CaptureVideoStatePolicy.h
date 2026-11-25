@@ -48,6 +48,7 @@ inline bool HasSameMaterialCaptureContract(
 		return false;
 	}
 	return previous.videoFrameEncoding == current.videoFrameEncoding &&
+		previous.rawOutputBits == current.rawOutputBits &&
 		previous.eotf == current.eotf &&
 		previous.colorspace == current.colorspace &&
 		previous.invertedVertical == current.invertedVertical &&
