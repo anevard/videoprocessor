@@ -12249,11 +12249,11 @@ QWidget* ConfigEditorWindow::createShortcutsPage()
     const ShortcutField captureFields[] = {
         { "Restart renderer", "renderer_restart", "Shift+R" },
         { "Reset renderer", "renderer_reset", "R" },
-        { "Pattern generator input", "capture_pattern", "Ctrl+Alt+T" },
         { "DeckLink input 1", "capture_1", "Ctrl+1" },
         { "DeckLink input 2", "capture_2", "Ctrl+2" },
         { "DeckLink input 3", "capture_3", "Ctrl+3" },
         { "DeckLink input 4", "capture_4", "Ctrl+4" },
+        { "Pattern generator input", "capture_pattern", "Ctrl+Alt+T" },
         { "Video conversion off", "video_conversion_off", "V" },
         { "V210 to P010 conversion", "video_conversion_p010", "Shift+V" }
     };
