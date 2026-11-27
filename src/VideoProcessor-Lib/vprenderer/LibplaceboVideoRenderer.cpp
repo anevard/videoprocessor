@@ -21361,7 +21361,7 @@ releaseDriftBaseRetention =
 						? sourceUploadCpuIntervalTotalMs /
 							static_cast<double>(sourceUploadCpuIntervalSamples)
 						: 0.0;
-				DEBUGLOG_ENHANCED(
+				DebugLog::Log(
 					"Alpha source upload diagnostic: generation=%llu source=%llu submission=%llu stage_end_flush=1 cpu_last_ms=%.3f cpu_interval_avg_ms=%.3f cpu_interval_peak_ms=%.3f cpu_interval_samples=%llu reused_outputs=%llu gpu_latest_ms=%.3f core_latest_ms=%.3f swap_ms=%.3f capture_hz=%.6f display_hz=%.6f",
 					static_cast<unsigned long long>(frameGeneration),
 					static_cast<unsigned long long>(sourceSequence),
